@@ -1,0 +1,73 @@
+# docs/NAMING.md가 고정한 Required Check다.
+# Ruleset에 등록되는 check 이름은 아래 job name `validate-pr-source`와 정확히 같아야 한다.
+# 이름을 바꾸면 main Ruleset의 Required Check가 영원히 pending 상태가 되어 Merge가 막힌다.
+name: PR Source Validation
+
+# `pull_request`가 아니라 `pull_request_target`을 쓴다.
+# `pull_request`는 PR merge commit에 있는 workflow 정의를 실행하므로, 금지된 branch가
+# 같은 job 이름을 유지한 채 이 파일을 항상 성공하도록 고쳐서 Required Check를 통과할 수
+# 있다. `pull_request_target`은 base branch의 신뢰된 정의를 실행한다.
+#
+# `pull_request_target`의 일반적인 위험은 PR 코드를 checkout해서 실행하는 것이다.
+# 이 job은 checkout을 하지 않고 Event Metadata만 읽으므로 그 위험에 해당하지 않는다.
+#
+# Path/branch filter를 두지 않아 모든 PR에서 완료 상태를 보고한다. Required Check로
+# 등록된 job이 filter로 건너뛰어지면 GitHub가 그 check를 대기 상태로 취급해 Merge가
+# 영구히 막히기 때문이다.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-pr-source:
+    name: validate-pr-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR의 head/base 조합을 검증한다
+        env:
+          # Branch 이름은 신뢰할 수 없는 입력이므로 `run` 본문에 직접 보간하지 않고
+          # 환경변수로 전달한다. 직접 보간하면 Branch 이름을 통한 Script Injection이 가능하다.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # CONTRIBUTING.md가 허용한 경로는 두 가지뿐이다.
+          #   short-lived 작업 branch -> dev
+          #   같은 Repository의 dev   -> main
+          allowed_prefixes='^(feature|fix|docs|refactor|test|chore)/[A-Za-z0-9._/-]+$'
+
+          case "$BASE_REF" in
+            main)
+              if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+                echo "::error::main 대상 PR의 head repository는 '$BASE_REPO' 여야 합니다. 현재: '$HEAD_REPO'"
+                exit 1
+              fi
+              if [ "$HEAD_REF" != "dev" ]; then
+                echo "::error::main 대상 PR의 유일한 허용 head는 'dev' 입니다. 현재: '$HEAD_REF'. \
+          작업 branch는 dev로 PR하고, main에는 dev만 통합하세요 (CONTRIBUTING.md)."
+                exit 1
+              fi
+              echo "OK: '$HEAD_REPO' 의 dev -> main 안정화 통합 PR"
+              ;;
+            dev)
+              if [ "$HEAD_REF" = "main" ] || [ "$HEAD_REF" = "dev" ]; then
+                echo "::error::dev 대상 PR의 head는 short-lived 작업 branch여야 합니다. 현재: '$HEAD_REF'."
+                exit 1
+              fi
+              if ! printf '%s' "$HEAD_REF" | grep -Eq "$allowed_prefixes"; then
+                echo "::error::dev 대상 PR의 head는 feature/, fix/, docs/, refactor/, test/, chore/ \
+          중 하나로 시작해야 합니다. 현재: '$HEAD_REF' (docs/NAMING.md)."
+                exit 1
+              fi
+              echo "OK: '$HEAD_REF' -> dev 일반 작업 PR"
+              ;;
+            *)
+              echo "base가 '$BASE_REF' 이므로 보호 대상 branch가 아닙니다. 검사 대상 아님."
+              ;;
+          esac

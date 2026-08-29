@@ -1,0 +1,44 @@
+{
+  "snapshot": {
+    "customer_id": "cust-001",
+    "repository_id": "repo-terraform-001",
+    "commit_sha": "commit-before-remediation",
+    "artifact": {
+      "artifact_id": "art-iac-snapshot-001",
+      "artifact_type": "TERRAFORM_SNAPSHOT",
+      "content_sha256": "snapshot-sha256-001",
+      "customer_id": "cust-001",
+      "repository_id": "repo-terraform-001"
+    }
+  },
+  "patch": {
+    "finding_id": "finding-s3-public-001",
+    "base_commit_sha": "commit-before-remediation",
+    "artifact": {
+      "artifact_id": "art-patch-001",
+      "artifact_type": "REMEDIATION_PATCH",
+      "content_sha256": "patch-sha256-001",
+      "customer_id": "cust-001",
+      "repository_id": "repo-terraform-001"
+    },
+    "changed_paths": ["modules/s3/main.tf"]
+  },
+  "plan": {
+    "deployment_id": "deployment-001",
+    "commit_sha": "commit-remediation-001",
+    "plan_hash": "plan-sha256-001",
+    "artifact": {
+      "artifact_id": "art-plan-001",
+      "artifact_type": "TERRAFORM_PLAN",
+      "content_sha256": "plan-sha256-001",
+      "customer_id": "cust-001",
+      "repository_id": "repo-terraform-001"
+    }
+  },
+  "approval": {
+    "deployment_id": "deployment-001",
+    "approved_by": "user-approver-001",
+    "commit_sha": "commit-remediation-001",
+    "plan_hash": "plan-sha256-001"
+  }
+}
