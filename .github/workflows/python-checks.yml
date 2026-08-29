@@ -56,7 +56,14 @@ jobs:
         run: python -m unittest discover --start-directory tests/contract --pattern "test_*.py" --verbose
 
       - name: Run integration tests
-        run: python -m unittest discover --start-directory tests/integration --pattern "test_*.py" --verbose
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! find tests/integration -type f -name 'test_*.py' -print -quit | grep -q .; then
+            echo "No integration tests are defined yet; skipping."
+            exit 0
+          fi
+          python -m unittest discover --start-directory tests/integration --pattern "test_*.py" --verbose
 
       - name: Run security tests
         run: python -m unittest discover --start-directory tests/security --pattern "test_*.py" --verbose
