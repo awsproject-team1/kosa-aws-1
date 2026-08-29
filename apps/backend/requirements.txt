@@ -1,0 +1,2 @@
+# Exact third-party pins for the Backend Lambda runtime belong in this file.
+# The framework-free bootstrap intentionally has no runtime dependencies.
