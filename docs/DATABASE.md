@@ -1,6 +1,6 @@
 # Database Design
 
-> Status: M0 foundation decision recorded — CloudFormation implementation pending
+> Status: M0 CloudFormation foundation implemented; deployment integration pending
 >
 > Scope: DynamoDB metadata/state and S3 artifact references. Detailed S3 bucket lifecycle and IAM policy are defined with infrastructure implementation.
 
@@ -10,6 +10,8 @@
 - The table uses on-demand capacity, server-side encryption, point-in-time recovery, and a TTL attribute named `expires_at`.
 - Every item includes `customer_id`, `entity_type`, `created_at`, `updated_at`, and a schema/version field where applicable.
 - Large or immutable artifacts remain in S3; DynamoDB stores only their identity, hash, version, and access scope.
+- SQS carries only resumable work notifications. DynamoDB remains the authoritative Job and
+  checkpoint state store; EventBridge receives GitHub Actions completion events.
 - All access is tenant-scoped. The API validates the Cognito JWT scope before issuing a DynamoDB query or mutation.
 
 CloudFormation receives `ProjectName` and `Environment` parameters and derives the deployed
@@ -41,8 +43,9 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Rule metadata | `CUSTOMER#{customer_id}` | `RULE#{rule_id}#VERSION#{version}` | Rule, source reference, lifecycle |
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
+| Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
 | Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, score, coverage |
-| Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}` | Resource × Rule judgment and evidence references |
+| Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment and evidence references |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result and severity |
 | Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Patch, PR, source Finding references |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
@@ -93,9 +96,10 @@ global Job lookup as an authorization shortcut.
 ```json
 {
   "PK": "CUSTOMER#cust_123",
-  "SK": "ASSESSMENT#asm_456#RESULT#s3_bucket_logs#RULE#S3-PUBLIC-001",
+  "SK": "ASSESSMENT#asm_456#RESULT#s3_bucket_logs#RULE#S3-PUBLIC-001#PERSPECTIVE#AWS_ACTUAL",
   "entity_type": "ASSESSMENT_RESULT",
   "customer_id": "cust_123",
+  "perspective": "AWS_ACTUAL",
   "status": "FAIL",
   "severity": "HIGH",
   "score": 27,
@@ -139,6 +143,18 @@ bucket/key is exposed through the public transport contract.
   receive a TTL.
 - Approval, deployment, and audit records do not use TTL until compliance retention requirements are agreed.
 - DynamoDB TTL is asynchronous; application code must treat expired records as unavailable even before physical deletion.
+- Queue payloads contain only `job_id`, `expected_revision`, and an approved command. Workers
+  load the authoritative Job and latest checkpoint with a conditional revision check; a stale or
+  duplicate Queue delivery cannot advance a Job.
+- Assessment work is split by resource. With three minutes remaining in its 15-minute Lambda
+  budget, a Worker conditionally persists its checkpoint and publishes the next Queue task.
+- Retryable AWS, Bedrock, S3, and GitHub failures receive at most three total attempts before
+  the Queue DLQ and terminal `FAILED` Job state. Validation, scope, permission, and Contract
+  failures are terminal without retry. Apply never retries automatically; ambiguous outcomes
+  require Terraform/AWS reconciliation and `MANUAL_REVIEW`.
+- Admin retry creates a new Job revision and Queue task; it never replays a failed delivery in
+  place. GitHub Actions sends Plan/Apply completion metadata through OIDC-authorized EventBridge
+  events, which target the Deployment Queue.
 
 All writeable entities use Backend-generated opaque IDs. Callers provide approved repository,
 policy profile, and AWS Account selectors but never `customer_id`, `job_id`, timestamps,
@@ -158,7 +174,7 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 | Decision | Owner | Needed by | Blocks |
 | --- | --- | --- | --- |
 | Official `<project>` resource-name prefix | Team | Infrastructure implementation | Final table/bucket names |
-| Job/checkpoint TTL duration | A + Security | Async Job implementation | Lifecycle configuration |
+| Queue visibility timeout, DLQ retention, and redrive alarm thresholds | A + Security | Infrastructure implementation | Worker resilience configuration |
 | Audit/approval retention and Object Lock policy | A + Security | Before customer deployment | Compliance controls |
 | Per-assessment result volume and pagination threshold | C + A | Assessment implementation | Query/pagination limits |
 | Additional reporting/search index requirements | A/B/C/D | Before UI reporting implementation | GSI additions |

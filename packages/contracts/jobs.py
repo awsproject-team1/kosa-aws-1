@@ -43,6 +43,41 @@ class JobCurrentStep(StrEnum):
     POST_DEPLOY_VERIFICATION = "POST_DEPLOY_VERIFICATION"
 
 
+class WorkflowCommand(StrEnum):
+    """Approved resumable commands delivered to a workflow worker."""
+
+    ASSESS_RESOURCE = "ASSESS_RESOURCE"
+    GENERATE_REMEDIATION = "GENERATE_REMEDIATION"
+    RUN_DEPLOYMENT = "RUN_DEPLOYMENT"
+    PLAN_COMPLETED = "PLAN_COMPLETED"
+    APPLY_COMPLETED = "APPLY_COMPLETED"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowTask:
+    """Minimal queue payload; durable state remains in DynamoDB and S3."""
+
+    job_id: str
+    expected_revision: int
+    command: WorkflowCommand
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.job_id, "job_id")
+        if isinstance(self.expected_revision, bool) or not isinstance(self.expected_revision, int):
+            raise TypeError("expected_revision must be an integer")
+        if self.expected_revision < 0:
+            raise ValueError("expected_revision must be zero or greater")
+        if not isinstance(self.command, WorkflowCommand):
+            raise TypeError("command must be a WorkflowCommand")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "job_id": self.job_id,
+            "expected_revision": self.expected_revision,
+            "command": self.command.value,
+        }
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class JobResponse:
     """Public polling projection for one workflow Job."""

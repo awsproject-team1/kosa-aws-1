@@ -24,7 +24,12 @@ def queued_job():
 
 
 def principal(subject: str, role: Role) -> Principal:
-    return Principal(subject=subject, client_id="client-001", roles=frozenset({role}))
+    return Principal(
+        subject=subject,
+        client_id="client-001",
+        customer_id="cust-001",
+        roles=frozenset({role}),
+    )
 
 
 class JobLifecycleTest(unittest.TestCase):

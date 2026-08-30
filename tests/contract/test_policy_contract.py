@@ -6,6 +6,7 @@ from pathlib import Path
 
 from packages.contracts import (
     AssessmentPhase,
+    EvaluationPerspective,
     EvaluationStatus,
     GoldenDatasetCase,
     PolicyProfile,
@@ -57,6 +58,7 @@ class PolicyContractTest(unittest.TestCase):
         case = GoldenDatasetCase(
             case_id=fixture["case_id"],
             phase=AssessmentPhase(fixture["phase"]),
+            perspective=EvaluationPerspective(fixture["perspective"]),
             rubric_version=fixture["rubric_version"],
             scoring_mode=ScoringMode(fixture["scoring_mode"]),
             resource_snapshot_artifact_id=fixture["resource_snapshot_artifact_id"],
@@ -89,6 +91,7 @@ class PolicyContractTest(unittest.TestCase):
             GoldenDatasetCase(
                 case_id="case-001",
                 phase=AssessmentPhase.INITIAL,
+                perspective=EvaluationPerspective.IAC,
                 rubric_version="v1",
                 scoring_mode=ScoringMode.CONTINUOUS,
                 resource_snapshot_artifact_id="artifact-001",

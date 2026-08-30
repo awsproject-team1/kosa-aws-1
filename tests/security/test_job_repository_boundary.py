@@ -43,6 +43,7 @@ class JobRepositoryBoundarySecurityTest(unittest.TestCase):
         other_user = Principal(
             subject="other-subject",
             client_id="client-001",
+            customer_id="cust-001",
             roles=frozenset({Role.USER}),
         )
 
