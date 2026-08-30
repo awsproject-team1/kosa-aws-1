@@ -3,6 +3,7 @@
 ## Current
 
 - Repository V3 문서 구조와 개발 골격 초기화
+- M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
 
 ## Completed
 
@@ -13,6 +14,9 @@
   IaC Snapshot/Patch/Plan, Read-Only AWS Query, Approval의 commit/plan binding
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
+- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
+  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
+  강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
 
 ## Next
 
