@@ -148,7 +148,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: ["dynamodb:GetItem", "dynamodb:PutItem"]
+                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:TransactWriteItems"]
                 Resource: !GetAtt MetadataTable.Arn
               - Effect: Allow
                 Action: sqs:SendMessage
@@ -173,8 +173,10 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: ["dynamodb:GetItem", "dynamodb:PutItem"]
-                Resource: !GetAtt MetadataTable.Arn
+                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
+                Resource:
+                  - !GetAtt MetadataTable.Arn
+                  - !Sub "${MetadataTable.Arn}/index/*"
               - Effect: Allow
                 Action: ["s3:GetObject", "s3:PutObject"]
                 Resource: !Sub "${ArtifactBucket.Arn}/customers/*"

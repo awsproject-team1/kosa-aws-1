@@ -16,12 +16,15 @@ from apps.backend.jobs.lifecycle import (
     transition_job,
 )
 from apps.backend.jobs.models import Job
+from apps.backend.jobs.outbox import OutboxDispatcher, OutboxStatus, WorkflowOutboxEntry
 
 __all__ = [
     "AssessmentScopeDenied",
     "InvalidJobTransition",
     "Job",
     "JobNotFoundError",
+    "OutboxDispatcher",
+    "OutboxStatus",
     "RequestValidationError",
     "StaleJobRevision",
     "authorize_job_read",
@@ -30,4 +33,5 @@ __all__ = [
     "sanitize_public_failure",
     "transition_job",
     "WorkflowDispatchError",
+    "WorkflowOutboxEntry",
 ]

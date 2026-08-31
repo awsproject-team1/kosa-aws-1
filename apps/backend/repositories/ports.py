@@ -6,6 +6,7 @@ from typing import Protocol
 
 from apps.backend.assessment import Assessment
 from apps.backend.jobs.models import Job
+from apps.backend.jobs.outbox import OutboxRepository, WorkflowOutboxEntry
 
 
 class RepositoryError(RuntimeError):
@@ -84,11 +85,13 @@ class JobRepository(Protocol):
         ...
 
 
-class AssessmentRepository(Protocol):
-    """Persistence operation for the selectors that start an Assessment workflow."""
+class AssessmentWorkflowRepository(JobRepository, OutboxRepository, Protocol):
+    """Atomically persist the Assessment, Job, and its pending workflow dispatch."""
 
-    def create_assessment(self, assessment: Assessment) -> None:
-        """Persist a new Assessment record without replacing an existing record."""
+    def create_assessment_workflow(
+        self, assessment: Assessment, job: Job, outbox: WorkflowOutboxEntry
+    ) -> None:
+        """Create all workflow-start state in one storage transaction."""
         ...
 
 

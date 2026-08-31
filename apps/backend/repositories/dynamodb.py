@@ -7,6 +7,7 @@ from typing import Protocol
 from apps.backend.assessment import Assessment
 from apps.backend.jobs.lifecycle import InvalidJobTransition, StaleJobRevision, transition_job
 from apps.backend.jobs.models import Job
+from apps.backend.jobs.outbox import OutboxStatus, WorkflowOutboxEntry
 from apps.backend.repositories.ports import (
     DuplicateJobError,
     InvalidJobMutationError,
@@ -14,13 +15,21 @@ from apps.backend.repositories.ports import (
     RevisionConflictError,
     StoredDataError,
 )
-from packages.contracts import ApiError, JobCurrentStep, JobStatus
+from packages.contracts import ApiError, JobCurrentStep, JobStatus, WorkflowCommand, WorkflowTask
 
 
 class DynamoTable(Protocol):
     def put_item(self, **kwargs: object) -> object: ...
 
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def query(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def update_item(self, **kwargs: object) -> object: ...
+
+
+class DynamoTransactionClient(Protocol):
+    def transact_write_items(self, **kwargs: object) -> object: ...
 
 
 class DynamoDbJobRepository:
@@ -100,38 +109,99 @@ class DynamoDbJobRepository:
             raise RepositoryError("job update failed") from None
 
 
-class DynamoDbAssessmentRepository:
-    """Persist Assessment selectors so workers can restore their evaluation target."""
+class DynamoDbAssessmentWorkflowRepository(DynamoDbJobRepository):
+    """DynamoDB transaction and outbox adapter for starting an Assessment workflow."""
 
-    def __init__(self, table: DynamoTable) -> None:
+    def __init__(
+        self, table: DynamoTable, *, table_name: str, transaction_client: DynamoTransactionClient
+    ) -> None:
         if table is None:
             raise TypeError("table is required")
-        self._table = table
+        _require_non_empty_string(table_name, "table_name")
+        if transaction_client is None:
+            raise TypeError("transaction_client is required")
+        super().__init__(table)
+        self._table_name = table_name
+        self._transaction_client = transaction_client
 
-    def create_assessment(self, assessment: Assessment) -> None:
+    def create_assessment_workflow(
+        self, assessment: Assessment, job: Job, outbox: WorkflowOutboxEntry
+    ) -> None:
         if not isinstance(assessment, Assessment):
             raise TypeError("assessment must be an Assessment")
+        _require_job(job)
+        if not isinstance(outbox, WorkflowOutboxEntry):
+            raise TypeError("outbox must be a WorkflowOutboxEntry")
+        if (
+            assessment.customer_id != job.customer_id
+            or assessment.job_id != job.job_id
+            or outbox.customer_id != job.customer_id
+            or outbox.job_id != job.job_id
+        ):
+            raise ValueError("assessment, job, and outbox must have the same customer and job")
         try:
-            self._table.put_item(
-                Item={
-                    "PK": _customer_pk(assessment.customer_id),
-                    "SK": f"ASSESSMENT#{assessment.assessment_id}",
-                    "entity_type": "ASSESSMENT",
-                    "customer_id": assessment.customer_id,
-                    "assessment_id": assessment.assessment_id,
-                    "job_id": assessment.job_id,
-                    "repository_id": assessment.repository_id,
-                    "policy_profile_id": assessment.policy_profile_id,
-                    "status": "QUEUED",
-                    "GSI3PK": f"REPOSITORY#{assessment.repository_id}",
-                    "GSI3SK": f"ASSESSMENT#{assessment.assessment_id}",
-                },
-                ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    _transactional_put(self._table_name, _item_from_assessment(assessment)),
+                    _transactional_put(self._table_name, _item_from_job(job)),
+                    _transactional_put(self._table_name, _item_from_outbox(outbox)),
+                ]
             )
         except Exception as error:
-            if _provider_error_code(error) == "ConditionalCheckFailedException":
-                raise DuplicateJobError("assessment already exists") from None
-            raise RepositoryError("assessment create failed") from None
+            if _provider_error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                raise DuplicateJobError("assessment workflow already exists") from None
+            raise RepositoryError("assessment workflow create failed") from None
+
+    def list_pending_outbox(self, *, limit: int) -> tuple[WorkflowOutboxEntry, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        try:
+            response = self._table.query(
+                IndexName="GSI2",
+                KeyConditionExpression="GSI2PK = :pending",
+                ExpressionAttributeValues={":pending": "OUTBOX#PENDING"},
+                Limit=limit,
+            )
+            items = response.get("Items", [])
+            if not isinstance(items, list):
+                raise TypeError("outbox query items must be a list")
+            return tuple(_outbox_from_item(item) for item in items)
+        except (TypeError, ValueError):
+            raise StoredDataError("stored outbox item is invalid") from None
+        except Exception:
+            raise RepositoryError("outbox query failed") from None
+
+    def mark_outbox_dispatched(self, entry: WorkflowOutboxEntry) -> None:
+        self._update_outbox(entry, status=OutboxStatus.DISPATCHED, increment_attempts=False)
+
+    def record_outbox_dispatch_failure(self, entry: WorkflowOutboxEntry) -> None:
+        self._update_outbox(entry, status=OutboxStatus.PENDING, increment_attempts=True)
+
+    def _update_outbox(
+        self, entry: WorkflowOutboxEntry, *, status: OutboxStatus, increment_attempts: bool
+    ) -> None:
+        if not isinstance(entry, WorkflowOutboxEntry):
+            raise TypeError("entry must be a WorkflowOutboxEntry")
+        expression = "SET #status = :status"
+        values: dict[str, object] = {":status": status.value, ":pending": "OUTBOX#PENDING"}
+        if status is OutboxStatus.DISPATCHED:
+            expression += " REMOVE GSI2PK, GSI2SK"
+        if increment_attempts:
+            expression += " ADD dispatch_attempts :increment"
+            values[":increment"] = 1
+        try:
+            self._table.update_item(
+                Key={"PK": _customer_pk(entry.customer_id), "SK": _outbox_sk(entry.job_id)},
+                UpdateExpression=expression,
+                ConditionExpression="#status = :pending",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=values,
+            )
+        except Exception:
+            raise RepositoryError("outbox update failed") from None
 
 
 def _item_from_job(job: Job) -> dict[str, object]:
@@ -155,6 +225,63 @@ def _item_from_job(job: Job) -> dict[str, object]:
     if job.error is not None:
         item["error"] = job.error.to_dict()
     return item
+
+
+def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
+    return {
+        "PK": _customer_pk(assessment.customer_id),
+        "SK": f"ASSESSMENT#{assessment.assessment_id}",
+        "entity_type": "ASSESSMENT",
+        "customer_id": assessment.customer_id,
+        "assessment_id": assessment.assessment_id,
+        "job_id": assessment.job_id,
+        "repository_id": assessment.repository_id,
+        "policy_profile_id": assessment.policy_profile_id,
+        "status": "QUEUED",
+        "GSI3PK": f"REPOSITORY#{assessment.repository_id}",
+        "GSI3SK": f"ASSESSMENT#{assessment.assessment_id}",
+    }
+
+
+def _item_from_outbox(entry: WorkflowOutboxEntry) -> dict[str, object]:
+    return {
+        "PK": _customer_pk(entry.customer_id),
+        "SK": _outbox_sk(entry.job_id),
+        "entity_type": "WORKFLOW_OUTBOX",
+        "customer_id": entry.customer_id,
+        "job_id": entry.job_id,
+        "expected_revision": entry.task.expected_revision,
+        "command": entry.task.command.value,
+        "status": entry.status.value,
+        "dispatch_attempts": entry.dispatch_attempts,
+        "GSI2PK": "OUTBOX#PENDING",
+        "GSI2SK": f"JOB#{entry.job_id}",
+    }
+
+
+def _transactional_put(table_name: str, item: dict[str, object]) -> dict[str, object]:
+    return {
+        "Put": {
+            "TableName": table_name,
+            "Item": item,
+            "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        }
+    }
+
+
+def _outbox_from_item(item: object) -> WorkflowOutboxEntry:
+    value = _mapping(item)
+    return WorkflowOutboxEntry(
+        customer_id=value["customer_id"],
+        job_id=value["job_id"],
+        task=WorkflowTask(
+            job_id=value["job_id"],
+            expected_revision=_stored_revision(value["expected_revision"]),
+            command=WorkflowCommand(value["command"]),
+        ),
+        status=OutboxStatus(value["status"]),
+        dispatch_attempts=_stored_revision(value["dispatch_attempts"]),
+    )
 
 
 def _job_from_item(item: Mapping[str, object]) -> Job:
@@ -196,6 +323,10 @@ def _customer_pk(customer_id: str) -> str:
 
 def _job_sk(job_id: str) -> str:
     return f"JOB#{job_id}"
+
+
+def _outbox_sk(job_id: str) -> str:
+    return f"OUTBOX#JOB#{job_id}"
 
 
 def _stored_revision(value: object) -> int:

@@ -11,6 +11,9 @@ class InMemoryJobRepository:
     def __init__(self) -> None:
         self.jobs = {}
 
+    def create_assessment_workflow(self, assessment, job, outbox) -> None:
+        self.jobs[(job.customer_id, job.job_id)] = job
+
     def create_job(self, job) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
 
@@ -21,18 +24,8 @@ class InMemoryJobRepository:
         self.jobs[(job.customer_id, job.job_id)] = job
 
 
-class InMemoryAssessmentRepository:
-    def create_assessment(self, assessment) -> None:
-        return None
-
-
 class ApprovedScope:
     def authorize(self, principal, *, repository_id: str, policy_profile_id: str) -> None:
-        return None
-
-
-class RecordingDispatcher:
-    def dispatch(self, task) -> None:
         return None
 
 
@@ -62,9 +55,7 @@ class JobHttpHandlerTest(unittest.TestCase):
         self.repository = InMemoryJobRepository()
         service = JobApiService(
             repository=self.repository,
-            assessment_repository=InMemoryAssessmentRepository(),
             assessment_scope=ApprovedScope(),
-            dispatcher=RecordingDispatcher(),
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )

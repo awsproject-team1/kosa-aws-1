@@ -10,8 +10,8 @@
 - Client는 `customer_id`, Job ID, Job revision, status, timestamp, TTL 또는 DynamoDB key를
   요청 body에 보낼 수 없다. Backend가 verified JWT와 server state에서 이 값을 결정한다.
 - Assessment, Remediation, Deployment의 public API는 Queue·Worker 이름 또는 checkpoint를
-  노출하지 않는다. Backend가 검증 뒤 `WorkflowTask`를 내부 Queue에 전송하며 Client는
-  `GET /jobs/{jobId}`로 상태를 조회한다.
+  노출하지 않는다. Backend는 검증 뒤 `WorkflowTask` outbox를 영속화하고 내부 dispatcher가 Queue로
+  전송하며 Client는 `GET /jobs/{jobId}`로 상태를 조회한다.
 
 ## Initial endpoints
 

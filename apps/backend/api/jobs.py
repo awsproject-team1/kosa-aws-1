@@ -10,20 +10,12 @@ from apps.backend.assessment import Assessment
 from apps.backend.auth import Action, Principal, authorize
 from apps.backend.jobs import (
     JobNotFoundError,
-    WorkflowDispatchError,
+    WorkflowOutboxEntry,
     authorize_job_read,
     create_job,
-    transition_job,
 )
-from apps.backend.repositories import AssessmentRepository, JobRepository
-from packages.contracts import (
-    ApiError,
-    JobCurrentStep,
-    JobResponse,
-    JobStatus,
-    WorkflowCommand,
-    WorkflowTask,
-)
+from apps.backend.repositories import AssessmentWorkflowRepository
+from packages.contracts import JobCurrentStep, JobResponse, WorkflowCommand, WorkflowTask
 
 
 class AssessmentScope(Protocol):
@@ -33,14 +25,6 @@ class AssessmentScope(Protocol):
         self, principal: Principal, *, repository_id: str, policy_profile_id: str
     ) -> None:
         """Raise AssessmentScopeDenied unless both selectors are approved for the principal."""
-        ...
-
-
-class WorkflowDispatcher(Protocol):
-    """Publish a minimal, resumable WorkflowTask to the selected internal queue."""
-
-    def dispatch(self, task: WorkflowTask) -> None:
-        """Deliver a task without exposing queue details to the public API."""
         ...
 
 
@@ -62,17 +46,13 @@ class JobApiService:
     def __init__(
         self,
         *,
-        repository: JobRepository,
-        assessment_repository: AssessmentRepository,
+        repository: AssessmentWorkflowRepository,
         assessment_scope: AssessmentScope,
-        dispatcher: WorkflowDispatcher,
         job_id_factory: Callable[[], str],
         assessment_id_factory: Callable[[], str],
     ) -> None:
         self._repository = repository
-        self._assessment_repository = assessment_repository
         self._assessment_scope = assessment_scope
-        self._dispatcher = dispatcher
         self._job_id_factory = job_id_factory
         self._assessment_id_factory = assessment_id_factory
 
@@ -101,31 +81,19 @@ class JobApiService:
             requested_by=principal.subject,
             assessment_id=assessment.assessment_id,
         )
-        self._assessment_repository.create_assessment(assessment)
-        self._repository.create_job(job)
-        try:
-            self._dispatcher.dispatch(
-                WorkflowTask(
+        self._repository.create_assessment_workflow(
+            assessment,
+            job,
+            WorkflowOutboxEntry(
+                customer_id=principal.customer_id,
+                job_id=job.job_id,
+                task=WorkflowTask(
                     job_id=job.job_id,
                     expected_revision=job.revision,
                     command=WorkflowCommand.ASSESS_RESOURCE,
-                )
-            )
-        except Exception:
-            failed_job = transition_job(
-                job,
-                expected_revision=job.revision,
-                status=JobStatus.FAILED,
-                error=ApiError(
-                    code="EXECUTION_ERROR",
-                    message="Workflow dispatch failed before execution began",
                 ),
-            )
-            try:
-                self._repository.update_job(failed_job, expected_revision=job.revision)
-            except Exception:
-                pass
-            raise WorkflowDispatchError("workflow dispatch failed") from None
+            ),
+        )
         return job.to_response()
 
     def get_job(self, principal: Principal, job_id: str) -> JobResponse:

@@ -5,12 +5,19 @@ import unittest
 from apps.backend.api.jobs import AssessmentRequest, JobApiService
 from apps.backend.auth import AuthorizationDenied, Principal, Role
 from apps.backend.jobs import AssessmentScopeDenied, JobNotFoundError, create_job
-from packages.contracts import JobCurrentStep, WorkflowTask
+from packages.contracts import JobCurrentStep
 
 
 class InMemoryJobRepository:
     def __init__(self) -> None:
         self.jobs = {}
+        self.assessments = {}
+        self.outbox = {}
+
+    def create_assessment_workflow(self, assessment, job, outbox) -> None:
+        self.assessments[(assessment.customer_id, assessment.assessment_id)] = assessment
+        self.jobs[(job.customer_id, job.job_id)] = job
+        self.outbox[(outbox.customer_id, outbox.job_id)] = outbox
 
     def create_job(self, job) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
@@ -22,14 +29,6 @@ class InMemoryJobRepository:
         self.jobs[(job.customer_id, job.job_id)] = job
 
 
-class InMemoryAssessmentRepository:
-    def __init__(self) -> None:
-        self.assessments = {}
-
-    def create_assessment(self, assessment) -> None:
-        self.assessments[(assessment.customer_id, assessment.assessment_id)] = assessment
-
-
 class ApprovedScope:
     def __init__(self, approved: bool = True) -> None:
         self.approved = approved
@@ -39,19 +38,6 @@ class ApprovedScope:
         self.calls.append((principal, repository_id, policy_profile_id))
         if not self.approved:
             raise AssessmentScopeDenied("outside approved scope")
-
-
-class RecordingDispatcher:
-    def __init__(self) -> None:
-        self.tasks: list[WorkflowTask] = []
-
-    def dispatch(self, task: WorkflowTask) -> None:
-        self.tasks.append(task)
-
-
-class FailingDispatcher:
-    def dispatch(self, task: WorkflowTask) -> None:
-        raise RuntimeError("queue unavailable")
 
 
 def principal(subject: str = "subject-001", customer_id: str = "cust-001") -> Principal:
@@ -66,14 +52,10 @@ def principal(subject: str = "subject-001", customer_id: str = "cust-001") -> Pr
 class JobApiServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repository = InMemoryJobRepository()
-        self.assessment_repository = InMemoryAssessmentRepository()
         self.scope = ApprovedScope()
-        self.dispatcher = RecordingDispatcher()
         self.service = JobApiService(
             repository=self.repository,
-            assessment_repository=self.assessment_repository,
             assessment_scope=self.scope,
-            dispatcher=self.dispatcher,
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )
@@ -90,12 +72,12 @@ class JobApiServiceTest(unittest.TestCase):
         self.assertEqual(stored.customer_id, "cust-001")
         self.assertEqual(stored.requested_by, "subject-001")
         self.assertEqual(stored.assessment_id, "asm-001")
-        assessment = self.assessment_repository.assessments[("cust-001", "asm-001")]
+        assessment = self.repository.assessments[("cust-001", "asm-001")]
         self.assertEqual(assessment.job_id, "job-001")
         self.assertEqual(assessment.repository_id, "repo-001")
         self.assertEqual(assessment.policy_profile_id, "profile-001")
         self.assertEqual(
-            self.dispatcher.tasks[0].to_dict(),
+            self.repository.outbox[("cust-001", "job-001")].task.to_dict(),
             {
                 "job_id": "job-001",
                 "expected_revision": 0,
@@ -113,28 +95,8 @@ class JobApiServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(self.repository.jobs, {})
-        self.assertEqual(self.assessment_repository.assessments, {})
-        self.assertEqual(self.dispatcher.tasks, [])
-
-    def test_dispatch_failure_marks_persisted_job_failed_for_recovery(self) -> None:
-        self.service = JobApiService(
-            repository=self.repository,
-            assessment_repository=self.assessment_repository,
-            assessment_scope=self.scope,
-            dispatcher=FailingDispatcher(),
-            job_id_factory=lambda: "job-001",
-            assessment_id_factory=lambda: "asm-001",
-        )
-
-        with self.assertRaisesRegex(Exception, "workflow dispatch failed"):
-            self.service.create_assessment(
-                principal(),
-                AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-001"),
-            )
-
-        stored = self.repository.get_job("cust-001", "job-001")
-        self.assertEqual(stored.status.value, "FAILED")
-        self.assertEqual(stored.revision, 1)
+        self.assertEqual(self.repository.assessments, {})
+        self.assertEqual(self.repository.outbox, {})
 
     def test_get_reads_only_jwt_customer_partition_then_applies_owner_check(self) -> None:
         job = create_job(

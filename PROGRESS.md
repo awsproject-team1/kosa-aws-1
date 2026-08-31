@@ -25,6 +25,7 @@
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
   인증/공개 오류 Contract 단일화, `Evaluator`의 `PolicyRule` 타입 명시
+- Assessment·Job·Workflow Outbox의 DynamoDB transactional write와 pending Outbox 재전송 경계 추가
 
 ## Next
 
