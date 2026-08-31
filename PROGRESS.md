@@ -56,6 +56,9 @@
 - M1 통합 개발: Worker가 M0 단일 Rule fixture 대신 승인된 6개 S3 MVP Rule Registry를
   사용하도록 전환하고, API → Outbox → structured evaluator → immutable Result/Finding →
   Coverage/Readiness report의 multi-rule fixture integration test를 고정
+- M1 A/D integration boundary: 승인된 Registry를 고객별 DynamoDB Policy Catalog에
+  immutable/idempotent하게 publish하는 Bootstrap과, 지정 commit의 Terraform blob manifest만
+  GitHub REST `GET`으로 읽는 scoped Snapshot adapter를 구현·unit test로 고정
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
@@ -117,6 +120,14 @@
   고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
 - M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
   로그인·Assessment 시작·결과 조회 E2E를 실행한다.
+- M1 Shared: Rule 확대에 맞춰 prompt/rubric/golden dataset version을 재고정하고
+  DESIGN 품질 Gate를 재실행한다. (현재 fixture integration은 Registry의 6개 S3 Rule을 사용)
+- M1 A/D: 고객 sandbox의 Metadata Table에 승인 Registry를 publish하고, GitHub App installation
+  token/승인 repository 및 AWS read Role을 runtime configuration에 주입해 actual adapter E2E를
+  실행한다. 이 단계는 고객 자격 증명·보호된 배포 승인 없이는 실행하지 않는다.
+- M1 A/B/C Shared: 고객 Policy Source 업로드·정규화 Contract와 지원 형식 allow-list 확정 후,
+   tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현.
+  지원 형식은 Markdown/Plain text/CSV/XLSX/DOCX이며 서드파티 런타임 의존성 없이 처리한다.
 
 ## Blocked
 
@@ -144,12 +155,13 @@
 
 - [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장,
   고객 AWS Account용 Auth bootstrap *(고객 소유 IdP federation 또는 Cognito local user 결정, 초기
-  Admin 인수, Admin/User claim·group, 로그인 UI 및 고객 측 사용자 관리 절차 E2E 검증)*
+  Admin 인수, Admin/User claim·group, 로그인 UI 및 고객 측 사용자 관리 절차 E2E 검증; Registry의
+  customer-scoped DynamoDB immutable Bootstrap 구현 완료, sandbox publish/E2E 대기)*
 - [x] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; Worker가 Registry를 채택한 multi-rule fixture integration 완료. 실제 고객 정책 업로드·테이블 적재는 별도 Delivery gate)*
 - [x] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
   Finding·Readiness Score projection, Assessment UI 기본 화면 *(6개 S3 Rule의 fixture integration으로
    결과·Finding·Coverage·Readiness까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기)*
-- [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; 실제 SDK/GitHub App 통합 대기)*
+ - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; S3 AssumeRole 및 GitHub REST commit/tree read adapter 구현, 고객 GitHub App/runtime injection E2E 대기)*
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
 
 **Dependencies:** C는 B의 승인된 Policy Context와 D의 Snapshot/Read-Only Interface를 사용한다. A가 Job/상태 Contract를 제공한다. 고객 정책 업로드 기능은 A의 upload/storage, B의 normalization/approval, C의 AI extraction quality gate와 Shared 보안·통합 테스트가 모두 필요하다.
