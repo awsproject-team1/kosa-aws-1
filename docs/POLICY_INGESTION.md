@@ -39,6 +39,27 @@ Authenticated upload request
 Profile의 Rule과 필요한 정규화 구간만 받는다. Parser, 정규화 Schema, Rule 또는 승인된 Policy
 Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
+## Original finalization
+
+S3 versioning만으로는 같은 key에 이후 object version이 추가되는 것을 막지 못한다. Parser, 검토,
+승인이 **동일한 원본 바이트**를 본다는 보장은 다음 규칙에서 나온다.
+
+- **Object identity는 서버가 만든다.** 업로드 세션 생성 시 Backend가 `source_id`,
+  `source_version`, `artifact_id`, S3 key를 발급한다. Client는 이 값들을 제안하거나 덮어쓸 수
+  없다.
+- **Presigned upload URL은 1회용이고 만료된다.** 만료 시간과 허용 content-length 범위를 함께
+  서명하고, 이미 finalize된 세션의 URL은 재사용을 거부한다.
+- **Finalize는 checksum 검증을 통과한 정확한 S3 `version_id`를 영속화한다.** 업로드 완료 확인
+  단계에서 실제 object의 checksum과 byte size를 다시 읽어 선언값과 대조하고, 통과한 그 시점의
+  `version_id`를 ingestion record에 기록한다. 이후 같은 key에 다른 object version이 생겨도
+  Parser는 기록된 `version_id`만 읽는다.
+- **상태 전이는 그 tuple에 조건부로 묶인다.** `(source_id, source_version, artifact_id,
+  s3_version_id, content_sha256)`을 ingestion record와 approval record에 immutable하게 기록하고,
+  `VALIDATING → PARSING → REVIEW_REQUIRED → READY`와 승인 전이는 이 tuple이 일치할 때만 성공하는
+  조건부 write로 수행한다. 값이 하나라도 다르면 전이는 실패한다.
+- **승인은 검증된 그 판본에만 붙는다.** 승인 record는 위 tuple을 그대로 인용하며, 다른 판본으로
+  승인을 옮겨 붙일 수 없다.
+
 ## Format policy
 
 지원 형식은 아래 allow-list가 전부다. 목록에 없는 형식은 업로드가 성공하더라도 지원하지 않으며,
@@ -71,7 +92,7 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
 형식별 Parser는 최소한 다음 정보를 갖는 공통 결과를 생성해야 한다.
 
-- `source_id`, `source_version`, 원본 `artifact_id`와 `content_sha256`
+- `source_id`, `source_version`, 원본 `artifact_id`, S3 `version_id`와 `content_sha256`
 - 원본 파일명, 선언/탐지 media type, byte size
 - `parser_id`, `parser_version`, 처리 시각과 처리 상태
 - 정규화 Artifact ID/hash와 추출 경고
@@ -80,6 +101,22 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
 권장 처리 상태는 `UPLOADED`, `VALIDATING`, `PARSING`, `REVIEW_REQUIRED`, `READY`, `FAILED`,
 `SUPERSEDED`다. `READY`이면서 사람이 승인한 정확한 Source version만 Rule과 Profile이 참조할 수 있다.
+
+### Evidence identity
+
+Rule과 Control의 `SourceReference`, 그리고 평가 결과의 Evidence는 모두 아래 canonical 형식을
+사용한다. 이 형식은 `packages/contracts`의 `SourceReference.evidence_reference`가 정본이다.
+
+```text
+{source_id}@{source_version}#{locator}
+```
+
+- 모든 Rule/Control `SourceReference`는 **정확한 Source version**을 가리켜야 한다. locator와
+  hash만으로는 같은 locator가 개정된 Source version과 잘못 연결될 수 있다.
+- Profile publication과 평가 결과 Evidence는 승인된 `PolicySource(source_id, version)`에 교차
+  검증한다. 승인되지 않은 Source, 승인된 것과 다른 Source version을 가리키는 참조는 거부한다.
+- 정규화 문서가 만든 locator는 이 형식에 그대로 들어가므로, Parser가 바뀌어 locator 체계가
+  달라지면 새 Source version으로 취급한다.
 
 Locator는 파일 형식과 무관하게 추적 가능해야 한다. 지원 형식은 모두 문서 구조에서 locator가
 직접 나오므로, 원문이 재조판돼도 같은 단위를 다시 가리킬 수 있다. 예시는 다음과 같다.
@@ -90,7 +127,18 @@ Locator는 파일 형식과 무관하게 추적 가능해야 한다. 지원 형�
 
 ## Security and tenant isolation
 
+이 절은 ADR-0014(artifact audit and tenant isolation)의 조건을 정책 원문 경로에 그대로
+계승한다. prefix를 나누거나 JWT를 검증하는 것만으로는 Parser가 다른 tenant의 artifact에 접근하지
+못한다고 보장할 수 없다.
+
 - Backend는 verified JWT에서 `customer_id`를 결정하며 Client가 S3 key나 tenant key를 지정하지 않는다.
+- 고객 artifact를 다루는 API와 Parser는 **trusted Job/customer context가 선택한 customer-scoped
+  runtime identity만** 사용한다. caller는 customer ID, IAM role, session tag, prefix 중 무엇도
+  선택할 수 없다.
+- **`customers/*` pooled role은 tenant 경계가 아니므로 금지한다** (ADR-0014). 공용 role로 prefix만
+  달리하는 접근은 허용하지 않는다.
+- 고객 간 Artifact Get/Put 거부를 integration test로 보장한다. 고객 A의 자격으로 고객 B의 원본,
+  정규화 Artifact, ingestion record, Source/Rule/Profile을 읽거나 쓸 수 없어야 한다.
 - 원본은 `customers/{customer_id}/...` 경계에 암호화해 저장하고 공개 URL을 반환하지 않는다.
 - 업로드 크기·개수·압축 해제 한도, zip bomb, 악성 파일, 암호화 파일을 fail-closed로 검증한다.
 - Parser는 격리된 비동기 실행 환경에서 최소 권한으로 동작하고 원문·추출문을 로그에 남기지 않는다.
@@ -117,7 +165,18 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 2. 업로드 완료 확인과 비동기 validation/parsing 시작
 3. Source version별 처리 상태·지원 불가 사유·검토 경고 조회
 4. 추출된 Control/Rule 후보 검토 및 승인
-5. 승인된 Rule version으로 Policy Profile 생성 또는 갱신
+5. 승인된 Rule version으로 versioned Policy Profile 생성 또는 갱신(publication)
+
+4번과 5번은 서로 다른 operation이다. 승인은 Source/Control/Rule version을 확정할 뿐이고, 그
+Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. Profile publication은 다음을
+거부해야 한다.
+
+- 승인되지 않은 Source 또는 Rule을 참조하는 Profile
+- 승인된 것과 다른 Source version을 가리키는 `SourceReference`
+- 승인 record가 인용한 `(artifact_id, s3_version_id, content_sha256)`과 어긋나는 Rule
+
+승인과 publication을 하나의 operation으로 합칠 경우에도 위 거부 조건은 그대로 적용하며, 승인과
+게시를 audit record와 함께 원자적으로 수행해야 한다.
 
 업로드 요청은 `customer_id`, bucket, object key, 처리 상태를 받을 수 없다. Backend가 이를 생성한다.
 
@@ -137,4 +196,3 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 - [ ] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
 - [ ] 구현 PR에서 `docs/architecture/C4-CONTAINER.md`에 업로드/Parser/정규화 Artifact 경로를
       반영한다. 계획 단계인 지금은 `docs/DESIGN.md` flow만 갱신하고 C4는 의도적으로 미룬다.
-

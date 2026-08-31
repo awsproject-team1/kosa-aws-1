@@ -37,9 +37,16 @@
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 업로드 검증과 비동기 파싱·정규화 시작 |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}` | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 검토된 Source/Control/Rule version 승인 |
+| `POST` | `/policy-profiles` | 승인된 Rule version으로 versioned Policy Profile 게시 |
+| `POST` | `/policy-profiles/{profileId}/versions` | 승인된 Rule version으로 Profile 새 version 게시 |
 
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
 그대로 사용하며 스스로 만들지 않는다.
+
+승인과 Profile 게시는 서로 다른 operation이다. `/approve`는 Source/Control/Rule version을
+확정하고, Profile 게시가 그 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
+참조하거나 승인된 것과 다른 Source version을 가리키는 Profile을 거부한다. 두 단계를 하나의
+operation으로 합치더라도 이 거부 조건과 audit record 기록은 동일하게 적용한다.
 
 경로와 wire shape는 구현 PR의 Producer/Consumer Contract Review에서 최종 확정한다. Client는
 `customer_id`, S3 bucket/key, checksum 판정, parser/status를 직접 지정할 수 없다. 업로드 성공은

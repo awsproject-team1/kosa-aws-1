@@ -35,6 +35,18 @@ signature/MIME/크기/보안 검증, 형식별 Parser, 공통 Policy Document �
 - 형식별 Parser는 형식과 무관한 stable locator를 갖는 공통 Normalized Policy Document를 생성한다.
   Evidence 추적성은 이 locator와 content hash 위에서 유지된다 (ADR-0004의 추적성 요구 계승).
 - 사람이 승인한 정확한 Source version에서 생성된 Rule만 Policy Profile이 참조할 수 있다.
+  승인과 Profile 게시는 서로 다른 operation이며, 게시는 승인되지 않은 Source·Rule이나 승인된 것과
+  다른 Source version을 참조하는 Profile을 거부한다.
+- 원본은 서버가 발급한 identity로만 저장하고, checksum 검증을 통과한 정확한 S3 `version_id`를
+  기록한다. `(source_id, source_version, artifact_id, s3_version_id, content_sha256)`을 ingestion
+  record와 approval에 immutable하게 묶어, Parser·검토·승인이 동일한 원본 바이트를 보게 한다.
+  S3 versioning만으로는 같은 key에 이후 object version이 추가되는 것을 막지 못한다.
+- 고객 artifact를 다루는 API와 Parser는 trusted context가 선택한 customer-scoped runtime identity만
+  사용한다. caller가 customer ID·role·session tag·prefix를 선택할 수 없고 `customers/*` pooled
+  role은 금지한다 (ADR-0014 계승). 고객 간 접근 거부는 integration test로 보장한다.
+- Rule/Control의 `SourceReference`와 평가 Evidence는
+  `{source_id}@{source_version}#{locator}` canonical 형식을 사용한다. locator와 hash만으로는 같은
+  locator가 개정된 Source version과 잘못 연결될 수 있다.
 - `policies-local/`과 `fixtures/rules/`는 이 경계를 개발·검증하기 위한 seed로만 유지한다.
 
 세부 workflow, 형식 정책, 정규화 Contract, 보안 기준, 역할 분담과 인수 조건은
