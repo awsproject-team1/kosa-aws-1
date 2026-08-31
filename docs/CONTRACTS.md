@@ -82,9 +82,39 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 - `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
 - `PolicyProfile`: `rule_references`로 구성된 versioned allow-list. Repository/AWS Account 권한은
   Profile이 아니라 Backend의 JWT scope에서 강제한다.
+- `PolicyControl`: 정책 통제 항목과 그것을 구현하는 Rule version 목록. Control은 Rule보다
+  상위 단위이며, Coverage는 이 매핑으로 "어떤 통제가 어떤 Rule로 평가됐는지" 설명한다.
 
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가
 Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
+
+## M1 rule registry
+
+MVP Rule Registry는 `fixtures/rules/`에 커밋된다. `apps/backend/policy/registry.py`의
+`load_rule_registry()`가 이를 읽어 `PolicyRegistry`(sources, rules, profiles, catalog,
+ControlMapping)를 만든다.
+
+| File | Content |
+| --- | --- |
+| `sources.json` | `PolicySource` 목록. 원문 자체가 아니라 식별자·버전·content hash |
+| `rules.<resource>.json` | Resource 유형별 `PolicyRule` 목록. 파일 추가만으로 확장한다 |
+| `controls.json` | `PolicyControl` 매핑 (Control → Rule version) |
+| `profiles.json` | `PolicyProfile` allow-list |
+
+로드 시 (1) 모든 `SourceReference`가 선언된 Policy Source를 가리키는지, (2) Profile과 Control이
+Registry에 실제로 존재하는 Rule version만 참조하는지 교차 검증한다. Registry에 정의됐지만
+Profile allow-list에 없는 Rule은 어떤 Resource 유형으로도 Policy Context에 들어가지 않는다.
+
+M1 평가 대상은 S3 단독이다. EC2 Rule은 Mapping/Context 계층의 multi-type 동작을 고정하기 위해
+Registry에만 존재하며 Profile에는 포함하지 않는다 (M2 확장 대상).
+
+정책 원문은 저장소에 없으므로 (ADR-0004) `SourceReference.content_sha256`은
+`scripts/policy_source_digest.py --verify`로 원문 보유자만 검증한다. 원문이 없는 환경에서는
+검증을 건너뛴다.
+
+Registry의 read-only DynamoDB 어댑터는 `apps/backend/policy/dynamodb_catalog.py`이며
+`docs/DATABASE.md`의 `POLICY_PROFILE#`, `POLICY_SOURCE#`, `RULE#` key layout을 사용한다.
+Catalog 인스턴스는 하나의 `customer_id`에 묶여 다른 Customer partition을 표현할 수 없다.
 
 ## M0 Golden Dataset boundary
 

@@ -151,6 +151,39 @@ class PolicyProfile:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PolicyControl:
+    """A policy source control and the versioned Rules that implement it.
+
+    Control은 Rule보다 상위의 정책 통제 항목이다. Coverage는 이 매핑을 통해 "어떤 통제가 어떤
+    Rule로 평가됐는지"로 설명된다. Rule의 `resource_types`가 Control을 Resource 유형에 전개한다.
+    """
+
+    control_id: str
+    title: str
+    source_reference: SourceReference
+    rule_references: tuple[PolicyRuleReference, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("control_id", "title"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.source_reference, SourceReference):
+            raise TypeError("source_reference must be a SourceReference")
+        if not self.rule_references:
+            raise ValueError("rule_references must not be empty")
+        for reference in self.rule_references:
+            if not isinstance(reference, PolicyRuleReference):
+                raise TypeError("rule_references items must be PolicyRuleReference values")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "control_id": self.control_id,
+            "title": self.title,
+            "source_reference": self.source_reference.to_dict(),
+            "rule_references": [reference.to_dict() for reference in self.rule_references],
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class GoldenDatasetCase:
     case_id: str
     phase: AssessmentPhase

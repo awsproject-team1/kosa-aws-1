@@ -1,0 +1,42 @@
+[
+  {
+    "rule_id": "EC2-EBS-ENCRYPT-001",
+    "version": "2026-08-31",
+    "title": "EC2 인스턴스에 연결된 EBS 볼륨을 암호화한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::EC2::Instance", "AWS::EC2::Volume"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/3.1-A",
+        "content_sha256": "2c00e1502e14890cb01ce24fcf9a9d22c46ed10e8d8036582db147f054fbc237"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ]
+  },
+  {
+    "rule_id": "EC2-SNAPSHOT-PUBLIC-001",
+    "version": "2026-08-31",
+    "title": "EBS 스냅샷을 퍼블릭으로 복원할 수 없게 제한한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::EC2::Snapshot"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/3.1-B",
+        "content_sha256": "a0c34f75917f1069a44b56230bbd9995acce31567c28d85e39ed57743ab38e0e"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ]
+  }
+]

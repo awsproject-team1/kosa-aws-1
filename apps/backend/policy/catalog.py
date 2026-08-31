@@ -7,16 +7,12 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from apps.backend.policy.context import PolicyNotFoundError
-from packages.contracts import (
-    AssessmentPhase,
-    PolicyProfile,
-    PolicyRule,
-    PolicyRuleReference,
-    PolicySource,
-    PolicySourceKind,
-    RuleSeverity,
-    SourceReference,
+from apps.backend.policy.serialization import (
+    profile_from_dict,
+    rule_from_dict,
+    source_from_dict,
 )
+from packages.contracts import PolicyProfile, PolicyRule, PolicySource
 
 
 class InMemoryPolicyCatalog:
@@ -46,41 +42,10 @@ def load_m0_fixture_catalog(path: Path) -> tuple[PolicySource, InMemoryPolicyCat
     try:
         fixture = json.loads(path.read_text())
         if not isinstance(fixture, dict):
-            raise ValueError
-        source_data = fixture["policy_source"]
-        rule_data = fixture["rule"]
-        profile_data = fixture["policy_profile"]
-        if not all(isinstance(value, dict) for value in (source_data, rule_data, profile_data)):
-            raise ValueError
-        source = PolicySource(
-            source_id=source_data["source_id"],
-            kind=PolicySourceKind(source_data["kind"]),
-            title=source_data["title"],
-            version=source_data["version"],
-            artifact_id=source_data["artifact_id"],
-            content_sha256=source_data["content_sha256"],
-        )
-        references = tuple(
-            SourceReference(**reference) for reference in rule_data["source_references"]
-        )
-        rule = PolicyRule(
-            rule_id=rule_data["rule_id"],
-            version=rule_data["version"],
-            title=rule_data["title"],
-            severity=RuleSeverity(rule_data["severity"]),
-            applicable_phases=tuple(
-                AssessmentPhase(phase) for phase in rule_data["applicable_phases"]
-            ),
-            resource_types=tuple(rule_data["resource_types"]),
-            source_references=references,
-        )
-        profile = PolicyProfile(
-            policy_profile_id=profile_data["policy_profile_id"],
-            version=profile_data["version"],
-            rule_references=tuple(
-                PolicyRuleReference(**reference) for reference in profile_data["rule_references"]
-            ),
-        )
+            raise ValueError("M0 policy fixture must be an object")
+        source = source_from_dict(fixture["policy_source"])
+        rule = rule_from_dict(fixture["rule"])
+        profile = profile_from_dict(fixture["policy_profile"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("M0 policy fixture is invalid") from error
     return source, InMemoryPolicyCatalog(profiles=(profile,), rules=(rule,))

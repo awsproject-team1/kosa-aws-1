@@ -29,6 +29,7 @@ from packages.contracts.jobs import (
 from packages.contracts.model_profiles import ModelProfile, ModelProfileRole
 from packages.contracts.policy import (
     GoldenDatasetCase,
+    PolicyControl,
     PolicyProfile,
     PolicyRule,
     PolicyRuleReference,
@@ -57,6 +58,7 @@ __all__ = [
     "JobStatus",
     "ModelProfile",
     "ModelProfileRole",
+    "PolicyControl",
     "PolicyProfile",
     "PolicyRule",
     "PolicyRuleReference",

@@ -1,0 +1,18 @@
+[
+  {
+    "source_id": "internal-cloud-security-checklist",
+    "kind": "INTERNAL_POLICY",
+    "title": "클라우드 보안 체크리스트 (통합)",
+    "version": "2026-08-24",
+    "artifact_id": "art-policy-internal-cloud-security-checklist",
+    "content_sha256": "510ad275a7abde2c74f941fce4bf8e15105dbda7f8165c871ccd2d3af3bbc30a"
+  },
+  {
+    "source_id": "isms-p-2023",
+    "kind": "ISMS_P",
+    "title": "ISMS-P 인증기준 (2023-10-31)",
+    "version": "2023-10-31",
+    "artifact_id": "art-policy-isms-p-2023-10-31",
+    "content_sha256": "ab99cad99473eb8873d0000be42be4f13f098b26515c45a8a141d4625ff4bf2d"
+  }
+]

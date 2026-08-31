@@ -5,6 +5,8 @@
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
+- M1 B 진행: MVP Rule Registry(S3 6건) + Control 매핑 + read-only DynamoDB Policy Catalog 구현,
+  C의 Registry 채택(prompt/golden version 재고정)과 A의 테이블 배포 연결 대기
 
 ## Completed
 
@@ -37,6 +39,11 @@
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
   인증/공개 오류 Contract 단일화, `Evaluator`의 `PolicyRule` 타입 명시
 - Assessment·Job·Workflow Outbox의 DynamoDB transactional write와 pending Outbox 재전송 경계 추가
+- M1 B MVP Rule Registry: `fixtures/rules/`에 ISMS-P/사내 체크리스트 근거의 S3 Rule 6건과
+  Control 매핑 5건을 커밋하고, Profile allow-list·Control/Resource Mapping·Policy Context를
+  다중 Rule로 확장. 평가 대상은 S3 단독이며 EC2 Rule은 Registry에만 두어 multi-type 동작을
+  테스트로 고정 (Profile 미포함, M2 확장 대상). `SourceReference` digest는
+  `scripts/policy_source_digest.py`로 로컬 원문과 대조 검증한다 (원문 미커밋, ADR-0004)
 - M0 A deployment wiring: Cognito JWT HTTP API, API Lambda, EventBridge Outbox sweeper,
   Assessment SQS event-source Worker와 CI-provided Lambda ZIP parameters를 CloudFormation에 추가
 
@@ -44,6 +51,9 @@
 
 - M1 D: AWS Resource Tool의 실제 SDK/AssumeRole 통합과 GitHub Tool 경계 구현
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
+- M1 C: Assessment 경로를 M0 단일 Rule Fixture에서 `load_rule_registry()`로 전환하고
+  Rule 확대에 맞춰 prompt/rubric/golden dataset version을 재고정 (DESIGN 품질 Gate 재실행)
+- M1 A: DynamoDB Policy Catalog 항목 적재 경로와 실제 테이블 연결 (현재는 stub client 검증까지)
 
 ## Blocked
 
@@ -70,7 +80,7 @@
 **Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다.
 
 - [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장
-- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공
+- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; C의 Registry 채택과 실제 테이블 적재는 통합 대기)*
 - [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증, Assessment UI 기본 화면
 - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증

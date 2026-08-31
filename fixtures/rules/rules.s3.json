@@ -1,0 +1,127 @@
+[
+  {
+    "rule_id": "S3-PUBLIC-001",
+    "version": "2026-08-31",
+    "title": "S3 버킷에 Block Public Access를 적용한다",
+    "severity": "CRITICAL",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-B",
+        "content_sha256": "8e252ed8f701d2d7c7d9ded89feb11a0855e1c09836ef2fb00372b1344f5e729"
+      },
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-A",
+        "content_sha256": "36765bc938b6d718db526fae053c294e03497879e7aa5f143a315265a6011029"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.10.3",
+        "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
+      }
+    ]
+  },
+  {
+    "rule_id": "S3-ACL-001",
+    "version": "2026-08-31",
+    "title": "S3 버킷 ACL로 접근 권한을 관리하지 않는다",
+    "severity": "MEDIUM",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-C",
+        "content_sha256": "4a3b5ed4a1da9df8d418f1140bbb73974f8d4690d21443343487788803c2d5a0"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ]
+  },
+  {
+    "rule_id": "S3-POLICY-001",
+    "version": "2026-08-31",
+    "title": "Bucket Policy는 필요한 범위의 네트워크와 리소스로 접근을 제한한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-D",
+        "content_sha256": "74c957bee1043fbe38cf79c3ffc4853804575b1e634f0bc9f2fece8e18c66cdc"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ]
+  },
+  {
+    "rule_id": "S3-ENCRYPT-001",
+    "version": "2026-08-31",
+    "title": "S3 버킷에 서버 측 암호화를 설정한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-F",
+        "content_sha256": "0e462e1a1222b7f54658674ad4e25931b1c422dc43c19b2c9c044570965bf486"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ]
+  },
+  {
+    "rule_id": "S3-TLS-001",
+    "version": "2026-08-31",
+    "title": "S3 버킷은 TLS 전송만 허용한다",
+    "severity": "MEDIUM",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/5.1-G",
+        "content_sha256": "286460b244270ba6509a21792d6d51c8b29bb4be97130335745e7dcd98299f97"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ]
+  },
+  {
+    "rule_id": "S3-LOGGING-001",
+    "version": "2026-08-31",
+    "title": "S3 버킷에 서버 액세스 로깅을 활성화한다",
+    "severity": "MEDIUM",
+    "applicable_phases": ["INITIAL", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::S3::Bucket"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "locator": "part2/7.1-G",
+        "content_sha256": "bbe2afae1f35c3fa2308932db25d98f797b5d6b4bdbfb344a0dc2b0c37ac56b6"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ]
+  }
+]

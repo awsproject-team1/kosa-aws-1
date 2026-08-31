@@ -9,6 +9,7 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationStatus,
     GoldenDatasetCase,
+    PolicyControl,
     PolicyProfile,
     PolicyRule,
     PolicyRuleReference,
@@ -21,6 +22,7 @@ from packages.contracts import (
 
 FIXTURE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "policy_profile.json"
 GOLDEN_CASE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "golden_dataset_case.json"
+CONTROLS_PATH = Path(__file__).parents[2] / "fixtures" / "rules" / "controls.json"
 
 
 class PolicyContractTest(unittest.TestCase):
@@ -107,6 +109,41 @@ class PolicyContractTest(unittest.TestCase):
                 expected_score_min=80,
                 expected_score_max=20,
                 expected_evidence_references=(),
+            )
+
+    def test_controls_fixture_serializes_the_control_mapping(self) -> None:
+        fixture = json.loads(CONTROLS_PATH.read_text(encoding="utf-8"))
+
+        for entry in fixture:
+            control = PolicyControl(
+                control_id=entry["control_id"],
+                title=entry["title"],
+                source_reference=SourceReference(**entry["source_reference"]),
+                rule_references=tuple(
+                    PolicyRuleReference(**reference) for reference in entry["rule_references"]
+                ),
+            )
+
+            self.assertEqual(control.to_dict(), entry)
+
+    def test_control_requires_at_least_one_rule_reference(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rule_references must not be empty"):
+            PolicyControl(
+                control_id="ISMS-P-2.6.2",
+                title="정보시스템 접근",
+                source_reference=SourceReference(
+                    source_id="isms-p-2023", locator="control/2.6.2", content_sha256="hash-001"
+                ),
+                rule_references=(),
+            )
+
+    def test_control_rejects_a_non_source_reference(self) -> None:
+        with self.assertRaisesRegex(TypeError, "source_reference must be a SourceReference"):
+            PolicyControl(
+                control_id="ISMS-P-2.6.2",
+                title="정보시스템 접근",
+                source_reference={"source_id": "isms-p-2023"},
+                rule_references=(PolicyRuleReference(rule_id="S3-ACL-001", version="v1"),),
             )
 
 
