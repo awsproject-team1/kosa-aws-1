@@ -186,7 +186,9 @@ class CloudFormationSecurityTest(unittest.TestCase):
         role_properties = _properties(self.resources["WorkflowRuntimeRole"])
         policies = role_properties["Policies"]
         statements = [
-            statement for policy in policies for statement in policy["PolicyDocument"]["Statement"]
+            statement
+            for policy in policies
+            for statement in _policy_statements(policy["PolicyDocument"]["Statement"])
         ]
         flattened_actions = [
             action
@@ -218,6 +220,18 @@ class CloudFormationSecurityTest(unittest.TestCase):
                 for item in value
             )
         return isinstance(value, str) and "ArtifactBucket" in value
+
+
+def _policy_statements(value: object) -> list[dict[str, object]]:
+    """Expand both branches of a static CloudFormation policy `Fn::If`."""
+    if isinstance(value, list):
+        return [statement for statement in value if isinstance(statement, dict)]
+    if not isinstance(value, dict):
+        return []
+    branches = value.get("Fn::If")
+    if not isinstance(branches, list) or len(branches) != 3:
+        return []
+    return [statement for branch in branches[1:] for statement in _policy_statements(branch)]
 
 
 class DeploymentArtifactSecurityTest(unittest.TestCase):

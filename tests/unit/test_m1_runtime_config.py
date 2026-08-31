@@ -3,6 +3,7 @@
 import json
 import unittest
 
+from apps.backend.assessment.runtime import DynamoM1WorkRepository
 from apps.backend.assessment.runtime_config import (
     M1RuntimeConfiguration,
     M1RuntimeConfigurationError,
@@ -45,3 +46,34 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
         invalid["unexpected"] = "value"
         with self.assertRaisesRegex(M1RuntimeConfigurationError, "invalid"):
             M1RuntimeConfiguration.from_json(json.dumps([invalid]))
+
+    def test_worker_repository_resolves_only_persisted_assessment_selectors(self) -> None:
+        class Table:
+            def query(self, **kwargs: object) -> dict[str, object]:
+                return {
+                    "Items": [
+                        {
+                            "customer_id": "cust-001",
+                            "assessment_id": "asm-001",
+                            "revision": 0,
+                        }
+                    ]
+                }
+
+            def get_item(self, **kwargs: object) -> dict[str, object]:
+                return {
+                    "Item": {
+                        "repository_id": "repo-001",
+                        "policy_profile_id": "profile-mvp-baseline",
+                    }
+                }
+
+        repository = DynamoM1WorkRepository(
+            Table(), M1RuntimeConfiguration.from_json(json.dumps([TARGET]))
+        )
+        work = repository.get_resource_work(job_id="job-001", expected_revision=0)
+
+        self.assertIsNotNone(work)
+        assert work is not None
+        self.assertEqual(work.resource_id, "customer-test-bucket")
+        self.assertEqual(work.perspective.value, "AWS_ACTUAL")

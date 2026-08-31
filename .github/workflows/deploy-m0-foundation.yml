@@ -188,6 +188,9 @@ jobs:
       LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
       LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
       ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+      M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
+      M1_ASSESSMENT_SECRET_ARNS: ${{ secrets.M1_ASSESSMENT_SECRET_ARNS }}
+      M1_ASSESSMENT_READ_ROLE_ARNS: ${{ secrets.M1_ASSESSMENT_READ_ROLE_ARNS }}
       EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out approved repository revision
@@ -246,4 +249,7 @@ jobs:
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}" \
               "AssessmentScopeJson=${ASSESSMENT_SCOPE_JSON}" \
+              "M1AssessmentRuntimeJson=${M1_ASSESSMENT_RUNTIME_JSON}" \
+              "M1AssessmentSecretArns=${M1_ASSESSMENT_SECRET_ARNS}" \
+              "M1AssessmentReadRoleArns=${M1_ASSESSMENT_READ_ROLE_ARNS}" \
             --no-fail-on-empty-changeset

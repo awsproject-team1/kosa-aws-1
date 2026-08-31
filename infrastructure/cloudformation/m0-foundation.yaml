@@ -31,6 +31,21 @@ Parameters:
     Default: "{}"
     NoEcho: true
     ConstraintDescription: Customer-scoped approved repository/profile selector map for M0.
+  M1AssessmentRuntimeJson:
+    Type: String
+    Default: ""
+    NoEcho: true
+    ConstraintDescription: Optional protected M1 customer/repository target configuration; empty preserves fixture mode.
+  M1AssessmentSecretArns:
+    Type: CommaDelimitedList
+    Default: ""
+    NoEcho: true
+    ConstraintDescription: Exact Secrets Manager ARNs holding the GitHub installation token and AWS External ID for M1.
+  M1AssessmentReadRoleArns:
+    Type: CommaDelimitedList
+    Default: ""
+    NoEcho: true
+    ConstraintDescription: Exact customer cross-account read Role ARNs that the M1 Worker may assume.
   FrontendCallbackUrl:
     Type: String
     Default: http://localhost:5173
@@ -39,6 +54,9 @@ Parameters:
     Type: String
     Default: http://localhost:5173
     ConstraintDescription: Exact HTTPS production or localhost logout URL for the Assessment SPA.
+
+Conditions:
+  M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
 
 Resources:
   MetadataTable:
@@ -322,7 +340,6 @@ Resources:
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
-
   WorkflowRuntimeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -352,6 +369,21 @@ Resources:
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
+        - PolicyName: M1ReadOnlyAssessmentInputs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: !If
+              - M1LiveAssessmentEnabled
+              - - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref M1AssessmentSecretArns
+                - Effect: Allow
+                  Action: sts:AssumeRole
+                  Resource: !Ref M1AssessmentReadRoleArns
+                - Effect: Allow
+                  Action: bedrock:InvokeModel
+                  Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
+              - []
 
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -442,6 +474,7 @@ Resources:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
           M0_SYNTHETIC_ASSESSMENT: "true"
+          M1_ASSESSMENT_RUNTIME_JSON: !Ref M1AssessmentRuntimeJson
   AssessmentQueueEventSource:
     Type: AWS::Lambda::EventSourceMapping
     Properties:

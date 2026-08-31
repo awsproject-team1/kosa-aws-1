@@ -59,6 +59,10 @@
 - M1 A/D integration boundary: 승인된 Registry를 고객별 DynamoDB Policy Catalog에
   immutable/idempotent하게 publish하는 Bootstrap과, 지정 commit의 Terraform blob manifest만
   GitHub REST `GET`으로 읽는 scoped Snapshot adapter를 구현·unit test로 고정
+- M1 customer-sandbox wiring: protected Environment Secret의 exact customer/repository/profile
+  target만 Worker가 해석하도록 하고, GitHub revision preflight → Secrets Manager short-lived
+  installation token/External ID → STS S3 read-only → Bedrock AWS_ACTUAL 평가를 조건부 M1
+  runtime으로 연결. M0 fixture 모드는 live configuration이 없을 때만 유지한다.
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
