@@ -53,7 +53,9 @@ is not an acceptable tenant isolation boundary.
 The stack exposes metadata table and artifact bucket names and ARNs for runtime injection and
 least-privilege integrations. `ProjectName` and `Environment` constraints, including the
 account-qualified S3 naming exception, are documented in `parameters/README.md` and
-`docs/NAMING.md`.
+`docs/NAMING.md`. The non-deploying approval-input checklist and controlled sandbox CloudTrail
+acceptance procedure are in `parameters/m0-foundation-sandbox-deployment-runbook.md`; they must be
+completed through the protected GitHub Actions path, not from a local developer or Agent session.
 
 Run the same offline CloudFormation validation used by CI without deploying:
 
