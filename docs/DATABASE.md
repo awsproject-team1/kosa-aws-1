@@ -1,13 +1,18 @@
 # Database Design
 
-> Status: M0 CloudFormation foundation implemented; deployment integration pending
+> Status: M0 CloudFormation foundation and storage hardening implemented; no customer stack deployed
 >
-> Scope: DynamoDB metadata/state and S3 artifact references. Detailed S3 bucket lifecycle and IAM policy are defined with infrastructure implementation.
+> Scope: DynamoDB metadata/state and S3 artifact references. The foundation defines storage
+> encryption, retention, ownership, transport controls, and artifact-access audit delivery;
+> lifecycle/Object Lock and audit-retention policy remain follow-up work.
 
 ## Decision summary
 
 - MVP uses one DynamoDB table for operational and domain metadata: `<project>-<env>-metadata`.
-- The table uses on-demand capacity, server-side encryption, point-in-time recovery, and a TTL attribute named `expires_at`.
+- The table uses on-demand capacity, deletion protection, server-side encryption, point-in-time recovery, and a TTL attribute named `expires_at`.
+- The account-qualified artifact bucket is versioned, encrypted, bucket-owner enforced, private,
+  denies non-TLS requests, and emits its S3 object read/write data events to a separate retained
+  CloudTrail audit destination with log-file validation.
 - Every item includes `customer_id`, `entity_type`, `created_at`, `updated_at`, and a schema/version field where applicable.
 - Large or immutable artifacts remain in S3; DynamoDB stores only their identity, hash, version, and access scope.
 - SQS carries only resumable work notifications. DynamoDB remains the authoritative Job and
@@ -129,7 +134,7 @@ SQS 또는 상태 갱신 실패는 `PENDING`으로 남아, Outbox sweeper가 다
 {
   "artifact_id": "art_123",
   "artifact_type": "TERRAFORM_SNAPSHOT",
-  "bucket": "<project>-<env>-artifacts",
+  "bucket": "<project>-<env>-artifacts-<account-id>",
   "key": "customers/cust_123/repositories/repo_123/snapshots/sha256-...",
   "version_id": "optional-s3-version-id",
   "content_sha256": "hex-digest",
@@ -189,8 +194,13 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 - The Backend derives `customer_id` and allowed repository/account scope from verified JWT claims; callers cannot select an arbitrary partition key.
 - Read/write conditions require the expected `customer_id`, entity version, and approved state where applicable.
 - `GSI1`/`GSI3` results are filtered by an authoritative item read or scoped condition before disclosure.
-- DynamoDB and S3 encryption, least-privilege IAM, CloudTrail, and application audit events are required.
-- Prompts, policy originals, and full IaC are not copied into operational logs; store only permitted artifact references and correlation identifiers.
+- DynamoDB and S3 encryption, DynamoDB deletion protection, S3 versioning and bucket-owner-enforced ownership, non-TLS request denial, least-privilege IAM, CloudTrail, and application audit events are required.
+- The M0 Worker has no artifact-bucket permission because it processes only packaged synthetic
+  fixtures. A runtime that handles customer artifacts must use the tenant-scoped identity boundary
+  required by ADR-0014; a pooled `customers/*` role is not an acceptable tenant boundary.
+- CloudTrail records ArtifactBucket `AWS::S3::Object` read/write data events in a separate retained
+  audit bucket with log-file validation. Audit records can contain object-key metadata; artifact
+  keys must not contain secrets, policy originals, prompts, or full IaC content.
 
 ## Open decisions
 
@@ -198,6 +208,6 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 | --- | --- | --- | --- |
 | Official `<project>` resource-name prefix | Team | Infrastructure implementation | Final table/bucket names |
 | Queue visibility timeout, DLQ retention, and redrive alarm thresholds | A + Security | Infrastructure implementation | Worker resilience configuration |
-| Audit/approval retention and Object Lock policy | A + Security | Before customer deployment | Compliance controls |
+| Audit/approval retention, Object Lock, and CloudTrail audit-destination lifecycle policy | A + Security | Before customer deployment | Compliance controls |
 | Per-assessment result volume and pagination threshold | C + A | Assessment implementation | Query/pagination limits |
 | Additional reporting/search index requirements | A/B/C/D | Before UI reporting implementation | GSI additions |

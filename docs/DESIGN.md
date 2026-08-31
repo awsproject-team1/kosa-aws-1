@@ -119,11 +119,14 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
 - `GitHubWorkflowEventRole`: GitHub Actions OIDC에서 Plan/Apply 완료 Event만 EventBridge에
   게시하는 최소 권한
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.
+- M0 Worker는 packaged synthetic fixture만 처리하며 ArtifactBucket 접근 권한을 갖지 않는다.
+  고객 artifact 접근은 tenant-scoped runtime identity가 구현·검토된 뒤에만 허용한다
+  (ADR-0014).
 - AI 출력은 Schema/Evidence/Permission/ID 검증과 CI, plan, Human Approval을 통과해야 한다.
 
 ## Observability
 
-CloudWatch Metrics/Logs, CloudTrail, X-Ray 또는 OpenTelemetry를 사용한다. 구조화 로그의 상관 키는 `request_id`, `job_id`, `assessment_id`, `rule_id`다. Assessment 성공률, 판정 분포, Lambda 오류/throttle, Bedrock 지연·토큰, Agent Workflow와 Tool 호출, Job 적체, Queue age/DLQ depth, checkpoint·재개 횟수, plan/apply 실패를 관측하고 민감한 Prompt·정책 원문·IaC 전체는 로그에서 마스킹하거나 제외한다. 평가마다 Evidence, Tool 호출, Model/Prompt/Rubric/Rule Version, Score, Coverage, Token/Latency/Retry/Validation 결과를 보존한다.
+CloudWatch Metrics/Logs, CloudTrail, X-Ray 또는 OpenTelemetry를 사용한다. 구조화 로그의 상관 키는 `request_id`, `job_id`, `assessment_id`, `rule_id`다. Assessment 성공률, 판정 분포, Lambda 오류/throttle, Bedrock 지연·토큰, Agent Workflow와 Tool 호출, Job 적체, Queue age/DLQ depth, checkpoint·재개 횟수, plan/apply 실패를 관측하고 민감한 Prompt·정책 원문·IaC 전체는 로그에서 마스킹하거나 제외한다. ArtifactBucket의 S3 object read/write는 별도 retained CloudTrail data-event trail과 audit bucket에 기록하며, selector는 artifact bucket만 포함하고 audit destination은 제외한다. Audit event에는 object-key metadata가 남을 수 있으므로 object key에 민감 원문을 넣지 않는다. 실제 고객 배포 전에는 승인된 sandbox에서 controlled artifact Get/Put과 delivered CloudTrail record/log-file validation을 확인한다. 평가마다 Evidence, Tool 호출, Model/Prompt/Rubric/Rule Version, Score, Coverage, Token/Latency/Retry/Validation 결과를 보존한다.
 
 ## Evaluation quality gate
 
