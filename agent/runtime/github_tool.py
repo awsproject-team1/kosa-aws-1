@@ -1,13 +1,12 @@
-"""Read-only GitHub Integration Tool boundary for D (Remediation/Deployment).
+"""D(Remediation/Deployment)를 위한 read-only GitHub Integration Tool 경계.
 
-This module defines the provider-neutral port that the agent runtime uses to
-read Customer IaC state from an approved GitHub repository. Per ADR-0007 the
-GitHub App holds least-privilege access to approved Customer IaC repositories,
-and the Remediation write path (Branch/Commit/PR) is intentionally out of scope
-until M2. This boundary therefore exposes only IaC snapshot reads; it cannot
-express a write or mutation. Access is scoped to an approved
-(customer_id, repository_id) pair and callers must not delegate that scope to
-policy or AI input.
+이 모듈은 agent runtime이 승인된 GitHub repository에서 Customer IaC 상태를 읽을 때
+사용하는 provider-neutral port를 정의한다. ADR-0007에 따라 GitHub App은 승인된
+Customer IaC repository에만 최소 권한으로 접근하며, Remediation write 경로
+(Branch/Commit/PR)는 M2까지 의도적으로 범위 밖이다. 따라서 이 경계는 IaC snapshot
+read만 노출하며 write나 mutation을 표현할 수 없다. 접근은 승인된
+(customer_id, repository_id) 쌍으로 scope가 제한되고, 호출자는 그 scope를 policy나
+AI 입력에 위임해서는 안 된다.
 """
 
 from dataclasses import dataclass
@@ -17,24 +16,24 @@ from packages.contracts import IaCSnapshot
 
 
 class GitHubToolError(RuntimeError):
-    """Base failure for a read-only GitHub Integration Tool operation."""
+    """read-only GitHub Integration Tool 작업의 기본 실패 타입."""
 
 
 class GitHubToolScopeError(GitHubToolError):
-    """Raised when a request targets a customer/repository outside tool scope."""
+    """요청이 tool scope 밖의 customer/repository를 대상으로 할 때 발생한다."""
 
 
 class GitHubSnapshotNotFoundError(GitHubToolError):
-    """Raised when a requested IaC snapshot does not exist in the read state."""
+    """요청한 IaC snapshot이 read 상태에 존재하지 않을 때 발생한다."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IaCSnapshotRequest:
-    """Immutable read request for one repository IaC snapshot.
+    """하나의 repository IaC snapshot에 대한 불변 read 요청.
 
-    A request names an approved (customer_id, repository_id) scope and an exact
-    ``commit_sha``. It carries no field that could mutate the repository; the
-    tool only ever returns a descriptive snapshot for this coordinate.
+    요청은 승인된 (customer_id, repository_id) scope와 정확한 ``commit_sha``를
+    명시한다. repository를 변경할 수 있는 필드는 담지 않으며, tool은 이 좌표에
+    해당하는 서술적(descriptive) snapshot만 반환한다.
     """
 
     customer_id: str
@@ -57,18 +56,18 @@ class IaCSnapshotRequest:
 
 @runtime_checkable
 class GitHubTool(Protocol):
-    """Read-only operations required to inspect Customer IaC state."""
+    """Customer IaC 상태를 조회하는 데 필요한 read-only 작업."""
 
     def read_iac_snapshot(self, request: IaCSnapshotRequest) -> IaCSnapshot:
-        """Return the IaC snapshot for a request within tool scope."""
+        """tool scope 안에 있는 요청에 대한 IaC snapshot을 반환한다."""
         ...
 
 
 def require_snapshot_request(request: object) -> IaCSnapshotRequest:
-    """Validate a request object for a read-only IaC snapshot lookup.
+    """read-only IaC snapshot 조회를 위한 요청 객체를 검증한다.
 
-    Keeping this check in one place ensures every adapter enforces the same
-    read-only boundary rather than trusting the caller to pass the right shape.
+    이 검사를 한 곳에 모아두면, 호출자가 올바른 형태를 넘길 거라 믿는 대신
+    모든 adapter가 동일한 read-only 경계를 강제하게 된다.
     """
     if not isinstance(request, IaCSnapshotRequest):
         raise TypeError("request must be an IaCSnapshotRequest")
@@ -78,12 +77,11 @@ def require_snapshot_request(request: object) -> IaCSnapshotRequest:
 def require_repository_scope(
     request: IaCSnapshotRequest, *, customer_id: str, repository_id: str
 ) -> IaCSnapshotRequest:
-    """Require a request to stay within one approved (customer, repo) scope.
+    """요청이 승인된 하나의 (customer, repo) scope 안에 머물도록 요구한다.
 
-    ADR-0007 grants least-privilege access to approved Customer IaC
-    repositories only. This shared guard enforces that scope axis so every
-    adapter (mock or real GitHub App) applies the same check instead of
-    relying on per-adapter convention.
+    ADR-0007은 승인된 Customer IaC repository에만 최소 권한 접근을 부여한다. 이
+    공유 가드가 그 scope 축을 강제하므로, 모든 adapter(mock이든 실제 GitHub App이든)가
+    adapter별 관례에 의존하지 않고 동일한 검사를 적용한다.
     """
     if not isinstance(request, IaCSnapshotRequest):
         raise TypeError("request must be an IaCSnapshotRequest")
