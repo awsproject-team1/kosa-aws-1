@@ -50,7 +50,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
-| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, score, coverage |
+| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata; report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment and evidence references |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result and severity |
@@ -60,6 +60,10 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail |
 
 `Assessment result` and `Finding` are co-located with their Assessment so one query can retrieve the full assessment report. If an Assessment can exceed DynamoDB partition or response limits, results are paginated by `SK` and large report payloads remain in S3.
+
+M1의 Readiness Score는 immutable Result와 Plan에서 report read 시 결정적으로 계산한다. 완료
+counter와 materialized score는 이후 storage migration 전에는 Assessment metadata에 별도 write하지
+않으므로, 진행 중 Assessment에 오래된 점수가 남지 않는다.
 
 ## Secondary indexes and access patterns
 
@@ -100,13 +104,27 @@ SQS 또는 상태 갱신 실패는 `PENDING`으로 남아, Outbox sweeper가 다
   "repository_id": "repo_123",
   "policy_profile_id": "profile_001",
   "status": "COMPLETED",
-  "readiness_score": 73,
-  "coverage": 0.8,
   "started_at": "2026-08-29T10:00:00Z",
   "updated_at": "2026-08-29T10:03:00Z",
   "version": 1,
   "GSI3PK": "REPOSITORY#repo_123",
   "GSI3SK": "2026-08-29T10:00:00Z#ASSESSMENT#asm_456"
+}
+```
+
+```json
+{
+  "PK": "CUSTOMER#cust_123",
+  "SK": "ASSESSMENT#asm_456#FINDING#finding-2bf4c6a1454e6b9d2d9adf73",
+  "entity_type": "FINDING",
+  "customer_id": "cust_123",
+  "assessment_id": "asm_456",
+  "rule_id": "S3-PUBLIC-001",
+  "rule_version": "2026-08",
+  "perspective": "AWS_ACTUAL",
+  "status": "FAIL",
+  "severity": "HIGH",
+  "evidence_references": ["aws:s3:bucket/example#read-resource"]
 }
 ```
 

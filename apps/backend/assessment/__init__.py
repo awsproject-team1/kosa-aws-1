@@ -3,12 +3,19 @@
 from apps.backend.assessment.bedrock import BedrockEvaluationError, BedrockStructuredEvaluator
 from apps.backend.assessment.bedrock_runtime import BedrockConverseClientFactory
 from apps.backend.assessment.coverage import AssessmentCoverage, calculate_coverage
+from apps.backend.assessment.findings import (
+    DynamoDbFindingStore,
+    FindingStoreError,
+    ImmutableFindingConflict,
+    finding_from_result,
+)
 from apps.backend.assessment.model_profiles import (
     InMemoryModelProfileRegistry,
     ModelProfileNotFoundError,
 )
 from apps.backend.assessment.models import Assessment
 from apps.backend.assessment.quality import GoldenDatasetRunner, GoldenEvaluationReport
+from apps.backend.assessment.readiness import calculate_readiness_score
 from apps.backend.assessment.reporting import (
     AssessmentEvaluationPlan,
     AssessmentReport,
@@ -45,14 +52,19 @@ __all__ = [
     "BedrockConverseClientFactory",
     "BedrockStructuredEvaluator",
     "calculate_coverage",
+    "calculate_readiness_score",
     "DynamoDbEvaluationResultStore",
     "DynamoDbAssessmentReportStore",
+    "DynamoDbFindingStore",
     "EvaluationContractError",
     "EvaluationResultStoreError",
+    "FindingStoreError",
+    "finding_from_result",
     "GoldenDatasetRunner",
     "GoldenEvaluationReport",
     "InMemoryModelProfileRegistry",
     "ImmutableEvaluationResultConflict",
+    "ImmutableFindingConflict",
     "ModelProfileNotFoundError",
     "S3ActualEvidence",
     "S3ActualEvidenceLoader",

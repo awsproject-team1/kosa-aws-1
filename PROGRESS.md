@@ -48,6 +48,11 @@
 - M1 C S3 Initial Assessment 코드 경계: 승인 Region Bedrock structured evaluator, read-only S3
   Actual Evidence, immutable plan-based Coverage, paginated 결과 조회 API와 기본 React 화면 구현
   (고객 Account Role·Bedrock 환경 설정은 D/A deployment 단계에서 주입)
+- M1 C Finding·Readiness projection: follow-up Evaluation Result를 immutable Finding으로
+  idempotent 저장하고, 완료된 Assessment plan에서 severity-weighted Readiness Score를 계산해
+  Assessment API·React report로 조회
+- M1 A auth bootstrap: Cognito local-user `Admin`/`User` group과 Hosted UI PKCE를 구성하고,
+  React 로그인·Assessment 시작 화면 및 고객 sandbox E2E handoff 절차를 추가
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
@@ -107,29 +112,12 @@
   선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
 - M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
   고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
+- M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
+  로그인·Assessment 시작·결과 조회 E2E를 실행한다.
 
 ## Blocked
 
-- **M1 Exit criteria의 `Finding`과 `Readiness Score`에 담당 역할이 없다.** (제기: B, 2026-08-31)
-
-  두 산출물은 Exit criteria와 `docs/PRD.md`의 제품 흐름에 있고 저장 모델까지 정의돼 있지만,
-  생산하는 코드가 없고 M1의 A/B/C/D 역할 항목 어디에도 들어 있지 않다.
-
-  | 산출물 | 정의된 것 | 없는 것 |
-  | --- | --- | --- |
-  | `Finding` | `docs/DATABASE.md` item(`ASSESSMENT#{id}#FINDING#{finding_id}`), Job step `GENERATE_FINDINGS`, M2 소비처(`RemediationPatch.finding_id`, `POST /findings/{findingId}/remediations`) | 생성 코드, `packages/contracts`의 Schema, 조회 API, 담당 역할 |
-  | `Readiness Score` | `docs/DATABASE.md`의 Assessment item 예시(`readiness_score`), `docs/PRD.md`가 서비스의 대표 점수로 규정 | 산출 코드, 계산 정의(Score/Severity/Coverage와의 관계), 담당 역할 |
-
-  M2의 `RemediationPatch`가 `finding_id`를 필수로 요구하므로, M1이 Finding을 생산하지 않으면
-  M2 Remediation 전체가 입력을 얻지 못한다.
-
-  - Decision: 두 산출물의 담당 역할과 M1 포함 여부
-  - Owner: 미정
-  - Needed by: M1 Exit criteria 판정 전
-  - Blocks: M1 종료 판정, M2 Remediation 착수
-  - Proposed options: (1) Finding 생성·조회는 A, Readiness Score 산출은 C가 맡는다
-    (2) 둘 다 평가 산출물로 보고 C가 맡는다 (3) M1 Exit criteria에서 빼고 M2로 옮긴다
-  - Final record: 미정
+- 없음
 
 ## Milestones
 
@@ -151,9 +139,12 @@
 
 **Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + 승인된 Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다. 정적 seed가 아닌 사용자 업로드 정책을 제품 기능으로 표시하려면 `docs/POLICY_INGESTION.md`의 별도 Delivery gate를 충족해야 한다.
 
-- [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장
+- [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장,
+  고객 AWS Account용 Auth bootstrap *(고객 소유 IdP federation 또는 Cognito local user 결정, 초기
+  Admin 인수, Admin/User claim·group, 로그인 UI 및 고객 측 사용자 관리 절차 E2E 검증)*
 - [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; Policy Ingestion의 형식 allow-list·정규화 Schema·Parser 구현 완료; C의 Registry 채택, 실제 테이블 적재, Rule 승인·Profile publication은 대기)*
-- [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증, Assessment UI 기본 화면
+- [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
+  Finding·Readiness Score projection, Assessment UI 기본 화면
 - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; 실제 SDK/GitHub App 통합 대기)*
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
 

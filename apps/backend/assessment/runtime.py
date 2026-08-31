@@ -11,6 +11,7 @@ from apps.backend.assessment import (
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
+    DynamoDbAssessmentReportStore,
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
 )
@@ -137,6 +138,7 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         runner=AssessmentRunner(SyntheticS3Evaluator(snapshot)),
         model_profiles=InMemoryModelProfileRegistry((profile,)),
         result_store=DynamoDbEvaluationResultStore(table),
+        plan_store=DynamoDbAssessmentReportStore(table),
     )
     records = event.get("Records")
     if not isinstance(records, list):

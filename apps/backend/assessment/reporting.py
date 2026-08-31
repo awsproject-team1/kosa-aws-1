@@ -10,11 +10,14 @@ from decimal import Decimal
 from typing import Protocol
 
 from apps.backend.assessment.coverage import calculate_coverage
+from apps.backend.assessment.readiness import calculate_readiness_score
 from packages.contracts import (
     AssessmentCoverage,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    Finding,
+    ReadinessScore,
 )
 
 
@@ -53,7 +56,9 @@ class AssessmentReport:
 
     assessment_id: str
     results: tuple[EvaluationResult, ...]
+    findings: tuple[Finding, ...]
     coverage: AssessmentCoverage
+    readiness_score: ReadinessScore | None
     next_cursor: str | None = None
 
     def __post_init__(self) -> None:
@@ -63,8 +68,16 @@ class AssessmentReport:
             isinstance(result, EvaluationResult) for result in self.results
         ):
             raise TypeError("results must be a tuple of EvaluationResult values")
+        if not isinstance(self.findings, tuple) or not all(
+            isinstance(finding, Finding) for finding in self.findings
+        ):
+            raise TypeError("findings must be a tuple of Finding values")
         if not isinstance(self.coverage, AssessmentCoverage):
             raise TypeError("coverage must be an AssessmentCoverage")
+        if self.readiness_score is not None and not isinstance(
+            self.readiness_score, ReadinessScore
+        ):
+            raise TypeError("readiness_score must be a ReadinessScore or None")
         if self.next_cursor is not None and (
             not isinstance(self.next_cursor, str) or not self.next_cursor
         ):
@@ -74,7 +87,11 @@ class AssessmentReport:
         return {
             "assessment_id": self.assessment_id,
             "results": [result.to_dict() for result in self.results],
+            "findings": [finding.to_dict() for finding in self.findings],
             "coverage": self.coverage.to_dict(),
+            "readiness_score": (
+                self.readiness_score.to_dict() if self.readiness_score is not None else None
+            ),
             "next_cursor": self.next_cursor,
         }
 
@@ -139,10 +156,20 @@ class DynamoDbAssessmentReportStore:
             for item in items
             if isinstance(item, Mapping) and item.get("entity_type") == "ASSESSMENT_RESULT"
         )
+        findings = tuple(
+            _finding_from_item(item, customer_id, assessment_id)
+            for item in items
+            if isinstance(item, Mapping) and item.get("entity_type") == "FINDING"
+        )
+        coverage = calculate_coverage(results=results, planned_evaluations=expected)
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
-            coverage=calculate_coverage(results=results, planned_evaluations=expected),
+            findings=findings,
+            coverage=coverage,
+            readiness_score=calculate_readiness_score(
+                results=results, planned_evaluations=expected
+            ),
         )
 
     def get_assessment_job_id(self, *, customer_id: str, assessment_id: str) -> str:
@@ -197,7 +224,9 @@ class DynamoDbAssessmentReportStore:
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
+            findings=report.findings,
             coverage=report.coverage,
+            readiness_score=report.readiness_score,
             next_cursor=next_cursor,
         )
 
@@ -272,6 +301,34 @@ def _result_from_item(
         )
     except (KeyError, TypeError, ValueError):
         raise AssessmentReportStoreError("assessment result is invalid") from None
+
+
+def _finding_from_item(item: Mapping[str, object], customer_id: str, assessment_id: str) -> Finding:
+    if item.get("customer_id") != customer_id or item.get("assessment_id") != assessment_id:
+        raise AssessmentReportStoreError("finding scope is invalid")
+    evidence = item.get("evidence_references")
+    if not isinstance(evidence, list) or not all(
+        isinstance(reference, str) for reference in evidence
+    ):
+        raise AssessmentReportStoreError("finding evidence is invalid")
+    score = item.get("score")
+    if isinstance(score, Decimal):
+        score = float(score)
+    try:
+        return Finding(
+            finding_id=item["finding_id"],
+            resource_id=item["resource_id"],
+            rule_id=item["rule_id"],
+            rule_version=item["rule_version"],
+            perspective=EvaluationPerspective(item["perspective"]),
+            status=EvaluationStatus(item["status"]),
+            severity=item["severity"],
+            score=score,
+            rationale=item["rationale"],
+            evidence_references=tuple(evidence),
+        )
+    except (KeyError, TypeError, ValueError):
+        raise AssessmentReportStoreError("finding is invalid") from None
 
 
 def _customer_pk(customer_id: str) -> str:

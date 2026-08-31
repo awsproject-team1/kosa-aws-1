@@ -35,6 +35,11 @@ reviewers and the same `EXPECTED_AWS_ACCOUNT_ID`. No stack is deployed from a lo
 session. `AssessmentScopeJson` is a fail-closed, customer-scoped M0 selector map and must be supplied
 by the deployment workflow.
 
+For M1 sandbox frontend testing, the stack also creates Cognito `Admin`/`User` groups and a
+Hosted UI domain with Authorization Code OAuth enabled. The customer-operated local-user
+handoff and PKCE frontend test are documented in `docs/M1-AUTH-FRONTEND-TEST.md`; no user
+password is a CloudFormation parameter or repository value.
+
 ## Storage hardening and validation
 
 The canonical YAML template protects the metadata table with deletion protection, SSE, PITR,

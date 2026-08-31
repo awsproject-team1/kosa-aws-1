@@ -31,6 +31,14 @@ Parameters:
     Default: "{}"
     NoEcho: true
     ConstraintDescription: Customer-scoped approved repository/profile selector map for M0.
+  FrontendCallbackUrl:
+    Type: String
+    Default: http://localhost:5173
+    ConstraintDescription: Exact HTTPS production or localhost OAuth callback URL for the Assessment SPA.
+  FrontendLogoutUrl:
+    Type: String
+    Default: http://localhost:5173
+    ConstraintDescription: Exact HTTPS production or localhost logout URL for the Assessment SPA.
 
 Resources:
   MetadataTable:
@@ -353,6 +361,21 @@ Resources:
       UserPoolName: !Sub "${ProjectName}-${Environment}-users"
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+  AdminUserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Admin
+      UserPoolId: !Ref UserPool
+  StandardUserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: User
+      UserPoolId: !Ref UserPool
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "${ProjectName}-${Environment}-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
@@ -361,6 +384,12 @@ Resources:
       GenerateSecret: false
       ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
       PreventUserExistenceErrors: ENABLED
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email]
+      CallbackURLs: [!Ref FrontendCallbackUrl]
+      LogoutURLs: [!Ref FrontendLogoutUrl]
+      SupportedIdentityProviders: [COGNITO]
 
   ApiRuntimeFunction:
     Type: AWS::Lambda::Function
@@ -528,3 +557,6 @@ Outputs:
     Value: !Ref UserPool
   UserPoolClientId:
     Value: !Ref UserPoolClient
+  CognitoHostedUiDomain:
+    Description: Cognito Hosted UI domain used by the browser OAuth PKCE flow.
+    Value: !Sub "${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"

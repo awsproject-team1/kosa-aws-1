@@ -7,6 +7,8 @@ from packages.contracts.assessments import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    Finding,
+    ReadinessScore,
     ScoringMode,
 )
 from packages.contracts.deployments import (
@@ -71,6 +73,7 @@ __all__ = [
     "EvaluationStatus",
     "ExtractionWarningCode",
     "FORMAT_MEDIA_TYPES",
+    "Finding",
     "GoldenDatasetCase",
     "IaCSnapshot",
     "IngestionFailureCode",
@@ -91,6 +94,7 @@ __all__ = [
     "PolicySourceKind",
     "PolicySourceUploadRequest",
     "RemediationPatch",
+    "ReadinessScore",
     "RuleSeverity",
     "SCORE_ANCHORS",
     "ScoringMode",
