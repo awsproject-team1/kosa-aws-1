@@ -56,7 +56,10 @@
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
 - M1 A/B/C Shared: 고객 Policy Source 업로드·정규화 Contract와 지원 형식 allow-list 확정 후,
-  tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현
+  tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현.
+  초기 대상은 Markdown/XLSX/TXT/CSV/DOCX(서드파티 의존성 0)이다.
+- A 선행 결정: Lambda 서드파티 의존성 패키징 경로(Layer 또는 컨테이너). 현재 배포는 의존성 없는
+  ZIP이라 PDF Parser를 넣을 수 없고, 이 결정 전에는 PDF 지원을 시작하지 않는다 (ADR-0015)
 
 ## Blocked
 

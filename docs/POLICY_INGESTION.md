@@ -41,15 +41,25 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
 ## Format policy
 
-초기 구현 대상과 후속 대상을 Task 시작 시 확정하고 Contract Test로 고정한다.
+지원 형식은 구현 난이도가 아니라 **선행 조건**으로 나눈다. Tier 1–2가 이번 범위이고, Tier 3는
+각자 별도의 선행 결정을 통과해야 착수한다.
 
-| Capability | Initial target | Notes |
+| Tier | 형식 | 근거와 선행 조건 |
 | --- | --- | --- |
-| Plain text | UTF-8 `text/plain`, Markdown, CSV | 문자 인코딩과 delimiter 오류를 명시적으로 처리 |
-| Office | DOCX, XLSX | 문단·표·sheet locator를 안정적으로 생성 |
-| PDF | Text-based PDF | page 기반 locator; 추출 텍스트가 없으면 OCR 대상으로 분류 |
-| Korean office | HWP/HWPX | Parser와 라이선스·보안 검토 후 별도 활성화 |
-| Scanned/image documents | OCR pipeline | 초기 Parser와 분리하고 신뢰도 및 수동 검토를 요구 |
+| 1 — 검증됨 | Markdown, XLSX | 실제 Policy Source 2건이 이 형식이다. `scripts/policy_source_digest.py`가 두 형식의 추출기 원형을 서드파티 의존성 없이 이미 구현했다 |
+| 2 — 초기 대상 | UTF-8 `text/plain`, CSV, DOCX | 새 의존성이 필요 없다. DOCX는 XLSX와 같은 OOXML zip + `xml.etree` 기법을 재사용한다 |
+| 3 — 별도 트랙 | Text-layer PDF | 서드파티 라이브러리가 필요하다. **Lambda 의존성 패키징 경로(Layer 또는 컨테이너) 확정이 선행**된다 |
+| 3 — 별도 트랙 | HWP/HWPX | HWPX는 zip+XML, HWP는 OLE 복합문서다. Parser 라이선스·보안 검토 후 별도 활성화 |
+| 3 — 별도 트랙 | 스캔 PDF, 이미지 | OCR 엔진 선정과 한국어 지원 검증이 선행된다. 신뢰도 점수와 수동 검토를 요구한다 |
+
+현재 배포는 서드파티 런타임 의존성이 없는 ZIP Lambda다 (`apps/backend/requirements.txt`,
+`scripts/package-m0-lambda.sh`). Tier 1–2는 이 구조를 그대로 유지하고, Tier 3의 PDF는 이
+구조를 바꿔야 하므로 형식 지원 결정이 아니라 배포 결정에 묶인다.
+
+**PDF 범위 주의.** PDF를 지원 목록에 넣을 때는 "텍스트 레이어가 있는 PDF"만을 뜻한다. 고객은
+스캔본도 확장자만 보고 PDF로 업로드하므로, 텍스트 레이어가 없거나 추출 신뢰도가 낮은 PDF는
+지원 형식이 아니라 `REVIEW_REQUIRED`로 종료해야 한다. 한글 PDF는 폰트 CID 매핑 때문에 추출은
+성공하고 글자만 깨지는 경우가 있어, 추출 문자 수만이 아니라 한글 문자 비율도 함께 판정한다.
 
 확장자만 신뢰하지 않는다. 선언한 media type, 파일 signature로 탐지한 media type, Parser가 실제로
 지원하는 형식을 함께 검증한다. 지원 형식 목록은 Backend와 Frontend가 같은 Contract를 사용해야 한다.
@@ -111,6 +121,10 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 ## Acceptance criteria
 
 - [ ] 지원 형식 allow-list와 파일 signature 검증이 Contract와 테스트로 고정된다.
+- [ ] Tier 1–2(Markdown, XLSX, TXT/CSV, DOCX) Parser가 서드파티 런타임 의존성 없이 동작한다.
+- [ ] XLSX Parser가 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름
+      locator를 처리한다. `policy_source_digest.py`의 원형은 이 셋을 아직 다루지 않는다.
+- [ ] zip 기반 형식(XLSX, DOCX)은 압축 해제 크기 상한을 먼저 검사한 뒤 읽는다.
 - [ ] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
 - [ ] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
 - [ ] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.
@@ -120,4 +134,6 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 - [ ] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
 - [ ] 구현 PR에서 `docs/architecture/C4-CONTAINER.md`에 업로드/Parser/정규화 Artifact 경로를
       반영한다. 계획 단계인 지금은 `docs/DESIGN.md` flow만 갱신하고 C4는 의도적으로 미룬다.
+- [ ] Tier 3 착수 전 선행 조건을 통과한다. PDF는 Lambda 서드파티 의존성 패키징 경로 확정(A),
+      HWP/HWPX는 Parser 라이선스·보안 검토, 스캔/이미지는 OCR 엔진 선정과 한국어 지원 검증이다.
 
