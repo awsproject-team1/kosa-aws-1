@@ -5,6 +5,11 @@
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
+- M1 C 착수: 승인 Model Profile과 제한된 Snapshot Evidence를 사용하는 구조화 Bedrock 평가 어댑터 구현
+- M0 deployment readiness: 2단계 protected GitHub Environment 승인, expected-account fail-closed
+  검증, Python 3.12/LF-normalized 결정적 패키징, 재실행 가능한 exact SHA-256/S3 Version ID
+  Lambda artifact binding 및 customer-approved sandbox CloudTrail delivery/log-file-validation
+  절차 문서화 (실제 AWS 배포 승인 대기)
 - 고객 사내 정책 수집은 미구현: 현재 Rule Registry와 `policies-local/`은 개발 seed이며, 업로드 →
   형식 검증·파싱 → 정규화 → 사람 승인 → Profile 게시 경계는 `docs/POLICY_INGESTION.md`
   (ADR-0015) 기준으로 A/B/C 통합 구현 대기
@@ -26,6 +31,15 @@
   ADR-0013으로 확정
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
+- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
+  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
+  강제, 쓰기 표현 불가를 테스트로 고정; S3 AssumeRole code adapter 추가 (고객 Role 설정은 미연결)
+- M1 C S3 Initial Assessment 코드 경계: 승인 Region Bedrock structured evaluator, read-only S3
+  Actual Evidence, immutable plan-based Coverage, paginated 결과 조회 API와 기본 React 화면 구현
+  (고객 Account Role·Bedrock 환경 설정은 D/A deployment 단계에서 주입)
+- PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
+  추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
+  API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
 - M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
   EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool
@@ -55,13 +69,34 @@
 - M1 D: read-only AWS Resource Tool + GitHub Integration Tool 경계 완료(PR #8) →
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
+- M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
+  DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration
 - M1 A/B/C Shared: 고객 Policy Source 업로드·정규화 Contract와 지원 형식 allow-list 확정 후,
   tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현.
   지원 형식은 Markdown/Plain text/CSV/XLSX/DOCX이며 서드파티 런타임 의존성 없이 처리한다.
 
 ## Blocked
 
-- 없음
+- **M1 Exit criteria의 `Finding`과 `Readiness Score`에 담당 역할이 없다.** (제기: B, 2026-08-31)
+
+  두 산출물은 Exit criteria와 `docs/PRD.md`의 제품 흐름에 있고 저장 모델까지 정의돼 있지만,
+  생산하는 코드가 없고 M1의 A/B/C/D 역할 항목 어디에도 들어 있지 않다.
+
+  | 산출물 | 정의된 것 | 없는 것 |
+  | --- | --- | --- |
+  | `Finding` | `docs/DATABASE.md` item(`ASSESSMENT#{id}#FINDING#{finding_id}`), Job step `GENERATE_FINDINGS`, M2 소비처(`RemediationPatch.finding_id`, `POST /findings/{findingId}/remediations`) | 생성 코드, `packages/contracts`의 Schema, 조회 API, 담당 역할 |
+  | `Readiness Score` | `docs/DATABASE.md`의 Assessment item 예시(`readiness_score`), `docs/PRD.md`가 서비스의 대표 점수로 규정 | 산출 코드, 계산 정의(Score/Severity/Coverage와의 관계), 담당 역할 |
+
+  M2의 `RemediationPatch`가 `finding_id`를 필수로 요구하므로, M1이 Finding을 생산하지 않으면
+  M2 Remediation 전체가 입력을 얻지 못한다.
+
+  - Decision: 두 산출물의 담당 역할과 M1 포함 여부
+  - Owner: 미정
+  - Needed by: M1 Exit criteria 판정 전
+  - Blocks: M1 종료 판정, M2 Remediation 착수
+  - Proposed options: (1) Finding 생성·조회는 A, Readiness Score 산출은 C가 맡는다
+    (2) 둘 다 평가 산출물로 보고 C가 맡는다 (3) M1 Exit criteria에서 빼고 M2로 옮긴다
+  - Final record: 미정
 
 ## Milestones
 

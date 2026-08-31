@@ -116,8 +116,16 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
 - `AgentRuntimeRole`: Customer Workload 읽기 전용 및 필요한 App Data
 - `TerraformPlanRole`: plan에 필요한 읽기 중심 권한
 - `TerraformDeploymentRole`: 제한된 Infrastructure write
+- 고객 AWS Account의 Read-only Role AssumeRole은 customer-role 연결마다 생성한 랜덤
+  `ExternalId`를 trust policy와 요청 양쪽에서 일치시켜 confused deputy를 방지하며, 임시
+  자격증명은 만료 60초 전까지만 메모리에 재사용한다.
 - `GitHubWorkflowEventRole`: GitHub Actions OIDC에서 Plan/Apply 완료 Event만 EventBridge에
   게시하는 최소 권한
+- M0 foundation 배포는 서로 다른 두 protected GitHub Environment를 사용한다. 첫 job은 expected
+  AWS account를 OIDC action, STS caller identity, S3 expected-owner 조건으로 검증하고 Lambda ZIP을
+  commit-qualified key에 조건부 생성 또는 exact metadata/checksum으로 재사용한다. 두 번째
+  Environment에서 사람이 commit/key/SHA-256/S3 Version ID를 승인한 뒤, 배포 job이 exact version을
+  재검증하고 모든 Lambda에 고정한다.
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.
 - M0 Worker는 packaged synthetic fixture만 처리하며 ArtifactBucket 접근 권한을 갖지 않는다.
   고객 artifact 접근은 tenant-scoped runtime identity가 구현·검토된 뒤에만 허용한다

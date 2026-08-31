@@ -6,9 +6,12 @@ from pathlib import Path
 
 from apps.backend.api.jobs import AssessmentRequest, JobApiService
 from apps.backend.assessment import (
+    AssessmentEvaluationPlan,
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
+    BedrockStructuredEvaluator,
+    DynamoDbAssessmentReportStore,
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
 )
@@ -140,6 +143,49 @@ class Table:
         item = self.items.get((key["PK"], key["SK"]))
         return {} if item is None else {"Item": item}
 
+    def query(self, **kwargs: object) -> dict[str, object]:
+        values = kwargs["ExpressionAttributeValues"]
+        assert isinstance(values, dict)
+        customer = values[":customer"]
+        prefix = values[":assessment"]
+        return {
+            "Items": [
+                item
+                for (pk, sk), item in self.items.items()
+                if pk == customer and sk.startswith(prefix)
+            ]
+        }
+
+
+class BedrockClient:
+    """Deterministic M1 stand-in for the injected regional Bedrock client."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def converse(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "status": "FAIL",
+                                    "score": 20,
+                                    "rationale": "Fixture confirms public access block is disabled.",
+                                    "evidence_references": [
+                                        "terraform:aws_s3_bucket_public_access_block"
+                                    ],
+                                }
+                            )
+                        }
+                    ]
+                }
+            }
+        }
+
 
 class AssessmentWorkflowIntegrationTest(unittest.TestCase):
     def test_api_outbox_and_worker_persist_a_fixture_result(self) -> None:
@@ -184,3 +230,57 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
             ),
             table.items,
         )
+
+    def test_m1_bedrock_adapter_runs_through_the_existing_worker_with_fixture_evidence(
+        self,
+    ) -> None:
+        repository = WorkflowRepository()
+        queue = Queue()
+        service = JobApiService(
+            repository=repository,
+            assessment_scope=ApprovedScope(),
+            outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=queue),
+            job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
+        )
+        service.create_assessment(
+            Principal(
+                subject="user-001",
+                client_id="client-001",
+                customer_id="cust-001",
+                roles=frozenset({Role.USER}),
+            ),
+            AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-mvp-baseline"),
+        )
+        _, catalog = load_m0_fixture_catalog(FIXTURE_PATH)
+        snapshot = json.loads(SNAPSHOT_PATH.read_text())
+        evidence = snapshot["evidence_references"]
+        assert isinstance(evidence, list) and all(isinstance(item, str) for item in evidence)
+        client = BedrockClient()
+        table = Table()
+        report_store = DynamoDbAssessmentReportStore(table)
+        report_store.put_plan_if_absent(
+            AssessmentEvaluationPlan(
+                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=1
+            )
+        )
+
+        outcomes = AssessmentWorker(
+            work_repository=WorkRepository(snapshot),
+            context_resolver=PolicyContextResolver(catalog),
+            runner=AssessmentRunner(
+                BedrockStructuredEvaluator(
+                    client=client,
+                    perspective=EvaluationPerspective.IAC,
+                    resource_document=snapshot,
+                    evidence_references=tuple(evidence),
+                )
+            ),
+            model_profiles=InMemoryModelProfileRegistry((MODEL_PROFILE,)),
+            result_store=DynamoDbEvaluationResultStore(table),
+        ).handle(queue.tasks[0])
+        report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(outcomes[0].status, EvaluationStatus.FAIL)
+        self.assertEqual(client.calls[0]["modelId"], MODEL_PROFILE.model_id)
+        self.assertEqual(report.coverage.percentage, 100)

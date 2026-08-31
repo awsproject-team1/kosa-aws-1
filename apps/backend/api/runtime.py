@@ -7,8 +7,10 @@ import os
 import uuid
 from collections.abc import Mapping
 
+from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
+from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.jobs import AssessmentScopeDenied, OutboxDispatcher, SqsWorkflowDispatcher
 from apps.backend.repositories import DynamoDbAssessmentWorkflowRepository
@@ -67,7 +69,11 @@ def _http_handler() -> JobHttpHandler:
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
     )
-    return JobHttpHandler(service)
+    reports = DynamoDbAssessmentReportStore(_metadata_table())
+    return JobHttpHandler(
+        service,
+        assessment_reports=AssessmentReportApiService(jobs=repository, reports=reports),
+    )
 
 
 def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWorkflowDispatcher]:
@@ -86,6 +92,15 @@ def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWor
         ),
         SqsWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
     )
+
+
+def _metadata_table() -> object:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    return boto3.resource("dynamodb").Table(table_name)
 
 
 def _selector_pairs(value: object) -> frozenset[tuple[str, str]]:

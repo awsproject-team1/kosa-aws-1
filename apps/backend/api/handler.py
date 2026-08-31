@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.jobs import (
     AssessmentRequest,
     JobApiService,
@@ -17,10 +18,17 @@ from packages.contracts import ApiErrorResponse
 class JobHttpHandler:
     """Translate the two M0 Job routes to a typed, injected application service."""
 
-    def __init__(self, service: JobApiService) -> None:
+    def __init__(
+        self, service: JobApiService, assessment_reports: AssessmentReportApiService | None = None
+    ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
+        if assessment_reports is not None and not isinstance(
+            assessment_reports, AssessmentReportApiService
+        ):
+            raise TypeError("assessment_reports must be an AssessmentReportApiService or None")
         self._service = service
+        self._assessment_reports = assessment_reports
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -39,6 +47,18 @@ class JobHttpHandler:
                 if not job_id or "/" in job_id:
                     raise JobNotFoundError("job not found")
                 return _response(200, self._service.get_job(principal, job_id).to_dict())
+            if method == "GET" and path.startswith("/assessments/"):
+                assessment_id = path.removeprefix("/assessments/")
+                if not assessment_id or "/" in assessment_id or self._assessment_reports is None:
+                    raise JobNotFoundError("assessment not found")
+                limit, cursor = _report_page_request(event.get("queryStringParameters"))
+                try:
+                    report = self._assessment_reports.get_assessment(
+                        principal, assessment_id, limit=limit, cursor=cursor
+                    )
+                except ValueError as error:
+                    raise RequestValidationError("assessment report query is invalid") from error
+                return _response(200, report.to_dict())
             raise JobNotFoundError("route not found")
         except InvalidIdentityClaims as error:
             return _public_error(error)
@@ -77,6 +97,24 @@ def _assessment_request(raw_body: object) -> AssessmentRequest:
         repository_id=_non_empty_string(body["repository_id"], "repository_id"),
         policy_profile_id=_non_empty_string(body["policy_profile_id"], "policy_profile_id"),
     )
+
+
+def _report_page_request(raw_query: object) -> tuple[int, str | None]:
+    if raw_query is None:
+        return 50, None
+    query = _mapping(raw_query)
+    if set(query) - {"limit", "cursor"}:
+        raise RequestValidationError("assessment report query is invalid")
+    limit_raw = query.get("limit", "50")
+    if not isinstance(limit_raw, str) or not limit_raw.isdigit():
+        raise RequestValidationError("assessment report limit is invalid")
+    limit = int(limit_raw)
+    if not 1 <= limit <= 100:
+        raise RequestValidationError("assessment report limit is invalid")
+    cursor = query.get("cursor")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor):
+        raise RequestValidationError("assessment report cursor is invalid")
+    return limit, cursor
 
 
 def _mapping(value: object) -> Mapping[str, object]:

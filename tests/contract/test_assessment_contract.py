@@ -3,6 +3,7 @@
 import unittest
 
 from packages.contracts import (
+    AssessmentCoverage,
     AssessmentPhase,
     EvaluationPerspective,
     EvaluationResult,
@@ -12,6 +13,14 @@ from packages.contracts import (
 
 
 class AssessmentContractTest(unittest.TestCase):
+    def test_coverage_serializes_the_planned_and_completed_evaluation_counts(self) -> None:
+        coverage = AssessmentCoverage(planned_evaluations=4, completed_evaluations=3)
+
+        self.assertEqual(
+            coverage.to_dict(),
+            {"planned_evaluations": 4, "completed_evaluations": 3, "percentage": 75},
+        )
+
     def test_v3_assessment_phase_vocabulary_is_used(self) -> None:
         self.assertEqual(
             [phase.value for phase in AssessmentPhase],

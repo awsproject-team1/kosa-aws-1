@@ -22,6 +22,10 @@ Parameters:
     Type: String
     MinLength: 1
     ConstraintDescription: Object key for the packaged Python ZIP.
+  LambdaCodeS3ObjectVersion:
+    Type: String
+    MinLength: 1
+    ConstraintDescription: Immutable S3 Version ID returned by the approved Lambda ZIP upload.
   AssessmentScopeJson:
     Type: String
     Default: "{}"
@@ -369,6 +373,7 @@ Resources:
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
@@ -386,6 +391,7 @@ Resources:
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
@@ -402,6 +408,7 @@ Resources:
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
@@ -465,6 +472,14 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "GET /jobs/{jobId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetAssessmentReportRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /assessments/{assessmentId}"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
