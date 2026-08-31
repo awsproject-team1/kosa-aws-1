@@ -140,6 +140,10 @@ CloudWatch Metrics/Logs, CloudTrail, X-Ray 또는 OpenTelemetry를 사용한다.
 
 Model, Prompt, Rubric, Rule, Policy Document, Context Retrieval 또는 Tool이 바뀌면 Golden Dataset과 반복 평가를 실행한다. 목표는 PASS/FAIL 정확도, Evidence Reference 정확도, 동일 Case 판정 일치율 각각 90% 이상과 Score 반복 편차 ±10점 이내다.
 
+2026-08-31 Bedrock 전체 모델 선별 및 역할별 반복 호출에 따른 현재 추천과 재현 방법은
+`docs/evaluations/BEDROCK_MODEL_SELECTION.md`에 기록한다. 모델 배정은 고정 불변값이 아니며
+Golden Case 확장 또는 위 품질 입력 변경 시 같은 절차로 재평가한다.
+
 ## Development ownership and repository boundaries
 
 | Role | Primary responsibility | Main areas |
