@@ -27,11 +27,13 @@ class Principal:
 
     subject: str
     client_id: str
+    customer_id: str
     roles: frozenset[Role]
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.subject, "subject")
         _require_non_empty_string(self.client_id, "client_id")
+        _require_non_empty_string(self.customer_id, "customer_id")
         if not isinstance(self.roles, frozenset):
             raise TypeError("roles must be a frozenset of Role values")
         if not self.roles:
@@ -56,9 +58,10 @@ class Principal:
 
         subject = _required_non_empty_claim(claims, "sub")
         client_id = _required_non_empty_claim(claims, "client_id")
+        customer_id = _required_non_empty_claim(claims, "custom:customer_id")
         roles = _roles_from_groups(_required_claim(claims, "cognito:groups"))
 
-        return cls(subject=subject, client_id=client_id, roles=roles)
+        return cls(subject=subject, client_id=client_id, customer_id=customer_id, roles=roles)
 
 
 def _required_claim(claims: Mapping[str, object], name: str) -> object:

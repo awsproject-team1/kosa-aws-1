@@ -1,0 +1,5 @@
+{
+  "job_id": "job-assessment-001",
+  "expected_revision": 0,
+  "command": "ASSESS_RESOURCE"
+}

@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
-from packages.contracts.assessments import AssessmentPhase, EvaluationStatus, ScoringMode
+from packages.contracts.assessments import (
+    AssessmentPhase,
+    EvaluationPerspective,
+    EvaluationStatus,
+    ScoringMode,
+)
 
 
 class PolicySourceKind(StrEnum):
@@ -133,6 +138,7 @@ class PolicyProfile:
 class GoldenDatasetCase:
     case_id: str
     phase: AssessmentPhase
+    perspective: EvaluationPerspective
     rubric_version: str
     scoring_mode: ScoringMode
     resource_snapshot_artifact_id: str
@@ -146,6 +152,8 @@ class GoldenDatasetCase:
             require_non_empty_string(getattr(self, name), name)
         if not isinstance(self.phase, AssessmentPhase):
             raise TypeError("phase must be an AssessmentPhase")
+        if not isinstance(self.perspective, EvaluationPerspective):
+            raise TypeError("perspective must be an EvaluationPerspective")
         if not isinstance(self.scoring_mode, ScoringMode):
             raise TypeError("scoring_mode must be a ScoringMode")
         if not isinstance(self.expected_status, EvaluationStatus):
@@ -165,6 +173,7 @@ class GoldenDatasetCase:
         return {
             "case_id": self.case_id,
             "phase": self.phase.value,
+            "perspective": self.perspective.value,
             "rubric_version": self.rubric_version,
             "scoring_mode": self.scoring_mode.value,
             "resource_snapshot_artifact_id": self.resource_snapshot_artifact_id,

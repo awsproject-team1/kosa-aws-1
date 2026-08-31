@@ -1,6 +1,8 @@
 """Contract tests for public workflow Job polling."""
 
+import json
 import unittest
+from pathlib import Path
 
 from packages.contracts import (
     ApiError,
@@ -8,7 +10,11 @@ from packages.contracts import (
     JobCurrentStep,
     JobResponse,
     JobStatus,
+    WorkflowCommand,
+    WorkflowTask,
 )
+
+WORKFLOW_TASK_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "workflow_task.json"
 
 
 class JobContractTest(unittest.TestCase):
@@ -73,6 +79,23 @@ class JobContractTest(unittest.TestCase):
                 },
             },
         )
+
+    def test_workflow_task_is_minimal_and_revision_bound(self) -> None:
+        fixture = json.loads(WORKFLOW_TASK_PATH.read_text())
+        task = WorkflowTask(
+            job_id=fixture["job_id"],
+            expected_revision=fixture["expected_revision"],
+            command=WorkflowCommand(fixture["command"]),
+        )
+
+        self.assertEqual(task.to_dict(), fixture)
+
+        with self.assertRaisesRegex(ValueError, "zero or greater"):
+            WorkflowTask(
+                job_id="job-001",
+                expected_revision=-1,
+                command=WorkflowCommand.ASSESS_RESOURCE,
+            )
 
     def test_opaque_identifiers_and_job_type_must_be_non_empty(self) -> None:
         with self.assertRaisesRegex(ValueError, "job_type must be a non-empty string"):

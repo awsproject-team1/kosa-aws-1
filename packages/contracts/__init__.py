@@ -3,6 +3,7 @@
 from packages.contracts.assessments import (
     SCORE_ANCHORS,
     AssessmentPhase,
+    EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     ScoringMode,
@@ -18,7 +19,13 @@ from packages.contracts.deployments import (
     TerraformPlan,
 )
 from packages.contracts.errors import ApiError, ApiErrorResponse
-from packages.contracts.jobs import JobCurrentStep, JobResponse, JobStatus
+from packages.contracts.jobs import (
+    JobCurrentStep,
+    JobResponse,
+    JobStatus,
+    WorkflowCommand,
+    WorkflowTask,
+)
 from packages.contracts.policy import (
     GoldenDatasetCase,
     PolicyProfile,
@@ -38,6 +45,7 @@ __all__ = [
     "AwsResourceOperation",
     "AwsResourceQuery",
     "DeploymentApproval",
+    "EvaluationPerspective",
     "EvaluationResult",
     "EvaluationStatus",
     "GoldenDatasetCase",
@@ -55,4 +63,6 @@ __all__ = [
     "ScoringMode",
     "SourceReference",
     "TerraformPlan",
+    "WorkflowCommand",
+    "WorkflowTask",
 ]
