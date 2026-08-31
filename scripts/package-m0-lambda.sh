@@ -11,9 +11,18 @@ mkdir -p "${output_directory}"
 output_path=$(cd "${output_directory}" && pwd)/${output_name}
 rm -f "${output_path}"
 
+if command -v python3 >/dev/null 2>&1; then
+  python_command=python3
+elif command -v python >/dev/null 2>&1; then
+  python_command=python
+else
+  echo "Python 3 is required to package the M0 Lambda artifact" >&2
+  exit 1
+fi
+
 (
   cd "${repository_root}"
-  python3 - "${output_path}" <<'PY'
+  "${python_command}" - "${output_path}" <<'PY'
 from pathlib import Path
 import sys
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
@@ -21,6 +30,14 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 output_path = Path(sys.argv[1])
 repository_root = Path.cwd()
 source_roots = (Path("apps"), Path("packages"), Path("fixtures"))
+required_paths = {
+    "apps/backend/api/runtime.py",
+    "apps/backend/assessment/runtime.py",
+    "packages/contracts/__init__.py",
+    "fixtures/m0/policy_profile.json",
+    "fixtures/m0/assessment_model_profile.json",
+    "fixtures/m0/s3_resource_snapshot.json",
+}
 source_files = sorted(
     path
     for source_root in source_roots
@@ -38,15 +55,12 @@ with ZipFile(output_path, "w", compression=ZIP_STORED) as archive:
         entry.create_system = 3
         entry.external_attr = 0o100644 << 16
         archive.writestr(entry, (repository_root / source_path).read_bytes())
+
+with ZipFile(output_path) as archive:
+    missing_paths = sorted(required_paths.difference(archive.namelist()))
+if missing_paths:
+    raise RuntimeError(
+        "Lambda package is missing required entries: " + ", ".join(missing_paths)
+    )
 PY
 )
-
-for required_path in \
-  apps/backend/api/runtime.py \
-  apps/backend/assessment/runtime.py \
-  packages/contracts/__init__.py \
-  fixtures/m0/policy_profile.json \
-  fixtures/m0/assessment_model_profile.json \
-  fixtures/m0/s3_resource_snapshot.json; do
-  unzip -Z1 "${output_path}" | grep --fixed-strings --quiet -- "${required_path}"
-done

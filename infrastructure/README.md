@@ -21,9 +21,11 @@ sweeper Lambda, and Assessment SQS Worker Lambda. The worker is deliberately res
 packaged synthetic S3 Fixture in M0. The HTTP API uses its `$default` stage with auto deployment,
 and the User Pool is retained on stack deletion or replacement. `LambdaCodeS3Bucket`,
 `LambdaCodeS3Key`, and `LambdaCodeS3ObjectVersion` must identify the exact versioned ZIP built by
-`scripts/package-m0-lambda.sh`; the script writes sorted entries with fixed metadata for a
-deterministic hash and verifies that application imports and the required `fixtures/m0/` files are
-present. `.github/workflows/deploy-m0-foundation.yml` is the approval-gated
+`scripts/package-m0-lambda.sh`; the package-validation and deployment workflows pin Python 3.12,
+Git attributes normalize text files under `apps/`, `packages/`, and `fixtures/` to LF, and the
+script writes sorted entries with fixed metadata for a deterministic hash. It verifies application
+imports and the required `fixtures/m0/` files inside the same Python process without an early-exit
+shell pipeline. `.github/workflows/deploy-m0-foundation.yml` is the approval-gated
 manual GitHub Actions OIDC path. Its preparation job validates the expected AWS account against the
 role ARN, STS identity, and artifact-bucket owner; computes the ZIP SHA-256; and conditionally creates
 or verifies the matching commit-qualified object version. A second, distinct protected Environment
