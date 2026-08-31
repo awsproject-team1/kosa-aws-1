@@ -3,6 +3,14 @@
 from apps.backend.policy.catalog import InMemoryPolicyCatalog, load_m0_fixture_catalog
 from apps.backend.policy.context import PolicyContext, PolicyContextResolver, PolicyNotFoundError
 from apps.backend.policy.dynamodb_catalog import DynamoDbPolicyCatalog
+from apps.backend.policy.ingestion import (
+    DocumentFormatError,
+    DocumentParseError,
+    NormalizationOutcome,
+    UploadedPolicyOriginal,
+    normalize_upload,
+    source_reference_for,
+)
 from apps.backend.policy.registry import (
     ControlMapping,
     ControlRuleCoverage,
@@ -14,13 +22,19 @@ from apps.backend.policy.registry import (
 __all__ = [
     "ControlMapping",
     "ControlRuleCoverage",
+    "DocumentFormatError",
+    "DocumentParseError",
     "DynamoDbPolicyCatalog",
     "InMemoryPolicyCatalog",
+    "NormalizationOutcome",
     "PolicyContext",
     "PolicyContextResolver",
     "PolicyNotFoundError",
     "PolicyRegistry",
     "PolicyRegistryError",
+    "UploadedPolicyOriginal",
     "load_m0_fixture_catalog",
     "load_rule_registry",
+    "normalize_upload",
+    "source_reference_for",
 ]
