@@ -7,6 +7,7 @@ from agent.runtime.aws_resource_tool import (
     AwsResourceToolError,
     AwsResourceView,
     require_read_operation,
+    require_scope,
 )
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
 
@@ -18,4 +19,5 @@ __all__ = [
     "AwsResourceView",
     "MockAwsResourceTool",
     "require_read_operation",
+    "require_scope",
 ]

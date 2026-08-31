@@ -10,7 +10,7 @@ and callers must not delegate that scope to policy or AI input.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
 
@@ -47,19 +47,21 @@ class AwsResourceView:
                 raise ValueError(f"{name} must be a non-empty string")
         if not isinstance(self.attributes, Mapping):
             raise TypeError("attributes must be a mapping")
-        # Defensively copy then wrap read-only so the promised immutability holds:
-        # a frozen field still aliases a caller's dict and allows item mutation.
-        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
+        # Recursively freeze so the promised immutability holds at every depth:
+        # a top-level MappingProxyType still lets nested dict/list values mutate,
+        # which would leak back into this view and later query results.
+        object.__setattr__(self, "attributes", _deep_freeze(self.attributes))
 
     def to_dict(self) -> dict[str, object]:
         return {
             "aws_account_id": self.aws_account_id,
             "resource_type": self.resource_type,
             "resource_id": self.resource_id,
-            "attributes": dict(self.attributes),
+            "attributes": _thaw(self.attributes),
         }
 
 
+@runtime_checkable
 class AwsResourceTool(Protocol):
     """Read-only operations required to inspect Customer AWS Actual state."""
 
@@ -84,4 +86,47 @@ def require_read_operation(query: object, expected: AwsResourceOperation) -> Aws
         raise AwsResourceToolError(
             f"operation must be {expected.value}, got {query.operation.value}"
         )
+    # LIST_RESOURCES targets a resource_type, not a single resource. Reject a
+    # stray resource_id rather than silently ignoring it.
+    if expected is AwsResourceOperation.LIST_RESOURCES and query.resource_id is not None:
+        raise AwsResourceToolError("LIST_RESOURCES must not carry a resource_id")
     return query
+
+
+def require_scope(
+    query: AwsResourceQuery, *, customer_id: str, aws_account_id: str
+) -> AwsResourceQuery:
+    """Require a query to stay within one approved (customer, account) scope.
+
+    ADR-0007 defines the boundary along two axes, read-only and scope. This
+    shared guard enforces the scope axis so every adapter (mock or real SDK)
+    applies the same check instead of relying on per-adapter convention.
+    """
+    if not isinstance(query, AwsResourceQuery):
+        raise TypeError("query must be an AwsResourceQuery")
+    if query.customer_id != customer_id or query.aws_account_id != aws_account_id:
+        raise AwsResourceScopeError("query customer_id/aws_account_id is outside the tool scope")
+    return query
+
+
+def _deep_freeze(value: object) -> object:
+    """Return a recursively read-only copy of a mapping/sequence value tree."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    # Treat non-string sequences as tuples; str/bytes are already immutable.
+    if isinstance(value, (str, bytes)):
+        return value
+    if isinstance(value, Sequence):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: object) -> object:
+    """Return a plain, mutable copy of a frozen value tree for serialization."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (str, bytes)):
+        return value
+    if isinstance(value, Sequence):
+        return [_thaw(item) for item in value]
+    return value

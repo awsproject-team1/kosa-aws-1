@@ -5,10 +5,12 @@ import unittest
 from agent.runtime import (
     AwsResourceNotFoundError,
     AwsResourceScopeError,
+    AwsResourceTool,
     AwsResourceToolError,
     AwsResourceView,
     MockAwsResourceTool,
     require_read_operation,
+    require_scope,
 )
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
 
@@ -186,6 +188,115 @@ class AwsResourceToolTest(unittest.TestCase):
                     )
                 ],
             )
+
+    def test_resource_view_freezes_nested_mapping(self) -> None:
+        source = {"policy": {"public": True}, "tags": ["a", "b"]}
+        view = AwsResourceView(
+            aws_account_id=ACCOUNT_ID,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+            attributes=source,
+        )
+
+        # Mutating the nested source must not leak into the frozen view.
+        source["policy"]["public"] = False
+        source["tags"].append("c")
+
+        self.assertEqual(view.attributes["policy"]["public"], True)
+        self.assertEqual(view.attributes["tags"], ("a", "b"))
+
+    def test_resource_view_rejects_nested_item_mutation(self) -> None:
+        view = AwsResourceView(
+            aws_account_id=ACCOUNT_ID,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+            attributes={"policy": {"public": True}},
+        )
+
+        with self.assertRaises(TypeError):
+            view.attributes["policy"]["public"] = False  # type: ignore[index]
+
+    def test_to_dict_returns_a_mutable_nested_copy(self) -> None:
+        view = AwsResourceView(
+            aws_account_id=ACCOUNT_ID,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+            attributes={"policy": {"public": True}, "tags": ["a"]},
+        )
+
+        data = view.to_dict()
+        # Serializable plain types, and mutating the copy must not affect the view.
+        data["attributes"]["policy"]["public"] = False
+        data["attributes"]["tags"].append("b")
+
+        self.assertIsInstance(data["attributes"], dict)
+        self.assertIsInstance(data["attributes"]["policy"], dict)
+        self.assertIsInstance(data["attributes"]["tags"], list)
+        self.assertEqual(view.attributes["policy"]["public"], True)
+        self.assertEqual(view.attributes["tags"], ("a",))
+
+    def test_list_query_rejects_a_stray_resource_id(self) -> None:
+        stray = AwsResourceQuery(
+            customer_id=CUSTOMER_ID,
+            aws_account_id=ACCOUNT_ID,
+            operation=AwsResourceOperation.LIST_RESOURCES,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+        )
+
+        with self.assertRaisesRegex(AwsResourceToolError, "must not carry a resource_id"):
+            require_read_operation(stray, AwsResourceOperation.LIST_RESOURCES)
+
+    def test_list_resources_rejects_a_stray_resource_id_through_the_tool(self) -> None:
+        tool = build_tool()
+        stray = AwsResourceQuery(
+            customer_id=CUSTOMER_ID,
+            aws_account_id=ACCOUNT_ID,
+            operation=AwsResourceOperation.LIST_RESOURCES,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+        )
+
+        with self.assertRaises(AwsResourceToolError):
+            tool.list_resources(stray)
+
+    def test_tool_rejects_duplicate_resource_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate resource"):
+            MockAwsResourceTool(
+                customer_id=CUSTOMER_ID,
+                aws_account_id=ACCOUNT_ID,
+                resources=[
+                    AwsResourceView(
+                        aws_account_id=ACCOUNT_ID,
+                        resource_type="AWS::S3::Bucket",
+                        resource_id="logs-bucket",
+                        attributes={"public_access_block": True},
+                    ),
+                    AwsResourceView(
+                        aws_account_id=ACCOUNT_ID,
+                        resource_type="AWS::S3::Bucket",
+                        resource_id="logs-bucket",
+                        attributes={"public_access_block": False},
+                    ),
+                ],
+            )
+
+    def test_mock_satisfies_the_tool_port(self) -> None:
+        tool = build_tool()
+
+        self.assertIsInstance(tool, AwsResourceTool)
+
+    def test_require_scope_rejects_out_of_scope_query(self) -> None:
+        other = AwsResourceQuery(
+            customer_id="cust-999",
+            aws_account_id=ACCOUNT_ID,
+            operation=AwsResourceOperation.READ_RESOURCE,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+        )
+
+        with self.assertRaises(AwsResourceScopeError):
+            require_scope(other, customer_id=CUSTOMER_ID, aws_account_id=ACCOUNT_ID)
 
 
 if __name__ == "__main__":

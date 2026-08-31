@@ -10,9 +10,9 @@ from collections.abc import Iterable, Sequence
 
 from agent.runtime.aws_resource_tool import (
     AwsResourceNotFoundError,
-    AwsResourceScopeError,
     AwsResourceView,
     require_read_operation,
+    require_scope,
 )
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
 
@@ -37,7 +37,12 @@ class MockAwsResourceTool:
                 raise TypeError("resources must contain AwsResourceView items")
             if view.aws_account_id != aws_account_id:
                 raise ValueError("resource aws_account_id must match tool scope")
-            self._by_key[(view.resource_type, view.resource_id)] = view
+            key = (view.resource_type, view.resource_id)
+            if key in self._by_key:
+                raise ValueError(
+                    f"duplicate resource {view.resource_id!r} of type {view.resource_type!r}"
+                )
+            self._by_key[key] = view
 
     def read_resource(self, query: AwsResourceQuery) -> AwsResourceView:
         """Return one resource for a READ_RESOURCE query within tool scope."""
@@ -62,10 +67,11 @@ class MockAwsResourceTool:
         )
 
     def _require_scope(self, query: AwsResourceQuery) -> None:
-        if query.customer_id != self._customer_id or query.aws_account_id != self._aws_account_id:
-            raise AwsResourceScopeError(
-                "query customer_id/aws_account_id is outside the tool scope"
-            )
+        require_scope(
+            query,
+            customer_id=self._customer_id,
+            aws_account_id=self._aws_account_id,
+        )
 
 
 def _require_non_empty_string(value: object, field_name: str) -> None:
