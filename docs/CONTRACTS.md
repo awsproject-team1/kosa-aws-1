@@ -126,19 +126,35 @@ Assessment/Work 레코드에 이 version을 영속화하는 것은 Backend(A)의
 `PolicyContext.allows_evidence()`가 이 규칙을 판정하고 `AssessmentRunner`가 평가기 결과마다
 강제한다. version 없는 구 형식(`{source_id}#{locator}`)과 Context 밖 정책 근거는 거부한다.
 
-### Planned customer Policy Source ingestion boundary
+### Customer Policy Source ingestion boundary
 
-현재 `PolicySource`는 승인 완료된 Source의 최소 평가 Contract이며 업로드/파싱 상태 Contract가
-아니다. `policies-local/`과 커밋된 Rule Registry도 개발 seed일 뿐 고객 업로드 구현이 아니다.
-고객 정책 수집 구현 전 `packages/contracts/`에 원본 파일명, 선언/탐지 media type, byte size,
-원본 Artifact/hash, parser ID/version, 정규화 Artifact/hash, 처리 상태, 경고/실패 코드를 표현하는
-별도 ingestion Contract를 추가한다. Source 종류(`INTERNAL_POLICY`, `ISMS_P`)와 파일 형식은 서로
-다른 개념으로 유지한다.
+`PolicySource`는 승인 완료된 Source의 최소 평가 Contract이며 업로드/파싱 상태 Contract가
+아니다. 수집 경계는 `packages/contracts/policy_ingestion.py`가 따로 정의한다. Source
+종류(`INTERNAL_POLICY`, `ISMS_P`)와 파일 형식(`PolicySourceFormat`)은 서로 다른 개념이다.
 
-형식별 Parser는 `docs/POLICY_INGESTION.md`의 공통 Normalized Policy Document와 stable locator를
-생성해야 한다. `READY` 및 사람 승인 상태의 정확한 Source version에서 생성된 Rule만 Profile이
-참조할 수 있다. 이 Contract와 통합 테스트가 없으면 서비스는 임의 형식의 고객 문서를 읽거나
-평가할 수 있다고 간주하지 않는다. 결정 근거는 ADR-0015다.
+| 값 | 역할 |
+| --- | --- |
+| `PolicySourceFormat` / `FORMAT_MEDIA_TYPES` | 지원 형식 allow-list의 정본. Backend와 Frontend가 같은 목록을 쓴다 |
+| `PolicySourceUploadRequest` | Client가 선언할 수 있는 전부 (파일명, media type, byte size, 제목) |
+| `IngestionStatus` | `UPLOADED`→`VALIDATING`→`PARSING`→`REVIEW_REQUIRED`/`READY`/`FAILED`/`SUPERSEDED` |
+| `IngestionFailureCode` / `ExtractionWarningCode` | 실패·경고를 자유 문장이 아닌 열거값으로 표현 |
+| `NormalizedDocumentUnit` | unit별 stable `locator`, 정규화 text hash, 원본 위치 |
+| `NormalizedPolicyDocument` | 원본 identity, 파일 metadata, parser ID/version, 정규화 Artifact/hash, 처리 상태 |
+
+**이 Contract는 원문도 추출 텍스트도 담지 않는다.** unit은 hash만 갖고 텍스트는 정규화
+Artifact 바이트로만 존재한다. Queue payload와 DynamoDB item이 이 Contract를 그대로 나르므로,
+"원문이 로그·payload에 남지 않는다"를 규율이 아니라 구조로 강제한다.
+
+구현은 `apps/backend/policy/ingestion/`이다. `normalize_upload()`가 (선언 media type, 파일
+signature, Parser 지원 형식) 3자를 대조하고, Markdown/Plain text/CSV/XLSX/DOCX Parser가 같은
+`NormalizedPolicyDocument`를 만든다. Parser는 표준 라이브러리만 쓴다 —
+`apps/backend/requirements.txt`가 비어 있는 ZIP Lambda 배포 구조가 형식 목록의 제약이다.
+실패는 예외가 아니라 `FAILED` 상태와 failure code로 돌아온다.
+
+`READY` 상태이면서 사람이 승인한 정확한 Source version에서 나온 Rule만 Profile이 참조할 수 있다
+(`APPROVABLE_STATUSES`). `source_reference_for()`가 정규화 unit에서 `SourceReference`를 직접
+만들어 locator와 `content_sha256`이 같은 판본에서 나오도록 보장한다. 승인·Profile publication
+경계와 업로드 세션/저장은 아직 구현되지 않았다 (각각 B, A). 결정 근거는 ADR-0015다.
 
 ## M1 rule registry
 

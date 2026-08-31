@@ -1,9 +1,12 @@
 # Customer Policy Ingestion
 
-> Status: Planned — current M1 Rule Registry is a development seed, not a customer upload path.
+> Status: Partially implemented — 형식 allow-list, 정규화 Schema, 5개 형식 Parser는
+> `apps/backend/policy/ingestion/`에 구현됐다 (B). 업로드 세션·저장·상태 write(A), Rule 후보
+> 검토·승인과 Profile publication(B, 후속), AI 추출(C)은 미구현이다.
 >
 > Delivery gate: this boundary must be implemented and integration-tested before the service claims
-> that a customer can evaluate against an uploaded internal policy.
+> that a customer can evaluate against an uploaded internal policy. 현재 `policies-local/`과
+> `fixtures/rules/`는 여전히 개발 seed이며 고객 업로드 경로가 아니다.
 >
 > Decision record: `docs/decisions/ADR-0015-customer-policy-ingestion.md`
 
@@ -182,17 +185,19 @@ Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. P
 
 ## Acceptance criteria
 
-- [ ] 지원 형식 allow-list와 파일 signature 검증이 Contract와 테스트로 고정된다.
-- [ ] 지원 형식 Parser가 서드파티 런타임 의존성 없이 동작한다.
-- [ ] XLSX Parser가 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름
+- [x] 지원 형식 allow-list와 파일 signature 검증이 Contract와 테스트로 고정된다.
+- [x] 지원 형식 Parser가 서드파티 런타임 의존성 없이 동작한다.
+- [x] XLSX Parser가 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름
       locator를 처리한다. `policy_source_digest.py`의 원형은 이 셋을 아직 다루지 않는다.
-- [ ] zip 기반 형식(XLSX, DOCX)은 압축 해제 크기 상한을 먼저 검사한 뒤 읽는다.
-- [ ] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
+- [x] zip 기반 형식(XLSX, DOCX)은 압축 해제 크기 상한을 먼저 검사한 뒤 읽는다.
+- [x] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
 - [ ] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
-- [ ] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.
+- [x] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.
 - [ ] Source version, Parser version, locator, 원문/정규화 hash가 Evidence까지 추적된다.
 - [ ] 사람 승인 전 Rule은 Profile 및 Assessment Context에 들어가지 않는다.
 - [ ] 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트가 통과한다.
-- [ ] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
+- [x] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
+      (Contract가 텍스트를 담을 수 없고, `tests/security/test_policy_ingestion_boundary.py`가
+      직렬화·실패 코드·오류 메시지에 원문이 없음을 고정한다.)
 - [ ] 구현 PR에서 `docs/architecture/C4-CONTAINER.md`에 업로드/Parser/정규화 Artifact 경로를
       반영한다. 계획 단계인 지금은 `docs/DESIGN.md` flow만 갱신하고 C4는 의도적으로 미룬다.
