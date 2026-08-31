@@ -30,6 +30,8 @@
   EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool
   retention, CI-verified Lambda ZIP과 승인된 GitHub Actions OIDC deployment path 추가
+- PR #7 latest deployment review 반영: named IAM CloudFormation capability, pinned AWS OIDC
+  credentials action, template-change `cfn-lint` CI를 추가
 - M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
