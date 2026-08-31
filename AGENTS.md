@@ -12,7 +12,8 @@
 - 정책 원문은 저장소에 커밋하지 않는다. 원문은 로컬 `policies-local/`에 두고, 저장소에는 Rule 정의와 `SourceReference` locator만 둔다. 이 저장소는 공개다.
 - `policies-local/`과 `fixtures/rules/`는 개발 seed일 뿐 운영용 고객 정책 입력이 아니다. 사용자
   정책은 `docs/POLICY_INGESTION.md`의 고객별 업로드 → 검증 → 형식별 파싱 → 정규화 → 사람 승인
-  경계를 통과해야 하며, 지원이 검증되지 않은 문서 형식을 임의로 읽을 수 있다고 가정하지 않는다.
+  경계를 통과해야 한다. 지원 문서 형식은 그 문서의 allow-list가 전부이며, 목록에 없는 형식을
+  처리하는 코드를 추가하지 않는다. 형식을 늘리려면 문서와 Contract를 같은 변경에서 갱신한다.
 - AWS Resource Tool은 읽기 전용이다. 실제 인프라 변경은 승인된 `commit_sha`와 `plan_hash`를 검증한 뒤 Human Approval 및 GitHub Actions를 통해서만 수행한다.
 - AI 평가는 기본적으로 0–100 연속 점수를 사용한다. Golden Dataset 반복 평가에서 편차가 ±10점을 지속 초과할 때만 Anchor 정책을 적용한다.
 

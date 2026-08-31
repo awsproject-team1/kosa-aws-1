@@ -16,8 +16,8 @@
 ## Important boundary
 
 파일을 S3에 바이트로 저장하는 것과 그 내용을 정책으로 해석하는 것은 서로 다른 기능이다.
-서비스는 "모든 형식을 읽는다"고 가정하지 않는다. 지원 형식은 버전 관리되는 allow-list와 Parser
-Capability로 명시하고, 지원하지 않는 형식·암호화 문서·손상 문서·텍스트를 추출할 수 없는 문서는
+서비스는 "모든 형식을 읽는다"고 가정하지 않는다. 지원 형식은 아래 Format policy의 allow-list가
+전부이며, 목록에 없는 형식·암호화 문서·손상 문서·텍스트를 추출할 수 없는 문서는
 `REVIEW_REQUIRED` 또는 `FAILED`로 처리한다. 원본 업로드 성공만으로 Policy Source를 승인하거나
 Assessment에 사용해서는 안 된다.
 
@@ -41,28 +41,31 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
 ## Format policy
 
-지원 형식은 구현 난이도가 아니라 **선행 조건**으로 나눈다. Tier 1–2가 이번 범위이고, Tier 3는
-각자 별도의 선행 결정을 통과해야 착수한다.
+지원 형식은 아래 allow-list가 전부다. 목록에 없는 형식은 업로드가 성공하더라도 지원하지 않으며,
+`REVIEW_REQUIRED` 또는 `FAILED`로 종료한다. 목록에 없는 형식을 처리하는 코드를 임의로 추가하지
+않는다.
 
-| Tier | 형식 | 근거와 선행 조건 |
+| 형식 | Media type | 비고 |
 | --- | --- | --- |
-| 1 — 검증됨 | Markdown, XLSX | 실제 Policy Source 2건이 이 형식이다. `scripts/policy_source_digest.py`가 두 형식의 추출기 원형을 서드파티 의존성 없이 이미 구현했다 |
-| 2 — 초기 대상 | UTF-8 `text/plain`, CSV, DOCX | 새 의존성이 필요 없다. DOCX는 XLSX와 같은 OOXML zip + `xml.etree` 기법을 재사용한다 |
-| 3 — 별도 트랙 | Text-layer PDF | 서드파티 라이브러리가 필요하다. **Lambda 의존성 패키징 경로(Layer 또는 컨테이너) 확정이 선행**된다 |
-| 3 — 별도 트랙 | HWP/HWPX | HWPX는 zip+XML, HWP는 OLE 복합문서다. Parser 라이선스·보안 검토 후 별도 활성화 |
-| 3 — 별도 트랙 | 스캔 PDF, 이미지 | OCR 엔진 선정과 한국어 지원 검증이 선행된다. 신뢰도 점수와 수동 검토를 요구한다 |
+| Markdown | `text/markdown` | heading 구조에서 locator가 직접 나온다 |
+| Plain text | `text/plain` (UTF-8) | 문자 인코딩 오류를 명시적으로 처리한다 |
+| CSV | `text/csv` | delimiter/인코딩 오류를 명시적으로 처리한다 |
+| XLSX | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | 시트·행 단위 locator |
+| DOCX | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | 문단·표 단위 locator |
 
-현재 배포는 서드파티 런타임 의존성이 없는 ZIP Lambda다 (`apps/backend/requirements.txt`,
-`scripts/package-m0-lambda.sh`). Tier 1–2는 이 구조를 그대로 유지하고, Tier 3의 PDF는 이
-구조를 바꿔야 하므로 형식 지원 결정이 아니라 배포 결정에 묶인다.
+이 목록은 두 가지 제약에서 나왔다.
 
-**PDF 범위 주의.** PDF를 지원 목록에 넣을 때는 "텍스트 레이어가 있는 PDF"만을 뜻한다. 고객은
-스캔본도 확장자만 보고 PDF로 업로드하므로, 텍스트 레이어가 없거나 추출 신뢰도가 낮은 PDF는
-지원 형식이 아니라 `REVIEW_REQUIRED`로 종료해야 한다. 한글 PDF는 폰트 CID 매핑 때문에 추출은
-성공하고 글자만 깨지는 경우가 있어, 추출 문자 수만이 아니라 한글 문자 비율도 함께 판정한다.
+- **런타임 의존성이 없어야 한다.** Backend는 서드파티 런타임 의존성이 없는 ZIP Lambda로 배포된다
+  (`apps/backend/requirements.txt`, `scripts/package-m0-lambda.sh`). 위 형식은 모두 표준
+  라이브러리(`zipfile`, `xml.etree`)만으로 처리된다. 라이브러리를 요구하는 형식을 지원하려면
+  형식 결정이 아니라 배포 구조 결정이 먼저 필요하다.
+- **추출기 근거가 있어야 한다.** Markdown과 XLSX는 현재 Policy Source 2건의 형식이고
+  `scripts/policy_source_digest.py`에 추출기 원형이 있다. DOCX는 XLSX와 같은 OOXML zip 구조라
+  같은 기법을 재사용한다.
 
 확장자만 신뢰하지 않는다. 선언한 media type, 파일 signature로 탐지한 media type, Parser가 실제로
 지원하는 형식을 함께 검증한다. 지원 형식 목록은 Backend와 Frontend가 같은 Contract를 사용해야 한다.
+형식을 추가·제거하려면 이 문서와 Contract를 같은 변경에서 갱신한다.
 
 ## Normalized document contract
 
@@ -72,21 +75,18 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 - 원본 파일명, 선언/탐지 media type, byte size
 - `parser_id`, `parser_version`, 처리 시각과 처리 상태
 - 정규화 Artifact ID/hash와 추출 경고
-- 문서의 section/paragraph/table/sheet 단위 (page 단위는 Tier 3의 PDF에서 추가된다)
+- 문서의 section/paragraph/table/sheet 단위
 - 각 단위의 stable `locator`, 정규화 text hash, 원본 위치
 
 권장 처리 상태는 `UPLOADED`, `VALIDATING`, `PARSING`, `REVIEW_REQUIRED`, `READY`, `FAILED`,
 `SUPERSEDED`다. `READY`이면서 사람이 승인한 정확한 Source version만 Rule과 Profile이 참조할 수 있다.
 
-Locator는 파일 형식과 무관하게 추적 가능해야 한다. 예시는 다음과 같다.
+Locator는 파일 형식과 무관하게 추적 가능해야 한다. 지원 형식은 모두 문서 구조에서 locator가
+직접 나오므로, 원문이 재조판돼도 같은 단위를 다시 가리킬 수 있다. 예시는 다음과 같다.
 
 - `heading/access-control/item/5` — Markdown, DOCX
 - `sheet/Security/row/27` — XLSX
 - `table/2/row/8` — XLSX, DOCX
-- `page/12/paragraph/3` — Tier 3의 PDF에서만 쓰인다
-
-Tier 1–2 형식은 문서 구조에서 locator가 직접 나오지만, PDF는 page 좌표에 의존하므로 같은 원문이
-재조판되면 locator가 흔들린다. 이는 PDF를 별도 트랙으로 둔 또 하나의 이유다.
 
 ## Security and tenant isolation
 
@@ -124,7 +124,7 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 ## Acceptance criteria
 
 - [ ] 지원 형식 allow-list와 파일 signature 검증이 Contract와 테스트로 고정된다.
-- [ ] Tier 1–2(Markdown, XLSX, TXT/CSV, DOCX) Parser가 서드파티 런타임 의존성 없이 동작한다.
+- [ ] 지원 형식 Parser가 서드파티 런타임 의존성 없이 동작한다.
 - [ ] XLSX Parser가 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름
       locator를 처리한다. `policy_source_digest.py`의 원형은 이 셋을 아직 다루지 않는다.
 - [ ] zip 기반 형식(XLSX, DOCX)은 압축 해제 크기 상한을 먼저 검사한 뒤 읽는다.
@@ -137,6 +137,4 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 - [ ] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
 - [ ] 구현 PR에서 `docs/architecture/C4-CONTAINER.md`에 업로드/Parser/정규화 Artifact 경로를
       반영한다. 계획 단계인 지금은 `docs/DESIGN.md` flow만 갱신하고 C4는 의도적으로 미룬다.
-- [ ] Tier 3 착수 전 선행 조건을 통과한다. PDF는 Lambda 서드파티 의존성 패키징 경로 확정(A),
-      HWP/HWPX는 Parser 라이선스·보안 검토, 스캔/이미지는 OCR 엔진 선정과 한국어 지원 검증이다.
 
