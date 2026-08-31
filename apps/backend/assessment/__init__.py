@@ -29,6 +29,11 @@ from apps.backend.assessment.results import (
     ImmutableEvaluationResultConflict,
 )
 from apps.backend.assessment.runner import AssessmentRunner, EvaluationContractError
+from apps.backend.assessment.runtime_config import (
+    M1AssessmentTarget,
+    M1RuntimeConfiguration,
+    M1RuntimeConfigurationError,
+)
 from apps.backend.assessment.s3 import S3ActualEvidence, S3ActualEvidenceLoader, S3EvidenceError
 from apps.backend.assessment.s3_evaluator import S3ActualBedrockEvaluator
 from apps.backend.assessment.worker import (
@@ -63,6 +68,9 @@ __all__ = [
     "GoldenDatasetRunner",
     "GoldenEvaluationReport",
     "InMemoryModelProfileRegistry",
+    "M1AssessmentTarget",
+    "M1RuntimeConfiguration",
+    "M1RuntimeConfigurationError",
     "ImmutableEvaluationResultConflict",
     "ImmutableFindingConflict",
     "ModelProfileNotFoundError",
