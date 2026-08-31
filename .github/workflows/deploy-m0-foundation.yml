@@ -59,7 +59,8 @@ jobs:
         run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"
 
       - name: Configure customer deployment credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
+        # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: ${{ inputs.role_to_assume }}
@@ -81,6 +82,7 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/m0-foundation.yaml \
             --stack-name "${STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "Environment=${DEPLOYMENT_ENVIRONMENT}" \
