@@ -106,6 +106,12 @@
 
 ## Next
 
+- **M1 실제 검증 선행:** GitHub 저장소에 서로 다른 두 protected Environment
+  (`customer-sandbox-artifact`, `customer-sandbox-deploy`)를 만들고, 각각 Required reviewers와
+  같은 `EXPECTED_AWS_ACCOUNT_ID`를 설정한다. deploy Environment에는
+  `M1_ASSESSMENT_RUNTIME_JSON`, `M1_ASSESSMENT_SECRET_ARNS`,
+  `M1_ASSESSMENT_READ_ROLE_ARNS` Secret을 등록한다. 이 설정·PR #16 승인/병합 전에는
+  고객 sandbox 배포나 실제 GitHub/AWS/Bedrock E2E를 시작하지 않는다.
 - M1 D: IaC Snapshot + AWS Actual 조합 계층(Fixture/Mock) 완료 →
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합으로 collector 뒤 어댑터 교체
 - M1 C: collector가 만든 Assessment 입력 번들을 소비하는 평가 흐름 연결 (IAC/AWS_ACTUAL 관점)
