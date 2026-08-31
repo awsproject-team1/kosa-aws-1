@@ -49,7 +49,14 @@ class S3ActualBedrockEvaluatorTest(unittest.TestCase):
             severity=RuleSeverity.HIGH,
             applicable_phases=(AssessmentPhase.INITIAL,),
             resource_types=("AWS::S3::Bucket",),
-            source_references=(SourceReference(source_id="p", locator="p#1", content_sha256="x"),),
+            source_references=(
+                SourceReference(
+                    source_id="p",
+                    source_version="v1",
+                    locator="p#1",
+                    content_sha256="x",
+                ),
+            ),
         )
         context = PolicyContext(
             policy_profile_id="p",

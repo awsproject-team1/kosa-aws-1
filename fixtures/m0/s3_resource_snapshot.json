@@ -11,6 +11,6 @@
   },
   "evidence_references": [
     "terraform:aws_s3_bucket_public_access_block",
-    "isms-p-2023#control/5.2.1"
+    "isms-p-2023@2023.1#control/5.2.1"
   ]
 }

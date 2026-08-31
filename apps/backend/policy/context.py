@@ -20,6 +20,11 @@ class PolicyCatalog(Protocol):
     def get_rule(self, rule_id: str, version: str) -> PolicyRule | None: ...
 
 
+# 정책 근거가 아닌 Evidence의 namespace. Resource 상태 근거(IaC/AWS 조회 결과)는 Policy Source
+# locator가 아니므로 Profile allow-list로 검증할 수 없고, 대신 이 접두사로만 표현한다.
+RESOURCE_EVIDENCE_PREFIXES = ("aws:", "terraform:", "s3://")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PolicyContext:
     """Rule subset and traceable references safe to pass to an evaluator."""
@@ -47,6 +52,24 @@ class PolicyContext:
                     references.append(reference)
         return tuple(references)
 
+    @property
+    def policy_evidence_references(self) -> frozenset[str]:
+        """Canonical policy Evidence 문자열의 allow-list."""
+        return frozenset(reference.evidence_reference for reference in self.source_references)
+
+    def allows_evidence(self, reference: object) -> bool:
+        """Whether one Evidence reference is permitted for this Context.
+
+        정책 근거는 이 Context가 실제로 포함한 `SourceReference`의 canonical 형식이어야 한다.
+        Resource 상태 근거는 `RESOURCE_EVIDENCE_PREFIXES` namespace로만 표현한다. 둘 다 아니면
+        평가기가 승인 범위 밖의 근거를 만들어낸 것이다.
+        """
+        if not isinstance(reference, str) or not reference.strip():
+            return False
+        if reference in self.policy_evidence_references:
+            return True
+        return reference.startswith(RESOURCE_EVIDENCE_PREFIXES)
+
 
 class PolicyContextResolver:
     """Apply Policy Profile allow-list and applicability filters deterministically."""
@@ -57,10 +80,25 @@ class PolicyContextResolver:
         self._catalog = catalog
 
     def resolve(
-        self, *, policy_profile_id: str, phase: AssessmentPhase, resource_type: str
+        self,
+        *,
+        policy_profile_id: str,
+        phase: AssessmentPhase,
+        resource_type: str,
+        expected_profile_version: str | None = None,
     ) -> PolicyContext:
+        """Resolve the approved Rule subset, optionally pinned to a Profile version.
+
+        Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, 비동기 Job은 승인 시점의
+        Profile version을 함께 고정해야 한다. `expected_profile_version`을 주면 그 사이에
+        Profile이 교체된 경우 다른 allow-list로 평가하지 않고 실패한다.
+        """
         if not isinstance(policy_profile_id, str) or not policy_profile_id.strip():
             raise ValueError("policy_profile_id must be a non-empty string")
+        if expected_profile_version is not None and (
+            not isinstance(expected_profile_version, str) or not expected_profile_version.strip()
+        ):
+            raise ValueError("expected_profile_version must be a non-empty string or None")
         if not isinstance(phase, AssessmentPhase):
             raise TypeError("phase must be an AssessmentPhase")
         if not isinstance(resource_type, str) or not resource_type.strip():
@@ -68,6 +106,10 @@ class PolicyContextResolver:
         profile = self._catalog.get_profile(policy_profile_id)
         if profile is None:
             raise PolicyNotFoundError("policy profile not found")
+        if expected_profile_version is not None and profile.version != expected_profile_version:
+            raise PolicyNotFoundError(
+                "policy profile version changed since the assessment was approved"
+            )
         rules = tuple(
             self._resolve_rule(reference.rule_id, reference.version)
             for reference in profile.rule_references

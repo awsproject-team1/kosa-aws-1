@@ -49,6 +49,7 @@ class AssessmentRunner:
                 resource_id=resource_id,
                 rule_id=rule.rule_id,
                 rule_version=rule.version,
+                context=context,
             )
             for rule in context.rules
         )
@@ -56,7 +57,12 @@ class AssessmentRunner:
 
     @staticmethod
     def _validated_result(
-        result: EvaluationResult, *, resource_id: str, rule_id: str, rule_version: str
+        result: EvaluationResult,
+        *,
+        resource_id: str,
+        rule_id: str,
+        rule_version: str,
+        context: PolicyContext,
     ) -> EvaluationResult:
         if not isinstance(result, EvaluationResult):
             raise EvaluationContractError("evaluator must return an EvaluationResult")
@@ -66,4 +72,11 @@ class AssessmentRunner:
             raise EvaluationContractError(
                 "evaluator result rule is outside approved policy context"
             )
+        # 정책 근거는 이 Context의 canonical SourceReference여야 하고, Resource 상태 근거는
+        # 허용된 namespace여야 한다. 그렇지 않으면 평가기가 승인 범위 밖 근거를 만든 것이다.
+        for reference in result.evidence_references:
+            if not context.allows_evidence(reference):
+                raise EvaluationContractError(
+                    "evaluator result cites evidence outside the approved policy context"
+                )
         return result
