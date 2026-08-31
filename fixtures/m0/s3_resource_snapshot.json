@@ -1,0 +1,16 @@
+{
+  "artifact_id": "art-iac-snapshot-s3-public-001",
+  "resource_id": "bucket-public-001",
+  "resource_type": "AWS::S3::Bucket",
+  "perspective": "IAC",
+  "public_access_block": {
+    "block_public_acls": false,
+    "ignore_public_acls": false,
+    "block_public_policy": false,
+    "restrict_public_buckets": false
+  },
+  "evidence_references": [
+    "terraform:aws_s3_bucket_public_access_block",
+    "isms-p-2023#control/5.2.1"
+  ]
+}

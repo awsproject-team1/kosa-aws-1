@@ -26,13 +26,14 @@
   "rationale": "string",
   "evidence_references": ["source locator or content hash"],
   "rule_version": "string",
-  "rubric_version": "string"
+  "rubric_version": "string",
+  "model_profile_id": "string"
 }
 ```
 
 `score`는 기본적으로 0–100 범위의 연속 값이다. Golden Dataset 반복 평가에서 편차가 ±10점을 지속적으로 넘겨 Anchor 방식으로 전환한 경우에만 `{0, 15, 30, 50, 70, 85, 100}` 중 하나여야 한다. 코드가 현재 Scoring 정책, Schema와 Evidence Reference를 검증한다.
 
-`packages/contracts/assessments.py`는 V3 평가 단계(`INITIAL`, `DEPLOYMENT_READINESS`, `POST_DEPLOY_VERIFICATION`), `EvaluationPerspective`(`IAC`, `AWS_ACTUAL`, `DRIFT`)와 `EvaluationResult`의 기본 검증을 제공한다. Initial Assessment는 동일한 Terraform 관리 대상의 IaC Compliance, Actual Compliance, Drift를 이 관점으로 분리한다. Score 산출 자체는 AI Evaluator가 담당하며 Contract는 범위와 구조만 검증한다.
+`packages/contracts/assessments.py`는 V3 평가 단계(`INITIAL`, `DEPLOYMENT_READINESS`, `POST_DEPLOY_VERIFICATION`), `EvaluationPerspective`(`IAC`, `AWS_ACTUAL`, `DRIFT`)와 `EvaluationResult`의 기본 검증을 제공한다. 각 결과는 평가에 실제 사용된 `model_profile_id`를 반드시 보존한다. Initial Assessment는 동일한 Terraform 관리 대상의 IaC Compliance, Actual Compliance, Drift를 이 관점으로 분리한다. Score 산출 자체는 AI Evaluator가 담당하며 Contract는 범위와 구조만 검증한다.
 
 `scoring_mode`의 기본값은 `CONTINUOUS`다. 신뢰성 Gate가 Anchor 전환을 승인하면
 `ANCHORED`를 명시하고 score는 `{0, 15, 30, 50, 70, 85, 100}`만 허용한다.
@@ -48,6 +49,11 @@ Parent(Policy Q&A 포함)와 각 Workflow에는 역할별 Golden Dataset 평가�
 선택한다. 실행과 Golden Dataset 결과는 Model ID/Version, Prompt/Rubric Version, 사용한
 Model Profile을 함께 보존한다. 이 필드의 runtime shape는 각 Workflow 구현 PR에서
 `packages/contracts/`에 추가하며, 그 전에는 Model Profile 변경을 배포할 수 없다.
+
+`packages/contracts/model_profiles.py`의 `ModelProfile`은 workflow role, Region, Bedrock Model
+ID, Prompt/Rubric Version, Golden Dataset Version을 하나의 immutable 승인 단위로 고정한다.
+M0 Assessment 기본 Profile은 `fixtures/m0/assessment_model_profile.json`의
+`assessment-nova-lite-m0-v1`이며, `us-east-1`의 `amazon.nova-lite-v1:0`을 사용한다.
 
 ## Async Worker boundary
 
@@ -73,7 +79,8 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
   이 값을 이용해 추적한다.
 - `PolicyRule`: versioned rule, severity, 적용 평가 단계, Resource 유형과 하나 이상의
   Source Reference
-- `PolicyProfile`: versioned allow-list인 `rule_ids`. Repository/AWS Account 권한은
+- `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
+- `PolicyProfile`: `rule_references`로 구성된 versioned allow-list. Repository/AWS Account 권한은
   Profile이 아니라 Backend의 JWT scope에서 강제한다.
 
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가

@@ -26,10 +26,12 @@ from packages.contracts.jobs import (
     WorkflowCommand,
     WorkflowTask,
 )
+from packages.contracts.model_profiles import ModelProfile, ModelProfileRole
 from packages.contracts.policy import (
     GoldenDatasetCase,
     PolicyProfile,
     PolicyRule,
+    PolicyRuleReference,
     PolicySource,
     PolicySourceKind,
     RuleSeverity,
@@ -53,8 +55,11 @@ __all__ = [
     "JobCurrentStep",
     "JobResponse",
     "JobStatus",
+    "ModelProfile",
+    "ModelProfileRole",
     "PolicyProfile",
     "PolicyRule",
+    "PolicyRuleReference",
     "PolicySource",
     "PolicySourceKind",
     "RemediationPatch",

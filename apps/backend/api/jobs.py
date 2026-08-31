@@ -10,6 +10,7 @@ from apps.backend.assessment import Assessment
 from apps.backend.auth import Action, Principal, authorize
 from apps.backend.jobs import (
     JobNotFoundError,
+    OutboxDispatcher,
     WorkflowOutboxEntry,
     authorize_job_read,
     create_job,
@@ -48,11 +49,15 @@ class JobApiService:
         *,
         repository: AssessmentWorkflowRepository,
         assessment_scope: AssessmentScope,
+        outbox_dispatcher: OutboxDispatcher,
         job_id_factory: Callable[[], str],
         assessment_id_factory: Callable[[], str],
     ) -> None:
         self._repository = repository
         self._assessment_scope = assessment_scope
+        if not isinstance(outbox_dispatcher, OutboxDispatcher):
+            raise TypeError("outbox_dispatcher must be an OutboxDispatcher")
+        self._outbox_dispatcher = outbox_dispatcher
         self._job_id_factory = job_id_factory
         self._assessment_id_factory = assessment_id_factory
 
@@ -81,19 +86,23 @@ class JobApiService:
             requested_by=principal.subject,
             assessment_id=assessment.assessment_id,
         )
+        outbox = WorkflowOutboxEntry(
+            customer_id=principal.customer_id,
+            job_id=job.job_id,
+            task=WorkflowTask(
+                job_id=job.job_id,
+                expected_revision=job.revision,
+                command=WorkflowCommand.ASSESS_RESOURCE,
+            ),
+        )
         self._repository.create_assessment_workflow(
             assessment,
             job,
-            WorkflowOutboxEntry(
-                customer_id=principal.customer_id,
-                job_id=job.job_id,
-                task=WorkflowTask(
-                    job_id=job.job_id,
-                    expected_revision=job.revision,
-                    command=WorkflowCommand.ASSESS_RESOURCE,
-                ),
-            ),
+            outbox,
         )
+        # The transactional Outbox is durable before this best-effort send. On a
+        # queue or bookkeeping failure the scheduled sweeper retries the entry.
+        self._outbox_dispatcher.dispatch_entry(outbox)
         return job.to_response()
 
     def get_job(self, principal: Principal, job_id: str) -> JobResponse:
