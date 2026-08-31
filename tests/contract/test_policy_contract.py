@@ -91,7 +91,10 @@ class PolicyContractTest(unittest.TestCase):
                 resource_types=("AWS::S3::Bucket",),
                 source_references=(
                     SourceReference(
-                        source_id="source-001", locator="section-1", content_sha256="hash-001"
+                        source_id="source-001",
+                        source_version="v1",
+                        locator="section-1",
+                        content_sha256="hash-001",
                     ),
                 ),
             )
@@ -126,13 +129,44 @@ class PolicyContractTest(unittest.TestCase):
 
             self.assertEqual(control.to_dict(), entry)
 
+    def test_source_reference_pins_a_source_version_and_renders_evidence(self) -> None:
+        reference = SourceReference(
+            source_id="isms-p-2023",
+            source_version="2023-10-31",
+            locator="control/2.6.2",
+            content_sha256="hash-001",
+        )
+
+        self.assertEqual(reference.evidence_reference, "isms-p-2023@2023-10-31#control/2.6.2")
+        self.assertEqual(
+            reference.to_dict(),
+            {
+                "source_id": "isms-p-2023",
+                "source_version": "2023-10-31",
+                "locator": "control/2.6.2",
+                "content_sha256": "hash-001",
+            },
+        )
+
+    def test_source_reference_requires_a_source_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_version must be a non-empty string"):
+            SourceReference(
+                source_id="isms-p-2023",
+                source_version="  ",
+                locator="control/2.6.2",
+                content_sha256="hash-001",
+            )
+
     def test_control_requires_at_least_one_rule_reference(self) -> None:
         with self.assertRaisesRegex(ValueError, "rule_references must not be empty"):
             PolicyControl(
                 control_id="ISMS-P-2.6.2",
                 title="정보시스템 접근",
                 source_reference=SourceReference(
-                    source_id="isms-p-2023", locator="control/2.6.2", content_sha256="hash-001"
+                    source_id="isms-p-2023",
+                    source_version="2023-10-31",
+                    locator="control/2.6.2",
+                    content_sha256="hash-001",
                 ),
                 rule_references=(),
             )

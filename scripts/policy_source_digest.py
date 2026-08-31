@@ -38,6 +38,10 @@ class PolicySourceUnavailableError(RuntimeError):
     """Raised when a policy original is not present in the local checkout."""
 
 
+class UnknownPolicySourceError(RuntimeError):
+    """Raised when a registry source has no local original mapping."""
+
+
 def sha256_of_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -53,7 +57,9 @@ def excerpt(source_id: str, locator: str) -> str:
         return _checklist_excerpt(_source_path(source_id), locator)
     if source_id == "isms-p-2023":
         return _isms_p_excerpt(_source_path(source_id), locator)
-    raise KeyError(f"unknown policy source {source_id!r}")
+    raise UnknownPolicySourceError(
+        f"unknown policy source {source_id!r}; register it in SOURCE_FILES"
+    )
 
 
 def reference_digest(source_id: str, locator: str) -> str:
@@ -65,7 +71,9 @@ def _source_path(source_id: str) -> Path:
     try:
         path = POLICIES_LOCAL / SOURCE_FILES[source_id]
     except KeyError:
-        raise KeyError(f"unknown policy source {source_id!r}") from None
+        raise UnknownPolicySourceError(
+            f"unknown policy source {source_id!r}; register it in SOURCE_FILES"
+        ) from None
     if not path.is_file():
         raise PolicySourceUnavailableError(f"policy original not available: {path}")
     return path
@@ -86,11 +94,11 @@ def _checklist_excerpt(path: Path, locator: str) -> str:
     match = re.fullmatch(r"part(?P<part>[12])/(?P<item>[0-9.]+-[A-Z])", locator)
     if match is None:
         raise ValueError(f"unsupported checklist locator {locator!r}")
-    item = match.group("item")
+    part, item = match.group("part"), match.group("item")
     start = re.compile(rf"^- \[ \] \*\*{re.escape(item)}\.\*\*")
     boundary = re.compile(r"^(- \[ \] \*\*|#{1,4} |---$)")
 
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = _part_lines(path.read_text(encoding="utf-8").splitlines(), part)
     for index, line in enumerate(lines):
         if start.match(line):
             block = [line]
@@ -99,7 +107,25 @@ def _checklist_excerpt(path: Path, locator: str) -> str:
                     break
                 block.append(following)
             return _normalize(block)
-    raise KeyError(f"checklist item {item!r} not found in {path.name}")
+    raise KeyError(f"checklist item {item!r} not found in part {part} of {path.name}")
+
+
+def _part_lines(lines: list[str], part: str) -> list[str]:
+    """Restrict the scan to one `# Part N` section.
+
+    항목 번호는 Part 사이에서 충돌할 수 있으므로 locator의 part 구획을 실제로 강제한다.
+    """
+    heading = re.compile(rf"^# Part {re.escape(part)}")
+    other = re.compile(r"^# Part \d")
+    for index, line in enumerate(lines):
+        if heading.match(line):
+            section = [line]
+            for following in lines[index + 1 :]:
+                if other.match(following):
+                    break
+                section.append(following)
+            return section
+    raise KeyError(f"checklist part {part!r} not found")
 
 
 def _isms_p_excerpt(path: Path, locator: str) -> str:
@@ -151,54 +177,85 @@ def _xlsx_rows(path: Path) -> list[list[str]]:
         return rows
 
 
-def _registry_references() -> tuple[dict[str, str], list[tuple[str, str, str]]]:
-    """Return committed source digests and (source_id, locator, digest) references."""
+def _registry_references() -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str, str]]]:
+    """Return committed source digests/versions and pinned locator references."""
     sources = json.loads((REGISTRY_DIR / "sources.json").read_text(encoding="utf-8"))
-    source_digests = {entry["source_id"]: entry["content_sha256"] for entry in sources}
+    source_digests = {
+        entry["source_id"]: (entry["version"], entry["content_sha256"]) for entry in sources
+    }
 
-    references: list[tuple[str, str, str]] = []
+    references: list[tuple[str, str, str, str]] = []
+
+    def add(reference: dict[str, str]) -> None:
+        references.append(
+            (
+                reference["source_id"],
+                reference["source_version"],
+                reference["locator"],
+                reference["content_sha256"],
+            )
+        )
+
     for rule_file in sorted(REGISTRY_DIR.glob("rules.*.json")):
         for rule in json.loads(rule_file.read_text(encoding="utf-8")):
             for reference in rule["source_references"]:
-                references.append(
-                    (reference["source_id"], reference["locator"], reference["content_sha256"])
-                )
+                add(reference)
     for control in json.loads((REGISTRY_DIR / "controls.json").read_text(encoding="utf-8")):
-        reference = control["source_reference"]
-        references.append(
-            (reference["source_id"], reference["locator"], reference["content_sha256"])
-        )
+        add(control["source_reference"])
     return source_digests, sorted(set(references))
 
 
 def _print_digests() -> int:
     source_digests, references = _registry_references()
-    for source_id in sorted(source_digests):
-        print(f"source  {source_id:38s} {source_digest(source_id)}")
-    for source_id, locator, _ in references:
-        print(f"ref     {source_id}#{locator:24s} {reference_digest(source_id, locator)}")
+    for source_id, (version, _) in sorted(source_digests.items()):
+        print(f"source  {source_id}@{version:24s} {source_digest(source_id)}")
+    for source_id, version, locator, _ in references:
+        print(f"ref     {source_id}@{version}#{locator:24s} {reference_digest(source_id, locator)}")
     return 0
 
 
 def _verify() -> int:
+    """Verify every available original. 원문이 없는 source만 건너뛰고 나머지는 반드시 검증한다."""
     source_digests, references = _registry_references()
     failures: list[str] = []
-    for source_id, committed in sorted(source_digests.items()):
-        actual = source_digest(source_id)
+    skipped: set[str] = set()
+    checked_sources = 0
+    checked_references = 0
+
+    for source_id, (_, committed) in sorted(source_digests.items()):
+        try:
+            actual = source_digest(source_id)
+        except PolicySourceUnavailableError:
+            skipped.add(source_id)
+            continue
+        checked_sources += 1
         if actual != committed:
             failures.append(f"source {source_id}: committed {committed}, actual {actual}")
-    for source_id, locator, committed in references:
+
+    for source_id, version, locator, committed in references:
+        declared = source_digests.get(source_id)
+        if declared is None or declared[0] != version:
+            failures.append(
+                f"reference {source_id}@{version}#{locator}: pinned to an undeclared source version"
+            )
+            continue
+        if source_id in skipped:
+            continue
         actual = reference_digest(source_id, locator)
+        checked_references += 1
         if actual != committed:
             failures.append(
-                f"reference {source_id}#{locator}: committed {committed}, actual {actual}"
+                f"reference {source_id}@{version}#{locator}: committed {committed}, actual {actual}"
             )
+
+    for source_id in sorted(skipped):
+        print(f"Skipped {source_id}: policy original not available locally.")
     if failures:
         print("Policy source digests do NOT match the local originals:")
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print(f"OK: {len(source_digests)} sources and {len(references)} references match.")
+    print(f"OK: {checked_sources} sources and {checked_references} references match.")
     return 0
 
 
@@ -211,9 +268,13 @@ def main() -> int:
     try:
         return _print_digests() if args.print_digests else _verify()
     except PolicySourceUnavailableError as error:
+        # `--print`만 이 경로로 온다. `--verify`는 source별로 건너뛰고 나머지를 계속 검증한다.
         print(f"Skipped: {error}")
         print("정책 원문은 저장소에 없다 (ADR-0004). 검증은 원문 보유자만 수행한다.")
         return 0
+    except UnknownPolicySourceError as error:
+        print(f"Error: {error}")
+        return 1
 
 
 if __name__ == "__main__":

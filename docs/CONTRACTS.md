@@ -75,8 +75,10 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 
 - `PolicySource`: 승인된 정책 원문의 ID, 종류(`INTERNAL_POLICY`/`ISMS_P`), 버전과
   S3 Artifact ID/content hash
-- `SourceReference`: 정책 원문 안의 locator와 content hash. Rule과 평가 Evidence는
-  이 값을 이용해 추적한다.
+- `SourceReference`: 정책 원문 안의 locator와 content hash, 그리고 그 locator가 유효한
+  `source_version`. 원문이 개정되면 같은 locator라도 다른 내용을 가리키므로 Rule과 Control은
+  항상 Source version까지 고정한다. 평가 Evidence는 `evidence_reference`
+  (`{source_id}@{source_version}#{locator}`) 형식을 사용해 어떤 판본을 인용했는지 복원한다.
 - `PolicyRule`: versioned rule, severity, 적용 평가 단계, Resource 유형과 하나 이상의
   Source Reference
 - `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
@@ -101,8 +103,9 @@ ControlMapping)를 만든다.
 | `controls.json` | `PolicyControl` 매핑 (Control → Rule version) |
 | `profiles.json` | `PolicyProfile` allow-list |
 
-로드 시 (1) 모든 `SourceReference`가 선언된 Policy Source를 가리키는지, (2) Profile과 Control이
-Registry에 실제로 존재하는 Rule version만 참조하는지 교차 검증한다. Registry에 정의됐지만
+로드 시 (1) 모든 `SourceReference`가 선언된 Policy Source의 **정확한 version**을 가리키는지,
+(2) Profile과 Control이 Registry에 실제로 존재하는 Rule version만 참조하는지, (3) Source가
+`(source_id, version)`으로 유일한지 교차 검증한다. Registry에 정의됐지만
 Profile allow-list에 없는 Rule은 어떤 Resource 유형으로도 Policy Context에 들어가지 않는다.
 
 M1 평가 대상은 S3 단독이다. EC2 Rule은 Mapping/Context 계층의 multi-type 동작을 고정하기 위해
@@ -111,6 +114,10 @@ Registry에만 존재하며 Profile에는 포함하지 않는다 (M2 확장 대�
 정책 원문은 저장소에 없으므로 (ADR-0004) `SourceReference.content_sha256`은
 `scripts/policy_source_digest.py --verify`로 원문 보유자만 검증한다. 원문이 없는 환경에서는
 검증을 건너뛴다.
+
+Coverage는 두 층으로 설명한다. `covered_controls()`는 Context가 근거로 **인용한** 통제이고,
+`control_rule_coverage()`는 통제별 (평가 Rule 수 / 전체 Rule 수)다. 한 통제가 여러 Rule로 구현되고
+그중 일부만 이번 Context에 들어올 수 있으므로, 인용됐다는 사실만으로 완전히 평가됐다고 보지 않는다.
 
 Registry의 read-only DynamoDB 어댑터는 `apps/backend/policy/dynamodb_catalog.py`이며
 `docs/DATABASE.md`의 `POLICY_PROFILE#`, `POLICY_SOURCE#`, `RULE#` key layout을 사용한다.

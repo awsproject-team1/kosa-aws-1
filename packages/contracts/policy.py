@@ -26,19 +26,34 @@ class RuleSeverity(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SourceReference:
-    """A traceable locator within an approved policy source artifact."""
+    """A traceable locator within one exact version of an approved policy source.
+
+    `source_version`은 Rule과 Control을 특정 Policy Source version에 고정한다. 원문이 개정되면
+    같은 locator라도 다른 내용을 가리키므로, 버전을 함께 고정해야 Evidence가 재현 가능하다.
+    """
 
     source_id: str
+    source_version: str
     locator: str
     content_sha256: str
 
     def __post_init__(self) -> None:
-        for name in ("source_id", "locator", "content_sha256"):
+        for name in ("source_id", "source_version", "locator", "content_sha256"):
             require_non_empty_string(getattr(self, name), name)
+
+    @property
+    def evidence_reference(self) -> str:
+        """Canonical evidence string: `{source_id}@{source_version}#{locator}`.
+
+        평가 결과의 Evidence는 이 형식을 사용한다. locator만으로는 어떤 Source의 어느 version을
+        인용했는지 복원할 수 없다.
+        """
+        return f"{self.source_id}@{self.source_version}#{self.locator}"
 
     def to_dict(self) -> dict[str, str]:
         return {
             "source_id": self.source_id,
+            "source_version": self.source_version,
             "locator": self.locator,
             "content_sha256": self.content_sha256,
         }

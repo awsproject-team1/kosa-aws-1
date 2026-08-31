@@ -35,6 +35,7 @@ def source_reference_from_dict(data: object) -> SourceReference:
     fields = _require_mapping(data, "source reference")
     return SourceReference(
         source_id=fields["source_id"],
+        source_version=fields["source_version"],
         locator=fields["locator"],
         content_sha256=fields["content_sha256"],
     )

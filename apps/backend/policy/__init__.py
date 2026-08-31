@@ -5,6 +5,7 @@ from apps.backend.policy.context import PolicyContext, PolicyContextResolver, Po
 from apps.backend.policy.dynamodb_catalog import DynamoDbPolicyCatalog
 from apps.backend.policy.registry import (
     ControlMapping,
+    ControlRuleCoverage,
     PolicyRegistry,
     PolicyRegistryError,
     load_rule_registry,
@@ -12,6 +13,7 @@ from apps.backend.policy.registry import (
 
 __all__ = [
     "ControlMapping",
+    "ControlRuleCoverage",
     "DynamoDbPolicyCatalog",
     "InMemoryPolicyCatalog",
     "PolicyContext",

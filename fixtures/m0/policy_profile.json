@@ -17,6 +17,7 @@
     "source_references": [
       {
         "source_id": "isms-p-2023",
+        "source_version": "2023.1",
         "locator": "control/5.2.1",
         "content_sha256": "policy-sha256-001"
       }

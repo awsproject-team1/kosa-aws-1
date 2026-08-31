@@ -36,7 +36,12 @@ def context() -> PolicyContext:
         applicable_phases=(AssessmentPhase.INITIAL,),
         resource_types=("AWS::S3::Bucket",),
         source_references=(
-            SourceReference(source_id="isms-p", locator="5.2.1", content_sha256="digest"),
+            SourceReference(
+                source_id="isms-p",
+                source_version="2023-10-31",
+                locator="5.2.1",
+                content_sha256="digest",
+            ),
         ),
     )
     return PolicyContext(

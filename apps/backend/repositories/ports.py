@@ -8,41 +8,36 @@ from apps.backend.assessment import Assessment
 from apps.backend.jobs.models import Job
 from apps.backend.jobs.outbox import OutboxRepository, WorkflowOutboxEntry
 
+# 예외는 순환 import를 피하려고 leaf 모듈에 정의하고 여기서 재노출한다.
+# `ports`는 Job/Assessment/Outbox를 import하고 `apps.backend.jobs.errors`는 이 예외들을
+# import하므로, 예외가 `ports`에 있으면 어떤 모듈을 먼저 import하느냐에 따라 깨진다.
+from apps.backend.repositories.errors import (
+    ArtifactCollisionError,
+    ArtifactIntegrityError,
+    ArtifactNotFoundError,
+    ArtifactStoreError,
+    DuplicateJobError,
+    InvalidJobMutationError,
+    RepositoryError,
+    RevisionConflictError,
+    StoredDataError,
+)
 
-class RepositoryError(RuntimeError):
-    """Base failure for a persistence provider operation."""
-
-
-class DuplicateJobError(RepositoryError):
-    """Raised when creating an existing Job would replace it."""
-
-
-class RevisionConflictError(RepositoryError):
-    """Raised when a persisted Job revision no longer matches."""
-
-
-class InvalidJobMutationError(RepositoryError):
-    """Raised when a candidate Job bypasses the lifecycle policy."""
-
-
-class StoredDataError(RepositoryError):
-    """Raised when persisted data does not satisfy the domain model."""
-
-
-class ArtifactStoreError(RepositoryError):
-    """Base failure for artifact storage operations."""
-
-
-class ArtifactNotFoundError(ArtifactStoreError):
-    """Raised when an artifact reference does not exist."""
-
-
-class ArtifactCollisionError(ArtifactStoreError):
-    """Raised when a content-addressed key contains different bytes."""
-
-
-class ArtifactIntegrityError(ArtifactStoreError):
-    """Raised when stored bytes do not match their content digest."""
+__all__ = [
+    "ArtifactCollisionError",
+    "ArtifactIntegrityError",
+    "ArtifactNotFoundError",
+    "ArtifactReference",
+    "ArtifactStore",
+    "ArtifactStoreError",
+    "AssessmentWorkflowRepository",
+    "DuplicateJobError",
+    "InvalidJobMutationError",
+    "JobRepository",
+    "RepositoryError",
+    "RevisionConflictError",
+    "StoredDataError",
+]
 
 
 _SHA256_REFERENCE = re.compile(r"sha256:([0-9a-f]{64})")

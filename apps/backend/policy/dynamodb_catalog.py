@@ -20,7 +20,7 @@ from apps.backend.policy.serialization import (
     rule_from_dict,
     source_from_dict,
 )
-from apps.backend.repositories.ports import RepositoryError, StoredDataError
+from apps.backend.repositories.errors import RepositoryError, StoredDataError
 from packages.contracts import PolicyProfile, PolicyRule, PolicySource
 
 

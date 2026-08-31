@@ -42,8 +42,9 @@ class RuleRegistryLoadTest(unittest.TestCase):
             {source.source_id for source in registry.sources},
             {"internal-cloud-security-checklist", "isms-p-2023"},
         )
-        self.assertIsNotNone(registry.get_source("isms-p-2023"))
-        self.assertIsNone(registry.get_source("unknown-source"))
+        self.assertIsNotNone(registry.get_source("isms-p-2023", "2023-10-31"))
+        self.assertIsNone(registry.get_source("isms-p-2023", "1999-01-01"))
+        self.assertIsNone(registry.get_source("unknown-source", "2023-10-31"))
 
     def test_every_rule_carries_a_traceable_source_reference(self) -> None:
         registry = load_rule_registry(REGISTRY_PATH)
@@ -54,6 +55,18 @@ class RuleRegistryLoadTest(unittest.TestCase):
             for reference in rule.source_references:
                 self.assertIn(reference.source_id, declared)
                 self.assertEqual(len(reference.content_sha256), 64, reference.locator)
+
+    def test_every_reference_pins_the_declared_source_version(self) -> None:
+        registry = load_rule_registry(REGISTRY_PATH)
+
+        declared = {source.source_id: source.version for source in registry.sources}
+        for rule in registry.rules:
+            for reference in rule.source_references:
+                self.assertEqual(reference.source_version, declared[reference.source_id])
+                self.assertEqual(
+                    reference.evidence_reference,
+                    f"{reference.source_id}@{reference.source_version}#{reference.locator}",
+                )
 
     def test_rejects_a_reference_to_an_undeclared_source(self) -> None:
         with TemporaryDirectory() as name:
@@ -70,6 +83,7 @@ class RuleRegistryLoadTest(unittest.TestCase):
                         "source_references": [
                             {
                                 "source_id": "unknown-source",
+                                "source_version": "2026-08-24",
                                 "locator": "part2/5.1-B",
                                 "content_sha256": "0" * 64,
                             }
@@ -78,7 +92,35 @@ class RuleRegistryLoadTest(unittest.TestCase):
                 ],
             )
 
-            with self.assertRaisesRegex(PolicyRegistryError, "undeclared sources"):
+            with self.assertRaisesRegex(PolicyRegistryError, "undeclared source versions"):
+                load_rule_registry(directory)
+
+    def test_rejects_a_reference_pinned_to_an_undeclared_source_version(self) -> None:
+        """원문이 개정되면 Rule이 가리키던 판본이 남아야 한다."""
+        with TemporaryDirectory() as name:
+            directory = _write_registry(
+                Path(name),
+                rules__s3__json=[
+                    {
+                        "rule_id": "S3-PUBLIC-001",
+                        "version": "2026-08-31",
+                        "title": "rule",
+                        "severity": "HIGH",
+                        "applicable_phases": ["INITIAL"],
+                        "resource_types": [S3],
+                        "source_references": [
+                            {
+                                "source_id": "isms-p-2023",
+                                "source_version": "1999-01-01",
+                                "locator": "control/2.6.2",
+                                "content_sha256": "0" * 64,
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            with self.assertRaisesRegex(PolicyRegistryError, "isms-p-2023@1999-01-01"):
                 load_rule_registry(directory)
 
     def test_rejects_a_control_that_references_a_missing_rule(self) -> None:
@@ -91,6 +133,7 @@ class RuleRegistryLoadTest(unittest.TestCase):
                         "title": "정보시스템 접근",
                         "source_reference": {
                             "source_id": "isms-p-2023",
+                            "source_version": "2023-10-31",
                             "locator": "control/2.6.2",
                             "content_sha256": "0" * 64,
                         },
@@ -100,6 +143,40 @@ class RuleRegistryLoadTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(PolicyRegistryError, "unavailable rule"):
+                load_rule_registry(directory)
+
+    def test_rejects_a_definition_that_is_missing_a_required_field(self) -> None:
+        with TemporaryDirectory() as name:
+            directory = _write_registry(
+                Path(name),
+                rules__s3__json=[
+                    {
+                        "rule_id": "S3-PUBLIC-001",
+                        "version": "2026-08-31",
+                        "title": "rule",
+                        "severity": "HIGH",
+                        "applicable_phases": ["INITIAL"],
+                        "resource_types": [S3],
+                        "source_references": [
+                            {
+                                "source_id": "isms-p-2023",
+                                "locator": "control/2.6.2",
+                                "content_sha256": "0" * 64,
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            with self.assertRaisesRegex(PolicyRegistryError, "definition is invalid"):
+                load_rule_registry(directory)
+
+    def test_rejects_duplicate_source_versions(self) -> None:
+        with TemporaryDirectory() as name:
+            sources = json.loads((REGISTRY_PATH / "sources.json").read_text(encoding="utf-8"))
+            directory = _write_registry(Path(name), sources__json=[*sources, sources[0]])
+
+            with self.assertRaisesRegex(PolicyRegistryError, "duplicate policy source"):
                 load_rule_registry(directory)
 
     def test_rejects_a_registry_file_that_is_not_a_list(self) -> None:
@@ -231,6 +308,22 @@ class ControlMappingTest(unittest.TestCase):
             [control.control_id for control in covered],
             ["ISMS-P-2.10.2", "ISMS-P-2.10.3", "ISMS-P-2.6.2", "ISMS-P-2.7.1", "ISMS-P-2.9.4"],
         )
+
+    def test_reports_partial_control_coverage(self) -> None:
+        """S3 Context는 ISMS-P-2.6.2의 EC2 Rule을 평가하지 않는다. 완전 평가로 보이면 안 된다."""
+        context = PolicyContextResolver(self.registry.catalog).resolve(
+            policy_profile_id=PROFILE_ID, phase=AssessmentPhase.INITIAL, resource_type=S3
+        )
+
+        coverage = {
+            entry.control_id: entry
+            for entry in self.registry.controls.control_rule_coverage(context)
+        }
+
+        partial = coverage["ISMS-P-2.6.2"]
+        self.assertEqual((partial.evaluated_rules, partial.total_rules), (2, 3))
+        self.assertFalse(partial.is_complete)
+        self.assertTrue(coverage["ISMS-P-2.9.4"].is_complete)
 
     def test_rejects_an_unknown_control(self) -> None:
         with self.assertRaisesRegex(PolicyNotFoundError, "not found"):

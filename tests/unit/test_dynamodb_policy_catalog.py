@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from apps.backend.policy import DynamoDbPolicyCatalog, PolicyContextResolver
-from apps.backend.repositories.ports import RepositoryError, StoredDataError
+from apps.backend.repositories.errors import RepositoryError, StoredDataError
 from packages.contracts import AssessmentPhase
 
 REGISTRY_PATH = Path(__file__).parents[2] / "fixtures" / "rules"
