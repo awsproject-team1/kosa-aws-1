@@ -4,6 +4,11 @@
 AI 후보 추출은 C가 담당하며 둘 다 여기서 나오는 `NormalizedPolicyDocument`를 소비한다.
 """
 
+from apps.backend.policy.ingestion.approval import (
+    ApprovalRejectedError,
+    approve_source,
+    publish_profile,
+)
 from apps.backend.policy.ingestion.formats import (
     MAX_ARCHIVE_TOTAL_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -27,6 +32,7 @@ from apps.backend.policy.ingestion.pipeline import (
 )
 
 __all__ = [
+    "ApprovalRejectedError",
     "DocumentFormatError",
     "DocumentParseError",
     "MAX_ARCHIVE_TOTAL_BYTES",
@@ -36,10 +42,12 @@ __all__ = [
     "PARSERS",
     "ParsedPolicyDocument",
     "UploadedPolicyOriginal",
+    "approve_source",
     "detect_format",
     "format_for_media_type",
     "normalize_text",
     "normalize_upload",
+    "publish_profile",
     "source_reference_for",
     "text_sha256",
 ]

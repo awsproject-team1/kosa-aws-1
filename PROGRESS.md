@@ -13,13 +13,20 @@
   절차 문서화 (실제 AWS 배포 승인 대기)
 - M1 B 진행: MVP Rule Registry(S3 6건) + Control 매핑 + read-only DynamoDB Policy Catalog 구현,
   C의 Registry 채택(prompt/golden version 재고정)과 A의 테이블 배포 연결 대기
-- 고객 사내 정책 수집 진행: B의 형식 allow-list·정규화 Schema·5개 형식 Parser 구현 완료.
-  Rule Registry와 `policies-local/`은 여전히 개발 seed이며, 업로드 세션·저장·상태 write(A),
-  Rule 후보 검토·승인과 Profile publication(B 후속), AI 추출(C)은 `docs/POLICY_INGESTION.md`
-  (ADR-0015) 기준으로 대기
+- 고객 사내 정책 수집 진행: B 소유 경계(형식 allow-list, 정규화 Schema, 5개 형식 Parser,
+  승인 판정, Profile publication 거부 규칙) 구현 완료. Rule Registry와 `policies-local/`은
+  여전히 개발 seed이며, 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C),
+  고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
 
 ## Completed
 
+- M1 B Policy Source 승인·Profile publication 경계: `RuleLifecycle`, `RuleCandidate`,
+  finalization tuple을 인용하는 immutable `PolicySourceApproval` Contract와, `READY` 문서에만
+  승인이 붙고 locator/hash가 정규화 결과와 일치할 때만 통과하는 `approve_source()`,
+  `docs/POLICY_INGESTION.md`의 게시 거부 조건 3건(승인되지 않은 Source/Rule, 승인과 다른
+  Source version, 승인 record의 artifact binding 불일치)을 구현한 `publish_profile()` 추가.
+  거부 사유는 `ApprovalRejectionCode` 열거값이며, 승인되지 않은 Rule이 `PolicyContext`에
+  도달하지 못함을 테스트로 고정 (승인 API·조건부 write 배선은 A)
 - M1 B 고객 Policy Ingestion 정규화 경계: 지원 형식 allow-list(Markdown/Plain text/CSV/XLSX/DOCX)와
   선언 media type·파일 signature·Parser 지원을 함께 대조하는 fail-closed 형식 판정,
   `NormalizedPolicyDocument` Contract, 표준 라이브러리 전용 5개 형식 Parser(XLSX inline string·
@@ -95,11 +102,12 @@
 - M1 C: Assessment 경로를 M0 단일 Rule Fixture에서 `load_rule_registry()`로 전환하고
   Rule 확대에 맞춰 prompt/rubric/golden dataset version을 재고정 (DESIGN 품질 Gate 재실행)
 - M1 A: DynamoDB Policy Catalog 항목 적재 경로와 실제 테이블 연결 (현재는 stub client 검증까지)
-- M1 B: 정규화 결과에서 Rule 후보를 검토·승인하고, 승인된 Source/Rule version만 참조하는
-  Profile publication 거부 규칙 구현 (승인과 게시는 서로 다른 operation)
 - M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
   ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
   선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
+- M1 A: 승인·Profile 게시 API 배선. `approve_source()`/`publish_profile()`을 DynamoDB 조건부
+  write 앞에서 호출하고, 거부 시 write를 시도하지 않는다. 승인 record와 audit record는
+  finalization tuple에 조건부로 묶는다
 - M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
   고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
 
@@ -147,7 +155,7 @@
 **Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + 승인된 Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다. 정적 seed가 아닌 사용자 업로드 정책을 제품 기능으로 표시하려면 `docs/POLICY_INGESTION.md`의 별도 Delivery gate를 충족해야 한다.
 
 - [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장
-- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; Policy Ingestion의 형식 allow-list·정규화 Schema·Parser 구현 완료; C의 Registry 채택, 실제 테이블 적재, Rule 승인·Profile publication은 대기)*
+- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog, Policy Ingestion의 형식 allow-list·정규화 Schema·Parser·승인 판정·Profile publication 거부 규칙 구현 완료; C의 Registry 채택, A의 실제 테이블 적재와 API 배선은 대기)*
 - [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증, Assessment UI 기본 화면
 - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; 실제 SDK/GitHub App 통합 대기)*
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
