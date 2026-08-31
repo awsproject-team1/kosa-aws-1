@@ -90,6 +90,23 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가
 Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
 
+Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, 비동기 Job은 승인 시점의 Profile
+version도 함께 고정한다. `PolicyContextResolver.resolve(..., expected_profile_version=...)`은
+그 사이에 Profile이 교체되면 다른 allow-list로 평가하지 않고 `PolicyNotFoundError`로 실패한다.
+Assessment/Work 레코드에 이 version을 영속화하는 것은 Backend(A)의 저장 경계다.
+
+### Evidence reference boundary
+
+평가 결과의 Evidence는 두 종류만 허용한다.
+
+| 종류 | 형식 | 검증 |
+| --- | --- | --- |
+| 정책 근거 | `{source_id}@{source_version}#{locator}` | 해당 Policy Context가 실제로 포함한 `SourceReference`여야 한다 |
+| Resource 상태 근거 | `aws:`, `terraform:`, `s3://` 접두사 | namespace allow-list |
+
+`PolicyContext.allows_evidence()`가 이 규칙을 판정하고 `AssessmentRunner`가 평가기 결과마다
+강제한다. version 없는 구 형식(`{source_id}#{locator}`)과 Context 밖 정책 근거는 거부한다.
+
 ## M1 rule registry
 
 MVP Rule Registry는 `fixtures/rules/`에 커밋된다. `apps/backend/policy/registry.py`의
@@ -112,8 +129,9 @@ M1 평가 대상은 S3 단독이다. EC2 Rule은 Mapping/Context 계층의 multi
 Registry에만 존재하며 Profile에는 포함하지 않는다 (M2 확장 대상).
 
 정책 원문은 저장소에 없으므로 (ADR-0004) `SourceReference.content_sha256`은
-`scripts/policy_source_digest.py --verify`로 원문 보유자만 검증한다. 원문이 없는 환경에서는
-검증을 건너뛴다.
+`scripts/policy_source_digest.py --verify`로 원문 보유자만 검증한다. 원문 파일 매핑과 digest는
+`(source_id, source_version)`으로 관리하므로 같은 Source의 여러 판본이 공존할 수 있다. 원문이
+없는 Source version만 건너뛰고, 보유한 나머지는 계속 검증한다.
 
 Coverage는 두 층으로 설명한다. `covered_controls()`는 Context가 근거로 **인용한** 통제이고,
 `control_rule_coverage()`는 통제별 (평가 Rule 수 / 전체 Rule 수)다. 한 통제가 여러 Rule로 구현되고

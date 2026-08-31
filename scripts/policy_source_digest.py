@@ -27,10 +27,11 @@ POLICIES_LOCAL = REPO_ROOT / "policies-local"
 REGISTRY_DIR = REPO_ROOT / "fixtures" / "rules"
 SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
-# source_id -> 로컬 원문 파일명. 원문 자체는 저장소에 없다.
+# (source_id, source_version) -> 로컬 원문 파일명. 원문 자체는 저장소에 없다.
+# 같은 Source의 여러 판본이 공존할 수 있으므로 version까지 key에 넣는다.
 SOURCE_FILES = {
-    "internal-cloud-security-checklist": "cloud-security-checklist.md",
-    "isms-p-2023": "isms-p-2023-10-31.xlsx",
+    ("internal-cloud-security-checklist", "2026-08-24"): "cloud-security-checklist.md",
+    ("isms-p-2023", "2023-10-31"): "isms-p-2023-10-31.xlsx",
 }
 
 
@@ -46,33 +47,32 @@ def sha256_of_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def source_digest(source_id: str) -> str:
-    """Digest of the whole approved original, used as `PolicySource.content_sha256`."""
-    return hashlib.sha256(_source_path(source_id).read_bytes()).hexdigest()
+def source_digest(source_id: str, version: str) -> str:
+    """Digest of one approved original version, used as `PolicySource.content_sha256`."""
+    return hashlib.sha256(_source_path(source_id, version).read_bytes()).hexdigest()
 
 
-def excerpt(source_id: str, locator: str) -> str:
-    """Return the normalized original excerpt a `SourceReference` locator points at."""
-    if source_id == "internal-cloud-security-checklist":
-        return _checklist_excerpt(_source_path(source_id), locator)
-    if source_id == "isms-p-2023":
-        return _isms_p_excerpt(_source_path(source_id), locator)
-    raise UnknownPolicySourceError(
-        f"unknown policy source {source_id!r}; register it in SOURCE_FILES"
-    )
+def excerpt(source_id: str, version: str, locator: str) -> str:
+    """Return the normalized excerpt a `SourceReference` points at in that source version."""
+    path = _source_path(source_id, version)
+    if path.suffix == ".md":
+        return _checklist_excerpt(path, locator)
+    if path.suffix == ".xlsx":
+        return _isms_p_excerpt(path, locator)
+    raise UnknownPolicySourceError(f"no excerpt parser for policy original {path.name!r}")
 
 
-def reference_digest(source_id: str, locator: str) -> str:
+def reference_digest(source_id: str, version: str, locator: str) -> str:
     """Digest of one excerpt, used as `SourceReference.content_sha256`."""
-    return sha256_of_text(excerpt(source_id, locator))
+    return sha256_of_text(excerpt(source_id, version, locator))
 
 
-def _source_path(source_id: str) -> Path:
+def _source_path(source_id: str, version: str) -> Path:
     try:
-        path = POLICIES_LOCAL / SOURCE_FILES[source_id]
+        path = POLICIES_LOCAL / SOURCE_FILES[(source_id, version)]
     except KeyError:
         raise UnknownPolicySourceError(
-            f"unknown policy source {source_id!r}; register it in SOURCE_FILES"
+            f"unknown policy source {source_id}@{version}; register it in SOURCE_FILES"
         ) from None
     if not path.is_file():
         raise PolicySourceUnavailableError(f"policy original not available: {path}")
@@ -177,12 +177,15 @@ def _xlsx_rows(path: Path) -> list[list[str]]:
         return rows
 
 
-def _registry_references() -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str, str]]]:
-    """Return committed source digests/versions and pinned locator references."""
+def _registry_references() -> tuple[dict[tuple[str, str], str], list[tuple[str, str, str, str]]]:
+    """Return committed digests keyed by (source_id, version) plus pinned references."""
     sources = json.loads((REGISTRY_DIR / "sources.json").read_text(encoding="utf-8"))
-    source_digests = {
-        entry["source_id"]: (entry["version"], entry["content_sha256"]) for entry in sources
-    }
+    source_digests: dict[tuple[str, str], str] = {}
+    for entry in sources:
+        key = (entry["source_id"], entry["version"])
+        if key in source_digests:
+            raise ValueError(f"duplicate policy source {key[0]}@{key[1]} in sources.json")
+        source_digests[key] = entry["content_sha256"]
 
     references: list[tuple[str, str, str, str]] = []
 
@@ -207,10 +210,13 @@ def _registry_references() -> tuple[dict[str, tuple[str, str]], list[tuple[str, 
 
 def _print_digests() -> int:
     source_digests, references = _registry_references()
-    for source_id, (version, _) in sorted(source_digests.items()):
-        print(f"source  {source_id}@{version:24s} {source_digest(source_id)}")
+    for source_id, version in sorted(source_digests):
+        print(f"source  {source_id}@{version:24s} {source_digest(source_id, version)}")
     for source_id, version, locator, _ in references:
-        print(f"ref     {source_id}@{version}#{locator:24s} {reference_digest(source_id, locator)}")
+        print(
+            f"ref     {source_id}@{version}#{locator:24s} "
+            f"{reference_digest(source_id, version, locator)}"
+        )
     return 0
 
 
@@ -218,38 +224,38 @@ def _verify() -> int:
     """Verify every available original. 원문이 없는 source만 건너뛰고 나머지는 반드시 검증한다."""
     source_digests, references = _registry_references()
     failures: list[str] = []
-    skipped: set[str] = set()
+    skipped: set[tuple[str, str]] = set()
     checked_sources = 0
     checked_references = 0
 
-    for source_id, (_, committed) in sorted(source_digests.items()):
+    for source_id, version in sorted(source_digests):
+        committed = source_digests[(source_id, version)]
         try:
-            actual = source_digest(source_id)
+            actual = source_digest(source_id, version)
         except PolicySourceUnavailableError:
-            skipped.add(source_id)
+            skipped.add((source_id, version))
             continue
         checked_sources += 1
         if actual != committed:
-            failures.append(f"source {source_id}: committed {committed}, actual {actual}")
+            failures.append(f"source {source_id}@{version}: committed {committed}, actual {actual}")
 
     for source_id, version, locator, committed in references:
-        declared = source_digests.get(source_id)
-        if declared is None or declared[0] != version:
+        if (source_id, version) not in source_digests:
             failures.append(
                 f"reference {source_id}@{version}#{locator}: pinned to an undeclared source version"
             )
             continue
-        if source_id in skipped:
+        if (source_id, version) in skipped:
             continue
-        actual = reference_digest(source_id, locator)
+        actual = reference_digest(source_id, version, locator)
         checked_references += 1
         if actual != committed:
             failures.append(
                 f"reference {source_id}@{version}#{locator}: committed {committed}, actual {actual}"
             )
 
-    for source_id in sorted(skipped):
-        print(f"Skipped {source_id}: policy original not available locally.")
+    for source_id, version in sorted(skipped):
+        print(f"Skipped {source_id}@{version}: policy original not available locally.")
     if failures:
         print("Policy source digests do NOT match the local originals:")
         for failure in failures:

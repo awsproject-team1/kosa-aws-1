@@ -233,6 +233,44 @@ class ProfileAllowListTest(unittest.TestCase):
         self.assertLess(len(references), total)
         self.assertEqual(len(references), len(set(references)))
 
+    def test_pins_the_profile_version_when_one_is_expected(self) -> None:
+        """비동기 Job은 승인 시점 Profile version으로 고정된다."""
+        context = self.resolver.resolve(
+            policy_profile_id=PROFILE_ID,
+            phase=AssessmentPhase.INITIAL,
+            resource_type=S3,
+            expected_profile_version="v2",
+        )
+
+        self.assertEqual(context.policy_profile_version, "v2")
+
+    def test_rejects_a_profile_replaced_after_approval(self) -> None:
+        """Job 생성 뒤 Profile이 교체되면 다른 allow-list로 평가하지 않고 실패한다."""
+        with self.assertRaisesRegex(PolicyNotFoundError, "policy profile version changed"):
+            self.resolver.resolve(
+                policy_profile_id=PROFILE_ID,
+                phase=AssessmentPhase.INITIAL,
+                resource_type=S3,
+                expected_profile_version="v1",
+            )
+
+    def test_context_allows_only_canonical_policy_evidence(self) -> None:
+        context = self.resolver.resolve(
+            policy_profile_id=PROFILE_ID, phase=AssessmentPhase.INITIAL, resource_type=S3
+        )
+
+        allowed = next(iter(context.policy_evidence_references))
+        self.assertIn("@", allowed)
+        self.assertTrue(context.allows_evidence(allowed))
+        # Resource 상태 근거는 별도 namespace로 허용한다.
+        self.assertTrue(context.allows_evidence("aws:s3:bucket/b#read-resource"))
+        self.assertTrue(context.allows_evidence("terraform:aws_s3_bucket_public_access_block"))
+        # version 없는 구 형식과 Context 밖 정책 근거는 거부한다.
+        self.assertFalse(context.allows_evidence("isms-p-2023#control/2.6.2"))
+        self.assertFalse(context.allows_evidence("isms-p-2023@2023-10-31#control/9.9.9"))
+        self.assertFalse(context.allows_evidence(""))
+        self.assertFalse(context.allows_evidence(None))
+
     def test_registered_ec2_rules_stay_out_of_the_approved_profile(self) -> None:
         """M1 평가 대상은 S3 단독이다. EC2 Rule은 Registry에만 있고 Profile에는 없다."""
         profile = self.registry.catalog.get_profile(PROFILE_ID)

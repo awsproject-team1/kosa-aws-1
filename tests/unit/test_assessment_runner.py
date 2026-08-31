@@ -13,6 +13,7 @@ from packages.contracts import (
     ModelProfileRole,
     PolicyRule,
     RuleSeverity,
+    ScoringMode,
     SourceReference,
 )
 
@@ -96,3 +97,65 @@ class AssessmentRunnerTest(unittest.TestCase):
             AssessmentRunner(Evaluator(result("EC2-001"))).evaluate_resource(
                 resource_id="bucket-001", context=context(), model_profile=MODEL_PROFILE
             )
+
+
+class _EvidenceStubEvaluator:
+    """Return a well-formed result whose evidence the runner must check."""
+
+    def __init__(self, evidence_references: tuple[str, ...]) -> None:
+        self._evidence_references = evidence_references
+
+    def evaluate(
+        self,
+        *,
+        resource_id: str,
+        rule: PolicyRule,
+        context: PolicyContext,
+        model_profile: ModelProfile,
+    ) -> EvaluationResult:
+        return EvaluationResult(
+            resource_id=resource_id,
+            rule_id=rule.rule_id,
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            status=EvaluationStatus.FAIL,
+            severity=rule.severity.value,
+            score=10,
+            rationale="stub",
+            evidence_references=self._evidence_references,
+            rule_version=rule.version,
+            rubric_version=model_profile.rubric_version,
+            model_profile_id=model_profile.model_profile_id,
+            scoring_mode=ScoringMode.CONTINUOUS,
+        )
+
+
+class EvidenceBoundaryTest(unittest.TestCase):
+    """평가기는 승인된 Policy Context 밖의 근거를 인용할 수 없다."""
+
+    def setUp(self) -> None:
+        self.context = context()
+        self.reference = self.context.rules[0].source_references[0]
+
+    def _run(self, evidence: tuple[str, ...]) -> tuple[EvaluationResult, ...]:
+        return AssessmentRunner(_EvidenceStubEvaluator(evidence)).evaluate_resource(
+            resource_id="bucket-001",
+            context=self.context,
+            model_profile=MODEL_PROFILE,
+        )
+
+    def test_accepts_canonical_policy_and_resource_evidence(self) -> None:
+        results = self._run(
+            (self.reference.evidence_reference, "aws:s3:bucket/bucket-001#read-resource")
+        )
+
+        self.assertEqual(len(results), len(self.context.rules))
+
+    def test_rejects_versionless_policy_evidence(self) -> None:
+        versionless = f"{self.reference.source_id}#{self.reference.locator}"
+
+        with self.assertRaisesRegex(EvaluationContractError, "outside the approved policy context"):
+            self._run((versionless,))
+
+    def test_rejects_evidence_outside_the_context(self) -> None:
+        with self.assertRaisesRegex(EvaluationContractError, "outside the approved policy context"):
+            self._run(("other-source@v1#control/1.1.1",))
