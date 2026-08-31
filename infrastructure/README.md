@@ -19,14 +19,21 @@ private versioned artifact bucket, Assessment/Remediation/Deployment queues with
 Cognito User Pool/client, HTTP API JWT authorizer, Job API Lambda, EventBridge-scheduled Outbox
 sweeper Lambda, and Assessment SQS Worker Lambda. The worker is deliberately restricted to the
 packaged synthetic S3 Fixture in M0. The HTTP API uses its `$default` stage with auto deployment,
-and the User Pool is retained on stack deletion or replacement. `LambdaCodeS3Bucket` and
-`LambdaCodeS3Key` must identify the versioned ZIP built by `scripts/package-m0-lambda.sh`; the
-script verifies that application imports and the required `fixtures/m0/` files are present.
-`.github/workflows/deploy-m0-foundation.yml` is the approval-gated manual GitHub Actions OIDC path
-that uploads that ZIP to the versioning-enabled customer-owned bucket and deploys the stack. The
-chosen GitHub Environment must be configured with required reviewers before a customer deployment.
-No stack is deployed from a local developer or Agent session. `AssessmentScopeJson` is a fail-closed,
-customer-scoped M0 selector map and must be supplied by the deployment workflow.
+and the User Pool is retained on stack deletion or replacement. `LambdaCodeS3Bucket`,
+`LambdaCodeS3Key`, and `LambdaCodeS3ObjectVersion` must identify the exact versioned ZIP built by
+`scripts/package-m0-lambda.sh`; the package-validation and deployment workflows pin Python 3.12,
+Git attributes normalize text files under `apps/`, `packages/`, and `fixtures/` to LF, and the
+script writes sorted entries with fixed metadata for a deterministic hash. It verifies application
+imports and the required `fixtures/m0/` files inside the same Python process without an early-exit
+shell pipeline. `.github/workflows/deploy-m0-foundation.yml` is the approval-gated
+manual GitHub Actions OIDC path. Its preparation job validates the expected AWS account against the
+role ARN, STS identity, and artifact-bucket owner; computes the ZIP SHA-256; and conditionally creates
+or verifies the matching commit-qualified object version. A second, distinct protected Environment
+then requires reviewers to approve that exact commit/key/hash/Version ID before the deployment job
+revalidates and pins it in every Lambda resource. Both Environments must be configured with required
+reviewers and the same `EXPECTED_AWS_ACCOUNT_ID`. No stack is deployed from a local developer or Agent
+session. `AssessmentScopeJson` is a fail-closed, customer-scoped M0 selector map and must be supplied
+by the deployment workflow.
 
 ## Storage hardening and validation
 
@@ -53,7 +60,9 @@ is not an acceptable tenant isolation boundary.
 The stack exposes metadata table and artifact bucket names and ARNs for runtime injection and
 least-privilege integrations. `ProjectName` and `Environment` constraints, including the
 account-qualified S3 naming exception, are documented in `parameters/README.md` and
-`docs/NAMING.md`.
+`docs/NAMING.md`. The non-deploying approval-input checklist and controlled sandbox CloudTrail
+acceptance procedure are in `parameters/m0-foundation-sandbox-deployment-runbook.md`; they must be
+completed through the protected GitHub Actions path, not from a local developer or Agent session.
 
 Run the same offline CloudFormation validation used by CI without deploying:
 
