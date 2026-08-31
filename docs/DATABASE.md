@@ -1,8 +1,8 @@
 # Database Design
 
-> Status: M0 foundation decision recorded — CloudFormation implementation pending
+> Status: M0 CloudFormation storage foundation implemented; application adapters and least-privilege IAM remain pending
 >
-> Scope: DynamoDB metadata/state and S3 artifact references. Detailed S3 bucket lifecycle and IAM policy are defined with infrastructure implementation.
+> Scope: DynamoDB metadata/state and S3 artifact references. The foundation defines storage security and retention; detailed S3 lifecycle and application IAM remain follow-up work.
 
 ## Decision summary
 
@@ -157,8 +157,6 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 
 | Decision | Owner | Needed by | Blocks |
 | --- | --- | --- | --- |
-| Official `<project>` resource-name prefix | Team | Infrastructure implementation | Final table/bucket names |
-| Job/checkpoint TTL duration | A + Security | Async Job implementation | Lifecycle configuration |
 | Audit/approval retention and Object Lock policy | A + Security | Before customer deployment | Compliance controls |
 | Per-assessment result volume and pagination threshold | C + A | Assessment implementation | Query/pagination limits |
 | Additional reporting/search index requirements | A/B/C/D | Before UI reporting implementation | GSI additions |

@@ -13,10 +13,12 @@
   IaC Snapshot/Patch/Plan, Read-Only AWS Query, Approval의 commit/plan binding
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
+- M0 A CloudFormation storage foundation 구현: DynamoDB/S3 보안·보존 설정, S3 TLS
+  강제 정책, 후속 IAM/adapter용 name·ARN Outputs 및 `cfn-lint` CI 검증
 
 ## Next
 
-- M0 A CloudFormation/IAM, injected DynamoDB/S3 adapter, Job API Handler 구현
+- M0 A 최소 권한 IAM, injected DynamoDB/S3 adapter, Job API Handler 구현
 - M0 Contract를 사용하는 Policy Context, Assessment, Remediation 구현을 Fixture/Mock으로 시작
 
 ## Blocked
