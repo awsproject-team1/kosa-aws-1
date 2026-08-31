@@ -5,6 +5,9 @@
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
+- 고객 사내 정책 수집은 미구현: 현재 Rule Registry와 `policies-local/`은 개발 seed이며, 업로드 →
+  형식 검증·파싱 → 정규화 → 사람 승인 → Profile 게시 경계는 `docs/POLICY_INGESTION.md`
+  (ADR-0014) 기준으로 A/B/C 통합 구현 대기
 
 ## Completed
 
@@ -44,6 +47,8 @@
 
 - M1 D: AWS Resource Tool의 실제 SDK/AssumeRole 통합과 GitHub Tool 경계 구현
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
+- M1 A/B/C Shared: 고객 Policy Source 업로드·정규화 Contract와 지원 형식 allow-list 확정 후,
+  tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현
 
 ## Blocked
 
@@ -67,7 +72,7 @@
 
 ### M1 — Initial Assessment MVP
 
-**Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다.
+**Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + 승인된 Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다. 정적 seed가 아닌 사용자 업로드 정책을 제품 기능으로 표시하려면 `docs/POLICY_INGESTION.md`의 별도 Delivery gate를 충족해야 한다.
 
 - [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장
 - [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공
@@ -75,7 +80,7 @@
 - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
 
-**Dependencies:** C는 B의 승인된 Policy Context와 D의 Snapshot/Read-Only Interface를 사용한다. A가 Job/상태 Contract를 제공한다.
+**Dependencies:** C는 B의 승인된 Policy Context와 D의 Snapshot/Read-Only Interface를 사용한다. A가 Job/상태 Contract를 제공한다. 고객 정책 업로드 기능은 A의 upload/storage, B의 normalization/approval, C의 AI extraction quality gate와 Shared 보안·통합 테스트가 모두 필요하다.
 
 ### M2 — Remediation and deployment readiness
 

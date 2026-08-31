@@ -25,6 +25,26 @@
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 
+## Planned customer policy ingestion endpoints
+
+아래 기능은 아직 구현되지 않았다. 사용자 업로드 정책을 지원하기 전에 A가 API/Storage를, B가
+정규화·승인 Contract를, C가 AI 추출 품질 Gate를 함께 확정해야 한다. 상세 workflow와 인수 조건은
+`docs/POLICY_INGESTION.md`를 따른다.
+
+| Method | Planned path | Purpose |
+| --- | --- | --- |
+| `POST` | `/policy-sources/uploads` | JWT-derived customer Scope의 업로드 세션 생성 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 업로드 검증과 비동기 파싱·정규화 시작 |
+| `GET` | `/policy-sources/{sourceId}/versions/{version}` | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 검토된 Source/Control/Rule version 승인 |
+
+업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
+그대로 사용하며 스스로 만들지 않는다.
+
+경로와 wire shape는 구현 PR의 Producer/Consumer Contract Review에서 최종 확정한다. Client는
+`customer_id`, S3 bucket/key, checksum 판정, parser/status를 직접 지정할 수 없다. 업로드 성공은
+정책 승인이나 Assessment 활성화를 의미하지 않는다.
+
 ## M0 boundary payloads
 
 - Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`를 지정한다. Resource/AWS

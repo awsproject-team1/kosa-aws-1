@@ -40,6 +40,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Repository | `CUSTOMER#{customer_id}` | `REPOSITORY#{repository_id}` | Approved GitHub repository and scope |
 | Policy profile | `CUSTOMER#{customer_id}` | `POLICY_PROFILE#{policy_profile_id}` | Allowed policy/rule boundary |
 | Policy source | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}` | Policy artifact identity, version, hash |
+| Policy ingestion | `CUSTOMER#{customer_id}` | `POLICY_INGESTION#{source_id}#VERSION#{version}` | Upload validation, parser/normalization status and immutable Artifact references |
 | Rule metadata | `CUSTOMER#{customer_id}` | `RULE#{rule_id}#VERSION#{version}` | Rule, source reference, lifecycle |
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
@@ -63,6 +64,8 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Base table | `CUSTOMER#{customer_id}` + `DEPLOYMENT#{deployment_id}` prefix | Deployment and approval records |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
+| Base table | `CUSTOMER#{customer_id}` + `POLICY_INGESTION#{source_id}#VERSION#{version}` | Processing status of one uploaded Policy Source version |
+| `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#INGESTION_STATUS#{status}`, `GSI2SK = updated_at#POLICY_INGESTION#{source_id}#VERSION#{version}` | Customer ingestion list by status and recency |
 | `GSI3` | `GSI3PK = REPOSITORY#{repository_id}`, `GSI3SK = started_at#ASSESSMENT#{assessment_id}` | Assessment history for an approved repository after scope validation |
 
 Only items requiring an access pattern populate the corresponding GSI attributes. No scan is permitted for request handling.
@@ -141,6 +144,16 @@ M0 Artifact type vocabulary is `POLICY_ORIGINAL`, `TERRAFORM_SNAPSHOT`, `AWS_SNA
 `REMEDIATION_PATCH`, `TERRAFORM_PLAN`, and `GOLDEN_DATASET`. Each reference persists its
 `artifact_id`, `content_sha256`, `customer_id`, and where relevant `repository_id`; no
 bucket/key is exposed through the public transport contract.
+
+고객 정책 수집을 구현할 때 `POLICY_NORMALIZED` Artifact type을 추가하고 `POLICY_ORIGINAL`과
+분리한다. Policy ingestion metadata는 원본 파일명, 선언/탐지 media type, byte size, parser
+ID/version, 처리 상태, 원본·정규화 Artifact ID/hash, warning/error code를 고객 partition에
+저장한다. 새 Source version은 기존 Artifact를 덮어쓰지 않으며, 승인 전에는 Policy Profile이
+참조할 수 없다. 상세 lifecycle과 보안 경계는 `docs/POLICY_INGESTION.md`를 따른다.
+
+Ingestion 레코드의 SK는 `POLICY_SOURCE#{source_id}#VERSION#{version}`과 같은 (source, version)
+좌표를 사용한다. 상태 조회 API는 별도 ingestion ID 없이 base table에서 직접 읽고, 고객 단위
+처리 목록은 `GSI2`의 `INGESTION_STATUS` partition으로 조회한다. 두 경로 모두 scan을 쓰지 않는다.
 
 ## Consistency, state, and retention
 

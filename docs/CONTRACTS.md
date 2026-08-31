@@ -86,6 +86,20 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가
 Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
 
+### Planned customer Policy Source ingestion boundary
+
+현재 `PolicySource`는 승인 완료된 Source의 최소 평가 Contract이며 업로드/파싱 상태 Contract가
+아니다. `policies-local/`과 커밋된 Rule Registry도 개발 seed일 뿐 고객 업로드 구현이 아니다.
+고객 정책 수집 구현 전 `packages/contracts/`에 원본 파일명, 선언/탐지 media type, byte size,
+원본 Artifact/hash, parser ID/version, 정규화 Artifact/hash, 처리 상태, 경고/실패 코드를 표현하는
+별도 ingestion Contract를 추가한다. Source 종류(`INTERNAL_POLICY`, `ISMS_P`)와 파일 형식은 서로
+다른 개념으로 유지한다.
+
+형식별 Parser는 `docs/POLICY_INGESTION.md`의 공통 Normalized Policy Document와 stable locator를
+생성해야 한다. `READY` 및 사람 승인 상태의 정확한 Source version에서 생성된 Rule만 Profile이
+참조할 수 있다. 이 Contract와 통합 테스트가 없으면 서비스는 임의 형식의 고객 문서를 읽거나
+평가할 수 있다고 간주하지 않는다. 결정 근거는 ADR-0014다.
+
 ## M0 Golden Dataset boundary
 
 `GoldenDatasetCase`는 case ID, Assessment Phase, Evaluation Perspective, Resource Snapshot Artifact ID,
