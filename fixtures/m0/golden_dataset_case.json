@@ -1,6 +1,7 @@
 {
   "case_id": "golden-s3-public-001",
   "phase": "INITIAL",
+  "perspective": "AWS_ACTUAL",
   "rubric_version": "mvp-v1",
   "scoring_mode": "CONTINUOUS",
   "resource_snapshot_artifact_id": "art-aws-snapshot-s3-public-001",

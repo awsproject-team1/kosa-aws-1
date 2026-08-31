@@ -10,6 +10,7 @@ def access_claims(*groups: str) -> dict[str, object]:
         "token_use": "access",
         "sub": "subject-001",
         "client_id": "client-001",
+        "custom:customer_id": "cust-001",
         "cognito:groups": list(groups),
     }
 
@@ -20,6 +21,7 @@ class AuthBoundaryTest(unittest.TestCase):
 
         self.assertEqual(principal.subject, "subject-001")
         self.assertEqual(principal.client_id, "client-001")
+        self.assertEqual(principal.customer_id, "cust-001")
         self.assertEqual(principal.roles, frozenset({Role.USER}))
         with self.assertRaisesRegex(AttributeError, "cannot assign"):
             principal.subject = "another-subject"  # type: ignore[misc]
@@ -41,6 +43,13 @@ class AuthBoundaryTest(unittest.TestCase):
         principal = Principal.from_verified_claims(access_claims("ExternalGroup", "User"))
 
         self.assertEqual(principal.roles, frozenset({Role.USER}))
+
+    def test_customer_scope_claim_is_required(self) -> None:
+        claims = access_claims("User")
+        del claims["custom:customer_id"]
+
+        with self.assertRaisesRegex(ValueError, "missing required claim: custom:customer_id"):
+            Principal.from_verified_claims(claims)
 
     def test_action_vocabulary_is_limited_to_the_approved_api_slice(self) -> None:
         self.assertEqual(

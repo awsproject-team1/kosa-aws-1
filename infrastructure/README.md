@@ -13,6 +13,9 @@ The stack must retain data by default. It must not create customer-workload writ
 Agent Runtime and AWS Resource Tool roles are read-only, and Terraform write permissions stay
 on the separately approved GitHub Actions OIDC Apply path.
 
-Implementation order: CloudFormation resource skeleton and outputs → least-privilege IAM
-roles/policies → injected DynamoDB/S3 adapters → API Gateway/Lambda handlers. No stack is
-deployed from a local developer or Agent session.
+`cloudformation/m0-foundation.yaml` implements this M0 resource skeleton: metadata table,
+private versioned artifact bucket, Assessment/Remediation/Deployment queues with DLQs, and
+separate API/Workflow runtime roles. The Python adapters and Job HTTP boundary remain injected
+so their unit tests require neither AWS credentials nor a locally deployed stack. Lambda/API
+Gateway packaging and Cognito authorizer wiring are deliberately deferred to the deployment
+integration slice. No stack is deployed from a local developer or Agent session.
