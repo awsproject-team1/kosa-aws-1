@@ -1,0 +1,4 @@
+*.sh text eol=lf
+apps/** text=auto eol=lf
+packages/** text=auto eol=lf
+fixtures/** text=auto eol=lf

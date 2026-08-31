@@ -6,6 +6,10 @@
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
 - M1 C 착수: 승인 Model Profile과 제한된 Snapshot Evidence를 사용하는 구조화 Bedrock 평가 어댑터 구현
+- M0 deployment readiness: 2단계 protected GitHub Environment 승인, expected-account fail-closed
+  검증, Python 3.12/LF-normalized 결정적 패키징, 재실행 가능한 exact SHA-256/S3 Version ID
+  Lambda artifact binding 및 customer-approved sandbox CloudTrail delivery/log-file-validation
+  절차 문서화 (실제 AWS 배포 승인 대기)
 
 ## Completed
 
@@ -39,6 +43,10 @@
   retention, CI-verified Lambda ZIP과 승인된 GitHub Actions OIDC deployment path 추가
 - PR #7 latest deployment review 반영: named IAM CloudFormation capability, pinned AWS OIDC
   credentials action, template-change `cfn-lint` CI를 추가
+- M0 storage hardening: account-qualified S3 이름 제약, DynamoDB deletion protection,
+  BucketOwnerEnforced/TLS deny, 리소스 태그, storage ARN Outputs와 pinned `cfn-lint` 검증 추가
+- PR #5 audit/tenant review 반영: ArtifactBucket CloudTrail S3 data event trail과 별도 retained
+  audit bucket, M0 Worker의 미사용 `customers/*` S3 권한 제거, 재현 가능한 YAML 보안 CI 추가
 - M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
@@ -63,7 +71,26 @@
 
 ## Blocked
 
-- 없음
+- **M1 Exit criteria의 `Finding`과 `Readiness Score`에 담당 역할이 없다.** (제기: B, 2026-08-31)
+
+  두 산출물은 Exit criteria와 `docs/PRD.md`의 제품 흐름에 있고 저장 모델까지 정의돼 있지만,
+  생산하는 코드가 없고 M1의 A/B/C/D 역할 항목 어디에도 들어 있지 않다.
+
+  | 산출물 | 정의된 것 | 없는 것 |
+  | --- | --- | --- |
+  | `Finding` | `docs/DATABASE.md` item(`ASSESSMENT#{id}#FINDING#{finding_id}`), Job step `GENERATE_FINDINGS`, M2 소비처(`RemediationPatch.finding_id`, `POST /findings/{findingId}/remediations`) | 생성 코드, `packages/contracts`의 Schema, 조회 API, 담당 역할 |
+  | `Readiness Score` | `docs/DATABASE.md`의 Assessment item 예시(`readiness_score`), `docs/PRD.md`가 서비스의 대표 점수로 규정 | 산출 코드, 계산 정의(Score/Severity/Coverage와의 관계), 담당 역할 |
+
+  M2의 `RemediationPatch`가 `finding_id`를 필수로 요구하므로, M1이 Finding을 생산하지 않으면
+  M2 Remediation 전체가 입력을 얻지 못한다.
+
+  - Decision: 두 산출물의 담당 역할과 M1 포함 여부
+  - Owner: 미정
+  - Needed by: M1 Exit criteria 판정 전
+  - Blocks: M1 종료 판정, M2 Remediation 착수
+  - Proposed options: (1) Finding 생성·조회는 A, Readiness Score 산출은 C가 맡는다
+    (2) 둘 다 평가 산출물로 보고 C가 맡는다 (3) M1 Exit criteria에서 빼고 M2로 옮긴다
+  - Final record: 미정
 
 ## Milestones
 
