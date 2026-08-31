@@ -26,6 +26,9 @@ MVP의 가치는 Rule 수가 아니라 실제 AWS 환경에서 `Assessment → F
 - 데모: Terraform으로 구성한 WordPress/LAMP 웹 서비스
 - 사용자: `Admin`, `User`
 - 화면: Login, Policy/Rule/Profile, Assessment, Finding/Report, Remediation Diff, PR/CI/Plan, Approval/Deployment, Audit
+- 정책 입력: 사용자가 고객 Scope 안에서 사내 정책 원문을 업로드하고, 검증·정규화·사람 승인을
+  마친 Policy Source/Rule/Profile을 Assessment에 선택한다. 저장 성공과 해석 가능 여부는 구분하며,
+  지원 문서 형식과 미지원 처리 기준은 `docs/POLICY_INGESTION.md`를 따른다.
 
 ## Development roles
 
@@ -86,3 +89,5 @@ Model/Prompt/Rubric Version과 평가 근거를 고정하고, 실행 결과에�
 - Golden Dataset과 반복 실행으로 Correctness, Evidence Reference Accuracy, Self-Agreement, Invariance, Sensitivity, 과대평가 여부를 검증한다. 초기 목표는 명확한 PASS/FAIL 정확도, Evidence Reference 정확도, 동일 Case 판정 일치율 각각 90% 이상 및 Score 반복 편차 ±10점 이내다.
 - Prompt, Model, Rubric, Rule 버전을 결과와 함께 기록해 회귀 원인을 추적한다.
 - 고객 경계 밖 데이터 접근 및 승인 없는 인프라 변경이 없어야 한다.
+- 사용자 업로드 정책을 지원한다고 표시하기 전, 업로드 → 정규화 → Rule 검토·승인 → Profile →
+  Assessment 경로와 tenant 격리를 E2E로 검증해야 한다.

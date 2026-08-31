@@ -7,6 +7,13 @@ React SPA (S3 + CloudFront)
 → Cognito (JWT)
 → API Gateway
 
+Customer policy upload
+→ customer-scoped S3 original
+→ validation + format-specific parser
+→ normalized policy artifact
+→ Control/Rule review and approval
+→ version-pinned Policy Profile
+
 Natural-language request
 → Parent Router Lambda (Policy Q&A + intent/scope proposal; sync, max 30s)
 → response or user-confirmed Job creation
@@ -54,6 +61,10 @@ Customer Workload (EC2 / RDS / ALB / S3)
   대응 Subgraph로 직접 진입하고, 자연어 요청만 Parent Orchestrator Agent를 거쳐
   의도·후보 scope에 맞는 Subgraph로 라우팅한다.
 - Storage: DynamoDB에는 상태와 메타데이터, S3에는 대형 Artifact를 저장한다.
+- Policy ingestion: 고객 정책 원본은 immutable S3 Artifact로 보존하고 비동기 검증·형식별 Parser가
+  공통 Policy Document로 정규화한다. 원본 업로드만으로 Assessment에 활성화하지 않으며, 사람이
+  승인한 Source/Rule/Profile version만 Policy Context가 사용한다. 상세 경계는
+  `docs/POLICY_INGESTION.md`가 정본이다.
 - Async execution: Assessment, Remediation, Deployment Worker는 역할별 SQS Standard
   Queue에서 `WorkflowTask`를 받아 실행한다. GitHub Actions의 Plan/Apply 완료 Event는
   EventBridge가 Deployment Queue로 전달한다.
@@ -134,7 +145,7 @@ Model, Prompt, Rubric, Rule, Policy Document, Context Retrieval 또는 Tool이 �
 | Role | Primary responsibility | Main areas |
 | --- | --- | --- |
 | **A — Platform/Backend** | 플랫폼 기반과 사용자·Job·상태 관리 | Cognito, API Gateway, 기능별 Lambda, Job/State, 공통 Storage, Frontend Skeleton |
-| **B — Policy/Governance Boundary** | AI가 평가할 수 있는 정책·통제 Boundary 제공 | Policy Source, Rule Registry/Validation, Policy Profile, Control/Resource Mapping, Source Reference, Policy Context |
+| **B — Policy/Governance Boundary** | AI가 평가할 수 있는 정책·통제 Boundary 제공 | 지원 문서 형식 정책, 정규화 Schema/locator, Policy Source lifecycle, Rule Registry/Validation, Policy Profile, Control/Resource Mapping, Source Reference, Policy Context |
 | **C — AI Evaluation** | Resource × Rule 평가와 AI 품질 관리 | Assessment Graph, AI Evaluator, Applicable Rule Selection, Evidence 판단, Severity, Score, Source Score/Risk, Assessment UI |
 | **D — Remediation/GitHub/Deployment** | Finding을 승인된 IaC 변경과 배포 검증으로 연결 | GitHub Integration Tool, AWS Resource Tool 연결, Terraform Remediation, PR/Plan/Approval/Apply/Post-Deploy |
 | **Shared** | 여러 영역의 호환성과 릴리스 품질 유지 | Contracts, Integration Test, C4/ADR, E2E |
@@ -142,6 +153,8 @@ Model, Prompt, Rubric, Rule, Policy Document, Context Retrieval 또는 Tool이 �
 - 역할 경계를 넘는 API·Schema 변경은 해당 Contract의 Producer와 Consumer Owner가 검토한다.
 - 구현체가 없지만 Contract가 확정된 의존성은 Fixture/Mock으로 병렬 개발한다.
 - 다른 역할의 기능은 작업 Branch에 직접 의존하지 않고, `dev`에 Merge된 Contract/구현을 기준으로 통합한다.
+- `fixtures/rules/`는 개발 seed다. 고객 정책 기능을 구현하는 Agent는 정적 Fixture를 운영 입력으로
+  연결하지 말고 `docs/POLICY_INGESTION.md`의 A/B/C 책임과 승인 Gate를 먼저 확인한다.
 
 ## Data model
 
@@ -149,4 +162,4 @@ Operational and domain metadata uses DynamoDB while large immutable artifacts us
 
 ## Decision records
 
-장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery, AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow, Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology를 다룬다.
+장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery, AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow, Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology, Customer Policy Ingestion을 다룬다.
