@@ -9,7 +9,17 @@ from agent.runtime.aws_resource_tool import (
     require_read_operation,
     require_scope,
 )
+from agent.runtime.github_tool import (
+    GitHubSnapshotNotFoundError,
+    GitHubTool,
+    GitHubToolError,
+    GitHubToolScopeError,
+    IaCSnapshotRequest,
+    require_repository_scope,
+    require_snapshot_request,
+)
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
+from agent.runtime.mock_github_tool import MockGitHubTool
 
 __all__ = [
     "AwsResourceNotFoundError",
@@ -17,7 +27,15 @@ __all__ = [
     "AwsResourceTool",
     "AwsResourceToolError",
     "AwsResourceView",
+    "GitHubSnapshotNotFoundError",
+    "GitHubTool",
+    "GitHubToolError",
+    "GitHubToolScopeError",
+    "IaCSnapshotRequest",
     "MockAwsResourceTool",
+    "MockGitHubTool",
     "require_read_operation",
+    "require_repository_scope",
     "require_scope",
+    "require_snapshot_request",
 ]

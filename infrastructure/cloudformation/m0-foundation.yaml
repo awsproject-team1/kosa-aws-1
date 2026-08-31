@@ -1,15 +1,19 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: M0 customer-scoped metadata, artifact, and asynchronous workflow foundation.
+Description: M0 customer-scoped metadata, artifact, audit, and asynchronous workflow foundation.
 
 Parameters:
   ProjectName:
     Type: String
-    AllowedPattern: "^[a-z][a-z0-9-]{1,30}$"
-    ConstraintDescription: Use 2-31 lowercase letters, digits, and hyphens, starting with a letter.
+    MinLength: 2
+    MaxLength: 31
+    AllowedPattern: "^(?!xn--)(?!sthree-)(?!amzn-s3-demo-)[a-z](?:[a-z0-9-]*[a-z0-9])?$"
+    ConstraintDescription: Use 2-31 lowercase letters, digits, and hyphens; start with a letter, end with a letter or digit, and avoid S3-reserved prefixes.
   Environment:
     Type: String
-    AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
-    ConstraintDescription: Use 2-16 lowercase letters, digits, and hyphens, starting with a letter.
+    MinLength: 2
+    MaxLength: 8
+    AllowedPattern: "^[a-z](?:[a-z0-9-]*[a-z0-9])?$"
+    ConstraintDescription: Use 2-8 lowercase letters, digits, and hyphens; start with a letter and end with a letter or digit.
   LambdaCodeS3Bucket:
     Type: String
     MinLength: 3
@@ -32,6 +36,7 @@ Resources:
     Properties:
       TableName: !Sub "${ProjectName}-${Environment}-metadata"
       BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -86,6 +91,13 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: metadata
 
   ArtifactBucket:
     Type: AWS::S3::Bucket
@@ -97,6 +109,9 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -104,6 +119,127 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: artifacts
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub "${ArtifactBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ArtifactAuditLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-audit-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: artifact-audit
+
+  ArtifactAuditLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref ArtifactAuditLogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailGetBucketAcl
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ArtifactAuditLogBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${Environment}-artifact-access"
+          - Sid: AllowCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${ArtifactAuditLogBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${Environment}-artifact-access"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactAuditLogBucket.Arn
+              - !Sub "${ArtifactAuditLogBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ArtifactAccessTrail:
+    Type: AWS::CloudTrail::Trail
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    DependsOn: ArtifactAuditLogBucketPolicy
+    Properties:
+      TrailName: !Sub "${ProjectName}-${Environment}-artifact-access"
+      S3BucketName: !Ref ArtifactAuditLogBucket
+      EnableLogFileValidation: true
+      IncludeGlobalServiceEvents: false
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EventSelectors:
+        - IncludeManagementEvents: false
+          ReadWriteType: All
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - !Sub "${ArtifactBucket.Arn}/"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: artifact-access-audit
 
   AssessmentDlq:
     Type: AWS::SQS::Queue
@@ -161,8 +297,10 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
+                # DynamoDB transactions authorize each underlying item action; there is no
+                # separate dynamodb:TransactWriteItems IAM action.
                 Action:
-                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"]
+                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
                 Resource:
                   - !GetAtt MetadataTable.Arn
                   - !Sub "${MetadataTable.Arn}/index/*"
@@ -184,7 +322,7 @@ Resources:
             Principal: {Service: lambda.amazonaws.com}
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: WorkflowStateAndArtifacts
+        - PolicyName: WorkflowStateAndDispatch
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -193,9 +331,6 @@ Resources:
                 Resource:
                   - !GetAtt MetadataTable.Arn
                   - !Sub "${MetadataTable.Arn}/index/*"
-              - Effect: Allow
-                Action: ["s3:GetObject", "s3:PutObject"]
-                Resource: !Sub "${ArtifactBucket.Arn}/customers/*"
               - Effect: Allow
                 Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
                 Resource:
@@ -349,9 +484,23 @@ Resources:
 
 Outputs:
   MetadataTableName:
+    Description: Name injected into Backend DynamoDB adapters.
     Value: !Ref MetadataTable
+  MetadataTableArn:
+    Description: ARN used by least-privilege IAM and integration consumers.
+    Value: !GetAtt MetadataTable.Arn
   ArtifactBucketName:
+    Description: Name injected into Backend S3 artifact adapters.
     Value: !Ref ArtifactBucket
+  ArtifactBucketArn:
+    Description: ARN used by least-privilege IAM and integration consumers.
+    Value: !GetAtt ArtifactBucket.Arn
+  ArtifactAuditLogBucketName:
+    Description: Name of the retained CloudTrail artifact-access audit destination.
+    Value: !Ref ArtifactAuditLogBucket
+  ArtifactAccessTrailArn:
+    Description: ARN of the trail recording ArtifactBucket S3 data events.
+    Value: !GetAtt ArtifactAccessTrail.Arn
   AssessmentQueueUrl:
     Value: !Ref AssessmentQueue
   RemediationQueueUrl:
