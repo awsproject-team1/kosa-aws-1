@@ -1,5 +1,6 @@
 """Runtime adapters and tool boundaries used by agent graphs."""
 
+from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
 from agent.runtime.aws_resource_tool import (
     AwsResourceNotFoundError,
     AwsResourceScopeError,
@@ -27,6 +28,7 @@ __all__ = [
     "AwsResourceTool",
     "AwsResourceToolError",
     "AwsResourceView",
+    "AssumeRoleS3ResourceTool",
     "GitHubSnapshotNotFoundError",
     "GitHubTool",
     "GitHubToolError",

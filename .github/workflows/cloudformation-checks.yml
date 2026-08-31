@@ -5,7 +5,11 @@ on:
     branches: [dev, main]
     paths:
       - "infrastructure/cloudformation/**"
+      - "infrastructure/parameters/**"
       - "tests/security/test_cloudformation_security.py"
+      - ".github/workflows/deploy-m0-foundation.yml"
+      - ".github/workflows/m0-lambda-package.yml"
+      - "scripts/package-m0-lambda.sh"
       - "requirements-dev.txt"
       - "requirements-dev.lock.txt"
       - ".github/workflows/cloudformation-checks.yml"

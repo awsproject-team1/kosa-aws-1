@@ -22,7 +22,7 @@ CASE = GoldenDatasetCase(
     expected_status=EvaluationStatus.FAIL,
     expected_score_min=0,
     expected_score_max=30,
-    expected_evidence_references=("aws:s3:public-access-block", "isms-p#5.2.1"),
+    expected_evidence_references=("aws:s3:public-access-block", "isms-p@2023-10-31#5.2.1"),
 )
 
 

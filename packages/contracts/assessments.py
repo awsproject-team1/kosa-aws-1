@@ -40,6 +40,37 @@ SCORE_ANCHORS = frozenset({0, 15, 30, 50, 70, 85, 100})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AssessmentCoverage:
+    """Completion against the immutable applicable evaluation plan."""
+
+    planned_evaluations: int
+    completed_evaluations: int
+
+    def __post_init__(self) -> None:
+        for field_name in ("planned_evaluations", "completed_evaluations"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{field_name} must not be negative")
+        if self.planned_evaluations == 0:
+            raise ValueError("planned_evaluations must be greater than zero")
+        if self.completed_evaluations > self.planned_evaluations:
+            raise ValueError("completed_evaluations must not exceed planned_evaluations")
+
+    @property
+    def percentage(self) -> float:
+        return round(self.completed_evaluations / self.planned_evaluations * 100, 2)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "planned_evaluations": self.planned_evaluations,
+            "completed_evaluations": self.completed_evaluations,
+            "percentage": self.percentage,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class EvaluationResult:
     """Validated Resource × Rule result produced by the AI evaluation boundary."""
 

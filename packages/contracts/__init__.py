@@ -2,6 +2,7 @@
 
 from packages.contracts.assessments import (
     SCORE_ANCHORS,
+    AssessmentCoverage,
     AssessmentPhase,
     EvaluationPerspective,
     EvaluationResult,
@@ -42,6 +43,7 @@ from packages.contracts.policy import (
 __all__ = [
     "ApiError",
     "ApiErrorResponse",
+    "AssessmentCoverage",
     "AssessmentPhase",
     "ArtifactReference",
     "ArtifactType",

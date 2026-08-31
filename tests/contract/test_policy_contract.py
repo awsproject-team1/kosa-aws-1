@@ -62,6 +62,10 @@ class PolicyContractTest(unittest.TestCase):
         self.assertEqual(source.to_dict(), fixture["policy_source"])
         self.assertEqual(rule.to_dict(), rule_data)
         self.assertEqual(profile.to_dict(), fixture["policy_profile"])
+        self.assertEqual(
+            rule.source_references[0].evidence_reference,
+            "isms-p-2023@2023.1#control/5.2.1",
+        )
 
     def test_golden_case_records_versioned_expected_range(self) -> None:
         fixture = json.loads(GOLDEN_CASE_PATH.read_text())
