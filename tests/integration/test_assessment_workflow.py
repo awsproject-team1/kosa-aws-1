@@ -144,9 +144,11 @@ class Table:
 class AssessmentWorkflowIntegrationTest(unittest.TestCase):
     def test_api_outbox_and_worker_persist_a_fixture_result(self) -> None:
         repository = WorkflowRepository()
+        queue = Queue()
         service = JobApiService(
             repository=repository,
             assessment_scope=ApprovedScope(),
+            outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=queue),
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )
@@ -160,10 +162,7 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
             principal,
             AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-mvp-baseline"),
         )
-        queue = Queue()
-        self.assertEqual(
-            OutboxDispatcher(repository=repository, dispatcher=queue).dispatch_pending(), 1
-        )
+        # API dispatches immediately; the sweeper remains a recovery path only.
 
         _, catalog = load_m0_fixture_catalog(FIXTURE_PATH)
         snapshot = json.loads(SNAPSHOT_PATH.read_text())

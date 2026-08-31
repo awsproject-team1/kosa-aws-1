@@ -4,7 +4,7 @@ import unittest
 
 from apps.backend.api.jobs import AssessmentRequest, JobApiService
 from apps.backend.auth import AuthorizationDenied, Principal, Role
-from apps.backend.jobs import AssessmentScopeDenied, JobNotFoundError, create_job
+from apps.backend.jobs import AssessmentScopeDenied, JobNotFoundError, OutboxDispatcher, create_job
 from packages.contracts import JobCurrentStep
 
 
@@ -13,6 +13,8 @@ class InMemoryJobRepository:
         self.jobs = {}
         self.assessments = {}
         self.outbox = {}
+        self.dispatched = []
+        self.failures = []
 
     def create_assessment_workflow(self, assessment, job, outbox) -> None:
         self.assessments[(assessment.customer_id, assessment.assessment_id)] = assessment
@@ -27,6 +29,23 @@ class InMemoryJobRepository:
 
     def update_job(self, job, *, expected_revision: int) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
+
+    def mark_outbox_dispatched(self, entry) -> None:
+        self.dispatched.append(entry)
+
+    def record_outbox_dispatch_failure(self, entry) -> None:
+        self.failures.append(entry)
+
+
+class Dispatcher:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.tasks = []
+
+    def dispatch(self, task) -> None:
+        if self.fail:
+            raise RuntimeError("SQS unavailable")
+        self.tasks.append(task)
 
 
 class ApprovedScope:
@@ -53,14 +72,18 @@ class JobApiServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repository = InMemoryJobRepository()
         self.scope = ApprovedScope()
+        self.dispatcher = Dispatcher()
         self.service = JobApiService(
             repository=self.repository,
             assessment_scope=self.scope,
+            outbox_dispatcher=OutboxDispatcher(
+                repository=self.repository, dispatcher=self.dispatcher
+            ),
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )
 
-    def test_create_uses_jwt_customer_and_dispatches_only_internal_task_fields(self) -> None:
+    def test_create_immediately_dispatches_only_internal_task_fields(self) -> None:
         response = self.service.create_assessment(
             principal(),
             AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-001"),
@@ -77,13 +100,35 @@ class JobApiServiceTest(unittest.TestCase):
         self.assertEqual(assessment.repository_id, "repo-001")
         self.assertEqual(assessment.policy_profile_id, "profile-001")
         self.assertEqual(
-            self.repository.outbox[("cust-001", "job-001")].task.to_dict(),
+            self.dispatcher.tasks[0].to_dict(),
             {
                 "job_id": "job-001",
                 "expected_revision": 0,
                 "command": "ASSESS_RESOURCE",
             },
         )
+        self.assertEqual(len(self.repository.dispatched), 1)
+
+    def test_create_keeps_the_outbox_retryable_when_immediate_dispatch_fails(self) -> None:
+        failed_dispatcher = Dispatcher(fail=True)
+        self.service = JobApiService(
+            repository=self.repository,
+            assessment_scope=self.scope,
+            outbox_dispatcher=OutboxDispatcher(
+                repository=self.repository, dispatcher=failed_dispatcher
+            ),
+            job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
+        )
+
+        response = self.service.create_assessment(
+            principal(),
+            AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-001"),
+        )
+
+        self.assertEqual(response.job_id, "job-001")
+        self.assertEqual(len(self.repository.failures), 1)
+        self.assertEqual(len(self.repository.dispatched), 0)
 
     def test_create_rejects_unapproved_selectors_before_persistence(self) -> None:
         self.scope.approved = False

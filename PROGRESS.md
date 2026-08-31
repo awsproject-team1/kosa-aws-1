@@ -26,6 +26,8 @@
 - M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
   Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
   강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
+- M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
+  EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,

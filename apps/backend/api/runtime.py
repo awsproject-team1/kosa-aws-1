@@ -59,10 +59,11 @@ def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
 
 
 def _http_handler() -> JobHttpHandler:
-    repository, _ = _workflow_components()
+    repository, dispatcher = _workflow_components()
     service = JobApiService(
         repository=repository,
         assessment_scope=EnvironmentAssessmentScope.from_environment(),
+        outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=dispatcher),
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
     )

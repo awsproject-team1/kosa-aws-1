@@ -11,7 +11,8 @@
   요청 body에 보낼 수 없다. Backend가 verified JWT와 server state에서 이 값을 결정한다.
 - Assessment, Remediation, Deployment의 public API는 Queue·Worker 이름 또는 checkpoint를
   노출하지 않는다. Backend는 검증 뒤 `WorkflowTask` outbox를 영속화하고 내부 dispatcher가 Queue로
-  전송하며 Client는 `GET /jobs/{jobId}`로 상태를 조회한다.
+  전송하며 Client는 `GET /jobs/{jobId}`로 상태를 조회한다. M0 Assessment API는 전송을 즉시 시도하고,
+  전송 실패 시 durable Outbox sweeper가 재시도한다.
 
 ## Initial endpoints
 
