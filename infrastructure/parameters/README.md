@@ -20,6 +20,7 @@ collisions; it is not supplied by the customer. Important physical names include
 
 - `${ProjectName}-${Environment}-metadata`
 - `${ProjectName}-${Environment}-artifacts-${AWS::AccountId}`
+- `${ProjectName}-${Environment}-audit-${AWS::AccountId}` (CloudTrail artifact-access audit destination)
 - `${ProjectName}-${Environment}-assessment`
 - `${ProjectName}-${Environment}-remediation`
 - `${ProjectName}-${Environment}-deployment`
@@ -41,5 +42,6 @@ A non-sensitive parameter file may use this shape:
 Local developers and Agent sessions validate the template but do not create or update the
 stack. Customer-specific parameters, stack termination protection, Lambda packaging, and stack
 updates belong to the approval-gated GitHub Actions OIDC deployment path. The template retains
-the table, artifact bucket, bucket policy, and Cognito User Pool if the stack or a resource
-replacement is requested.
+the table, artifact bucket, artifact audit bucket, both bucket policies, CloudTrail audit trail,
+and Cognito User Pool if the stack or a resource replacement is requested. The customer-approved
+deployment role must allow the template's CloudTrail and S3 audit-destination resources.

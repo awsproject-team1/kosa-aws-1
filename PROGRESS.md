@@ -31,6 +31,8 @@
   credentials action, template-change `cfn-lint` CI를 추가
 - M0 storage hardening: account-qualified S3 이름 제약, DynamoDB deletion protection,
   BucketOwnerEnforced/TLS deny, 리소스 태그, storage ARN Outputs와 pinned `cfn-lint` 검증 추가
+- PR #5 audit/tenant review 반영: ArtifactBucket CloudTrail S3 data event trail과 별도 retained
+  audit bucket, M0 Worker의 미사용 `customers/*` S3 권한 제거, 재현 가능한 YAML 보안 CI 추가
 - M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
