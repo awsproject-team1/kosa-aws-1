@@ -35,6 +35,14 @@
 - Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
   구분해 반환한다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할
   권한을 부여하지 않는다.
+- `GET /assessments/{assessmentId}`의 Coverage는 서버가 Assessment 시작 시 저장한 적용 가능
+  `Resource × Rule × Perspective` 계획을 분모로 사용한다. 응답에는
+  `planned_evaluations`, `completed_evaluations`, `percentage`가 포함되며,
+  `EXECUTION_ERROR`는 완료 수에 포함하지 않는다.
+- 결과 목록은 `limit`(1–100)과 opaque `cursor`로 페이지네이션한다. `coverage`는 페이지와
+  무관하게 전체 Assessment 결과를 기준으로 계산하며, `next_cursor`가 `null`이면 마지막 페이지다.
+  M1 React 화면은 `assessment_id` query parameter를 사용해 이 endpoint를 호출하고 결과를
+  추가 페이지로 표시한다.
 - IaC 변경이 필요한 Remediation 결과는 `IaCSnapshot`과 `RemediationPatch` Artifact
   reference를 반환한다. IaC가 이미 안전한 Actual Drift 동기화는 Patch 없이 IaC Snapshot의
   commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.

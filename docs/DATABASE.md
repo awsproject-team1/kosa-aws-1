@@ -45,6 +45,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
 | Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, score, coverage |
+| Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment and evidence references |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result and severity |
 | Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Patch, PR, source Finding references |

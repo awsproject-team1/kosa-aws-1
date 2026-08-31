@@ -3,9 +3,12 @@
 import json
 import unittest
 
+from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import JobApiService
+from apps.backend.assessment import AssessmentReport
 from apps.backend.jobs import OutboxDispatcher
+from packages.contracts import AssessmentCoverage
 
 
 class InMemoryJobRepository:
@@ -43,6 +46,22 @@ class ApprovedScope:
         return None
 
 
+class Reports:
+    def get_assessment_job_id(self, *, customer_id: str, assessment_id: str) -> str:
+        if customer_id != "cust-001" or assessment_id != "asm-001":
+            raise LookupError
+        return "job-001"
+
+    def get_report_page(
+        self, *, customer_id: str, assessment_id: str, limit: int, cursor: str | None
+    ):
+        return AssessmentReport(
+            assessment_id=assessment_id,
+            results=(),
+            coverage=AssessmentCoverage(planned_evaluations=1, completed_evaluations=0),
+        )
+
+
 def event(method: str, path: str, body: str | None = None) -> dict[str, object]:
     return {
         "rawPath": path,
@@ -74,7 +93,10 @@ class JobHttpHandlerTest(unittest.TestCase):
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )
-        self.handler = JobHttpHandler(service)
+        self.handler = JobHttpHandler(
+            service,
+            assessment_reports=AssessmentReportApiService(jobs=self.repository, reports=Reports()),
+        )
 
     def test_post_assessment_returns_accepted_public_job_projection(self) -> None:
         response = self.handler.handle(
@@ -118,3 +140,22 @@ class JobHttpHandlerTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 401)
         self.assertEqual(json.loads(response["body"])["error"]["code"], "UNAUTHORIZED")
+
+    def test_get_assessment_returns_paginated_report_after_job_owner_check(self) -> None:
+        self.handler.handle(
+            event(
+                "POST",
+                "/assessments",
+                '{"repository_id":"repo-001","policy_profile_id":"profile-001"}',
+            )
+        )
+
+        response = self.handler.handle(
+            {
+                **event("GET", "/assessments/asm-001"),
+                "queryStringParameters": {"limit": "10"},
+            }
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(json.loads(response["body"])["coverage"]["percentage"], 0)

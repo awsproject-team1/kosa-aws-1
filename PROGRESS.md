@@ -5,6 +5,7 @@
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
+- M1 C 착수: 승인 Model Profile과 제한된 Snapshot Evidence를 사용하는 구조화 Bedrock 평가 어댑터 구현
 
 ## Completed
 
@@ -26,6 +27,9 @@
 - M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
   Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
   강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
+- M1 C S3 Initial Assessment 코드 경계: 승인 Region Bedrock structured evaluator, read-only S3
+  Actual Evidence, immutable plan-based Coverage, paginated 결과 조회 API와 기본 React 화면 구현
+  (고객 Account Role·Bedrock 환경 설정은 D/A deployment 단계에서 주입)
 - M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
   EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool

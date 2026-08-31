@@ -55,6 +55,21 @@ ID, Prompt/Rubric Version, Golden Dataset Version을 하나의 immutable 승인 
 M0 Assessment 기본 Profile은 `fixtures/m0/assessment_model_profile.json`의
 `assessment-nova-lite-m0-v1`이며, `us-east-1`의 `amazon.nova-lite-v1:0`을 사용한다.
 
+M1 C의 Bedrock adapter는 injected Converse client로만 호출하며, 모델에는 선택된 Resource
+Snapshot과 해당 Rule·Profile 정보만 전달한다. 모델 응답은 `status`, `score`, `rationale`,
+`evidence_references` 네 필드의 JSON으로 한정된다. Resource/Rule/Perspective/Severity/Version과
+Model Profile은 Runtime이 authoritative input에서 재구성하고, evidence는 Snapshot과 Rule이
+허용한 locator의 부분집합만 허용한다.
+
+S3 MVP의 `AWS_ACTUAL` Evidence는 C가 D의 `AwsResourceTool.READ_RESOURCE`로
+`AWS::S3::Bucket` 한 건을 조회해 구성한다. C는 query의 Customer/Account/Resource ID와 응답의
+동일성을 다시 검증하고, Resource Tool이 제공하지 않는 Write 경로는 사용하지 않는다.
+
+M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule × Perspective` 수를 분모로
+사용한다. `PASS`, `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE` 결과는 완료된
+평가로 집계하고 `EXECUTION_ERROR`는 분모에 남겨 재시도·실패 범위를 드러낸다. 동일한
+Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
+
 ## Async Worker boundary
 
 `WorkflowTask`는 Queue에 Artifact 본문이나 고객 scope를 복사하지 않고 `job_id`,

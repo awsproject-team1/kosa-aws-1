@@ -1,4 +1,5 @@
 .ai/
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
