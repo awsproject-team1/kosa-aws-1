@@ -5,6 +5,11 @@ Format policy). openpyxl/python-docx를 쓰지 않는 이유는 취향이 아니
 
 `scripts/policy_source_digest.py`의 XLSX 원형이 다루지 못하던 세 가지를 여기서 처리한다:
 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름 locator.
+
+`xml.etree.ElementTree`는 내부 DTD 엔티티를 확장하며 Python 문서가 billion laughs에 취약하다고
+명시한다. zip 압축 한도는 이를 막지 못한다 — 증폭이 압축 해제 **이후** XML Parser 안에서
+일어나므로 선언 크기도 읽은 바이트도 작다. 정상 OOXML은 DTD를 쓰지 않으므로
+`_parse_xml()`이 파싱 전에 DOCTYPE 선언을 fail-closed로 거부한다.
 """
 
 from __future__ import annotations
@@ -50,6 +55,9 @@ MAX_COLUMN_INDEX = 1_024
 
 _CELL_REFERENCE = re.compile(r"^(?P<column>[A-Z]+)(?P<row>\d+)$")
 _HEADING_STYLE = re.compile(r"^heading\s*(?P<level>[1-6])$", re.IGNORECASE)
+# 루트 요소의 시작 태그. `<?xml`, `<!--`, `<!DOCTYPE`는 `<` 뒤가 문자가 아니라 걸리지 않는다.
+_ROOT_ELEMENT = re.compile(rb"<[A-Za-z_]")
+_DOCTYPE_DECLARATION = b"<!DOCTYPE"
 
 
 def parse_xlsx(payload: bytes) -> ParsedPolicyDocument:
@@ -184,6 +192,13 @@ def _add_sheet_rows(
             inline = inline or is_inline
             if value:
                 cells[column] = value
+        if row_index in grid:
+            # 같은 `r`을 가진 행이 둘이면 locator 하나가 두 행을 가리킨다. 덮어쓰면 정책
+            # 문서의 한 행이 경고 없이 사라지므로, 시트 이름 충돌과 같게 fail-closed로 막는다.
+            raise DocumentParseError(
+                IngestionFailureCode.AMBIGUOUS_LOCATOR,
+                f"worksheet {sheet_slug!r} declares row {row_index} more than once",
+            )
         grid[row_index] = cells
     if inline:
         builder.warn(ExtractionWarningCode.INLINE_STRINGS_PRESENT)
@@ -333,12 +348,31 @@ def _joined_text(node: ElementTree.Element, tag: str) -> str:
 
 
 def _parse_xml(data: bytes) -> ElementTree.Element:
+    _require_no_dtd(data)
     try:
         return ElementTree.fromstring(data)
     except ElementTree.ParseError as error:
         raise DocumentParseError(
             IngestionFailureCode.CORRUPTED_DOCUMENT, "an OOXML part is not well-formed XML"
         ) from error
+
+
+def _require_no_dtd(data: bytes) -> None:
+    """Refuse an OOXML part that declares a DTD, before any entity can expand.
+
+    `ElementTree`는 내부 엔티티를 확장하므로 수백 바이트짜리 part가 메모리에서 수백만 자로
+    불어날 수 있다. 정상 OOXML은 DTD를 선언하지 않으니 잃는 것이 없다. prolog 안에 있는
+    선언만 본다 — 본문의 `<`는 XML에서 escape되므로 여기까지 오지 않는다.
+    """
+    index = data.find(_DOCTYPE_DECLARATION)
+    if index == -1:
+        return
+    root = _ROOT_ELEMENT.search(data)
+    if root is None or index < root.start():
+        raise DocumentParseError(
+            IngestionFailureCode.XML_DTD_NOT_ALLOWED,
+            "an OOXML part declares a DTD, which is not allowed",
+        )
 
 
 def _column_index(reference: str | None, fallback: int) -> int:
