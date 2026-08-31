@@ -13,11 +13,12 @@ rm -f "${output_path}"
 
 (
   cd "${repository_root}"
-  zip --quiet --recurse-paths "${output_path}" apps packages fixtures \
+  zip --quiet --recurse-paths "${output_path}" agent apps packages fixtures \
     --exclude '*/__pycache__/*' '*.py[cod]'
 )
 
 for required_path in \
+  agent/runtime/__init__.py \
   apps/backend/api/runtime.py \
   apps/backend/assessment/runtime.py \
   packages/contracts/__init__.py \

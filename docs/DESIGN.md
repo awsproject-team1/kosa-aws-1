@@ -105,6 +105,9 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
 - `AgentRuntimeRole`: Customer Workload 읽기 전용 및 필요한 App Data
 - `TerraformPlanRole`: plan에 필요한 읽기 중심 권한
 - `TerraformDeploymentRole`: 제한된 Infrastructure write
+- 고객 AWS Account의 Read-only Role AssumeRole은 customer-role 연결마다 생성한 랜덤
+  `ExternalId`를 trust policy와 요청 양쪽에서 일치시켜 confused deputy를 방지하며, 임시
+  자격증명은 만료 60초 전까지만 메모리에 재사용한다.
 - `GitHubWorkflowEventRole`: GitHub Actions OIDC에서 Plan/Apply 완료 Event만 EventBridge에
   게시하는 최소 권한
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.

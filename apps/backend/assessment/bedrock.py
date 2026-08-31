@@ -83,7 +83,7 @@ class BedrockStructuredEvaluator:
         allowed_evidence = _unique_non_empty_strings(
             (
                 *self._evidence_references,
-                *(reference.locator for reference in rule.source_references),
+                *(reference.evidence_reference for reference in rule.source_references),
             ),
             "allowed evidence reference",
         )

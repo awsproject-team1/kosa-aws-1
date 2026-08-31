@@ -30,6 +30,9 @@
 - M1 C S3 Initial Assessment 코드 경계: 승인 Region Bedrock structured evaluator, read-only S3
   Actual Evidence, immutable plan-based Coverage, paginated 결과 조회 API와 기본 React 화면 구현
   (고객 Account Role·Bedrock 환경 설정은 D/A deployment 단계에서 주입)
+- PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
+  추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
+  API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
 - M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
   EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool
@@ -55,6 +58,8 @@
 - M1 D: read-only AWS Resource Tool + GitHub Integration Tool 경계 완료(PR #8) →
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
+- M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
+  DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration
 
 ## Blocked
 

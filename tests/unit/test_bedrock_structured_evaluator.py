@@ -33,7 +33,7 @@ RULE = PolicyRule(
     applicable_phases=(AssessmentPhase.INITIAL,),
     resource_types=("AWS::S3::Bucket",),
     source_references=(
-        SourceReference(source_id="isms-p", locator="isms-p:5.2.1", content_sha256="abc"),
+        SourceReference(source_id="isms-p", locator="control/5.2.1", content_sha256="abc"),
     ),
 )
 CONTEXT = PolicyContext(
@@ -75,7 +75,7 @@ class BedrockStructuredEvaluatorTest(unittest.TestCase):
                     "status": "FAIL",
                     "score": 21,
                     "rationale": "Public access block is disabled.",
-                    "evidence_references": ["aws:s3:GetPublicAccessBlock", "isms-p:5.2.1"],
+                    "evidence_references": ["aws:s3:GetPublicAccessBlock", "isms-p#control/5.2.1"],
                 }
             )
         )
@@ -89,7 +89,7 @@ class BedrockStructuredEvaluatorTest(unittest.TestCase):
         self.assertEqual(result.severity, "HIGH")
         self.assertEqual(result.status, EvaluationStatus.FAIL)
         self.assertEqual(
-            result.evidence_references, ("aws:s3:GetPublicAccessBlock", "isms-p:5.2.1")
+            result.evidence_references, ("aws:s3:GetPublicAccessBlock", "isms-p#control/5.2.1")
         )
         self.assertEqual(client.calls[0]["modelId"], PROFILE.model_id)
         message = client.calls[0]["messages"]

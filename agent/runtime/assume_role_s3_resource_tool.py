@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
+from time import time
 from typing import Protocol
 
 from agent.runtime.aws_resource_tool import (
@@ -39,20 +41,26 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
         customer_id: str,
         aws_account_id: str,
         role_arn: str,
+        external_id: str,
         sts: StsClient,
         s3_client_factory: Callable[[Mapping[str, str]], S3Client],
+        clock: Callable[[], float] = time,
     ) -> None:
         for name, value in (
             ("customer_id", customer_id),
             ("aws_account_id", aws_account_id),
             ("role_arn", role_arn),
+            ("external_id", external_id),
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
-        if sts is None or not callable(s3_client_factory):
-            raise TypeError("sts and s3_client_factory are required")
+        if sts is None or not callable(s3_client_factory) or not callable(clock):
+            raise TypeError("sts, s3_client_factory, and clock are required")
         self._customer_id, self._aws_account_id = customer_id, aws_account_id
         self._role_arn, self._sts, self._s3_client_factory = role_arn, sts, s3_client_factory
+        self._external_id, self._clock = external_id, clock
+        self._cached_credentials: Mapping[str, str] | None = None
+        self._credentials_expire_at: float | None = None
 
     def read_resource(self, query: AwsResourceQuery) -> AwsResourceView:
         query = require_read_operation(query, AwsResourceOperation.READ_RESOURCE)
@@ -117,20 +125,32 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
 
     def _s3(self) -> S3Client:
         try:
-            credentials = self._sts.assume_role(
-                RoleArn=self._role_arn, RoleSessionName="governance-read"
-            )
-            values = credentials.get("Credentials")
-            if not isinstance(values, Mapping):
-                raise ValueError
-            required = {
-                name: values[name] for name in ("AccessKeyId", "SecretAccessKey", "SessionToken")
-            }
-            if not all(isinstance(value, str) and value for value in required.values()):
-                raise ValueError
-            return self._s3_client_factory(required)
+            if self._cached_credentials is None or not self._credentials_are_valid():
+                response = self._sts.assume_role(
+                    RoleArn=self._role_arn,
+                    RoleSessionName="governance-read",
+                    ExternalId=self._external_id,
+                )
+                values = response.get("Credentials")
+                if not isinstance(values, Mapping):
+                    raise ValueError
+                required = {
+                    name: values[name]
+                    for name in ("AccessKeyId", "SecretAccessKey", "SessionToken")
+                }
+                if not all(isinstance(value, str) and value for value in required.values()):
+                    raise ValueError
+                self._cached_credentials = required
+                self._credentials_expire_at = _expiration_epoch(values.get("Expiration"))
+            return self._s3_client_factory(self._cached_credentials)
         except Exception:
             raise AwsResourceToolError("AWS read role assumption failed") from None
+
+    def _credentials_are_valid(self) -> bool:
+        return (
+            self._credentials_expire_at is not None
+            and self._credentials_expire_at > self._clock() + 60
+        )
 
     @staticmethod
     def _require_s3(query: AwsResourceQuery) -> None:
@@ -143,3 +163,11 @@ def _code(error: Exception) -> str | None:
     details = response.get("Error") if isinstance(response, Mapping) else None
     value = details.get("Code") if isinstance(details, Mapping) else None
     return value if isinstance(value, str) else None
+
+
+def _expiration_epoch(value: object) -> float | None:
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None

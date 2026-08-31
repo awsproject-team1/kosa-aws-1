@@ -43,6 +43,11 @@ class SourceReference:
             "content_sha256": self.content_sha256,
         }
 
+    @property
+    def evidence_reference(self) -> str:
+        """Canonical policy evidence identifier: ``{source_id}#{locator}``."""
+        return f"{self.source_id}#{self.locator}"
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PolicySource:
