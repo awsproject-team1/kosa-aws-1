@@ -17,7 +17,7 @@ class PolicyCatalog(Protocol):
 
     def get_profile(self, policy_profile_id: str) -> PolicyProfile | None: ...
 
-    def get_rule(self, rule_id: str) -> PolicyRule | None: ...
+    def get_rule(self, rule_id: str, version: str) -> PolicyRule | None: ...
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -68,7 +68,10 @@ class PolicyContextResolver:
         profile = self._catalog.get_profile(policy_profile_id)
         if profile is None:
             raise PolicyNotFoundError("policy profile not found")
-        rules = tuple(self._resolve_rule(rule_id) for rule_id in profile.rule_ids)
+        rules = tuple(
+            self._resolve_rule(reference.rule_id, reference.version)
+            for reference in profile.rule_references
+        )
         applicable = tuple(
             rule
             for rule in rules
@@ -84,8 +87,10 @@ class PolicyContextResolver:
             rules=applicable,
         )
 
-    def _resolve_rule(self, rule_id: str) -> PolicyRule:
-        rule = self._catalog.get_rule(rule_id)
+    def _resolve_rule(self, rule_id: str, version: str) -> PolicyRule:
+        rule = self._catalog.get_rule(rule_id, version)
         if rule is None:
             raise PolicyNotFoundError("policy profile references an unavailable rule")
+        if rule.rule_id != rule_id or rule.version != version:
+            raise PolicyNotFoundError("policy catalog returned a rule outside profile version pin")
         return rule

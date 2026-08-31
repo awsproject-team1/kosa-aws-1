@@ -13,9 +13,10 @@ The stack must retain data by default. It must not create customer-workload writ
 Agent Runtime and AWS Resource Tool roles are read-only, and Terraform write permissions stay
 on the separately approved GitHub Actions OIDC Apply path.
 
-`cloudformation/m0-foundation.yaml` implements this M0 resource skeleton: metadata table,
-private versioned artifact bucket, Assessment/Remediation/Deployment queues with DLQs, and
-separate API/Workflow runtime roles. The Python adapters and Job HTTP boundary remain injected
-so their unit tests require neither AWS credentials nor a locally deployed stack. Lambda/API
-Gateway packaging and Cognito authorizer wiring are deliberately deferred to the deployment
-integration slice. No stack is deployed from a local developer or Agent session.
+`cloudformation/m0-foundation.yaml` implements the M0 resource skeleton: metadata table,
+private versioned artifact bucket, Assessment/Remediation/Deployment queues with DLQs,
+Cognito User Pool/client, HTTP API JWT authorizer, Job API Lambda, EventBridge-scheduled Outbox
+sweeper Lambda, and Assessment SQS Worker Lambda. The worker is deliberately restricted to the
+packaged synthetic S3 Fixture in M0. `LambdaCodeS3Bucket` and `LambdaCodeS3Key` must identify a versioned ZIP
+created by CI; no stack is deployed from a local developer or Agent session. `AssessmentScopeJson`
+is a fail-closed, customer-scoped M0 selector map and must be supplied by the deployment workflow.

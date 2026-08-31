@@ -29,7 +29,7 @@
 - Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`를 지정한다. Resource/AWS
   Account Scope는 이후 Contract 확장 전까지 JWT claim과 승인된 Repository 설정에서 판정하며,
   현재 M0 요청 body에는 포함하지 않는다.
-- Policy Profile 조회·평가는 `PolicyProfile.rule_ids`의 versioned Rule만 사용하고,
+- Policy Profile 조회·평가는 `PolicyProfile.rule_references`로 version이 고정된 Rule만 사용하고,
   `SourceReference`를 Evidence locator로 반환한다.
 - Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
   구분해 반환한다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할

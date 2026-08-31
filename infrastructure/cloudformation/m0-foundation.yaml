@@ -10,6 +10,19 @@ Parameters:
     Type: String
     AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
     ConstraintDescription: Use 2-16 lowercase letters, digits, and hyphens, starting with a letter.
+  LambdaCodeS3Bucket:
+    Type: String
+    MinLength: 3
+    ConstraintDescription: Versioned deployment-artifact bucket containing the packaged Python ZIP.
+  LambdaCodeS3Key:
+    Type: String
+    MinLength: 1
+    ConstraintDescription: Object key for the packaged Python ZIP.
+  AssessmentScopeJson:
+    Type: String
+    Default: "{}"
+    NoEcho: true
+    ConstraintDescription: Customer-scoped approved repository/profile selector map for M0.
 
 Resources:
   MetadataTable:
@@ -148,8 +161,11 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:TransactWriteItems"]
-                Resource: !GetAtt MetadataTable.Arn
+                Action:
+                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"]
+                Resource:
+                  - !GetAtt MetadataTable.Arn
+                  - !Sub "${MetadataTable.Arn}/index/*"
               - Effect: Allow
                 Action: sqs:SendMessage
                 Resource: [!GetAtt AssessmentQueue.Arn, !GetAtt RemediationQueue.Arn, !GetAtt DeploymentQueue.Arn]
@@ -190,6 +206,139 @@ Resources:
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
 
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-${Environment}-users"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "${ProjectName}-${Environment}-api"
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+
+  ApiRuntimeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-api"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.lambda_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
+
+  OutboxSweeperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-outbox-sweeper"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.outbox_sweeper_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+
+  AssessmentWorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-assessment-worker"
+      Runtime: python3.12
+      Handler: apps.backend.assessment.runtime.lambda_handler
+      Role: !GetAtt WorkflowRuntimeRole.Arn
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          M0_SYNTHETIC_ASSESSMENT: "true"
+  AssessmentQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt AssessmentQueue.Arn
+      FunctionName: !Ref AssessmentWorkerFunction
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
+  OutboxSweepSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt OutboxSweeperFunction.Arn
+          Id: OutboxSweeper
+  AllowEventBridgeOutboxSweep:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OutboxSweeperFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt OutboxSweepSchedule.Arn
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api"
+      ProtocolType: HTTP
+  HttpApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+      Name: CognitoJwt
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiRuntimeFunction.Arn
+      PayloadFormatVersion: "2.0"
+  PostAssessmentsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /assessments"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetJobsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /jobs/{jobId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  AllowHttpApiInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiRuntimeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
 Outputs:
   MetadataTableName:
     Value: !Ref MetadataTable
@@ -201,3 +350,9 @@ Outputs:
     Value: !Ref RemediationQueue
   DeploymentQueueUrl:
     Value: !Ref DeploymentQueue
+  HttpApiEndpoint:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient

@@ -1,0 +1,109 @@
+"""AWS Lambda composition root for the M0 authenticated Job API and Outbox sweeper."""
+
+from __future__ import annotations
+
+import json
+import os
+import uuid
+from collections.abc import Mapping
+
+from apps.backend.api.handler import JobHttpHandler
+from apps.backend.api.jobs import AssessmentScope, JobApiService
+from apps.backend.auth import Principal
+from apps.backend.jobs import AssessmentScopeDenied, OutboxDispatcher, SqsWorkflowDispatcher
+from apps.backend.repositories import DynamoDbAssessmentWorkflowRepository
+
+
+class EnvironmentAssessmentScope(AssessmentScope):
+    """Fail-closed deployment configuration for approved customer selectors."""
+
+    def __init__(self, configured_scopes: Mapping[str, frozenset[tuple[str, str]]]) -> None:
+        self._configured_scopes = configured_scopes
+
+    @classmethod
+    def from_environment(cls) -> EnvironmentAssessmentScope:
+        raw = os.environ.get("ASSESSMENT_SCOPE_JSON")
+        if not raw:
+            return cls({})
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, Mapping):
+                raise ValueError
+            scopes = {
+                _required_string(customer_id, "customer_id"): _selector_pairs(entries)
+                for customer_id, entries in parsed.items()
+            }
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError("ASSESSMENT_SCOPE_JSON is invalid") from error
+        return cls(scopes)
+
+    def authorize(
+        self, principal: Principal, *, repository_id: str, policy_profile_id: str
+    ) -> None:
+        if (repository_id, policy_profile_id) not in self._configured_scopes.get(
+            principal.customer_id, frozenset()
+        ):
+            raise AssessmentScopeDenied("assessment selectors are outside configured scope")
+
+
+def lambda_handler(event: Mapping[str, object], context: object) -> dict[str, object]:
+    """API Gateway proxy entrypoint; Cognito JWT claims are validated by the HTTP handler."""
+    return _http_handler().handle(event)
+
+
+def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
+    """EventBridge-scheduled at-least-once dispatch of durable Assessment tasks."""
+    repository, dispatcher = _workflow_components()
+    dispatched = OutboxDispatcher(repository=repository, dispatcher=dispatcher).dispatch_pending()
+    return {"dispatched": dispatched}
+
+
+def _http_handler() -> JobHttpHandler:
+    repository, _ = _workflow_components()
+    service = JobApiService(
+        repository=repository,
+        assessment_scope=EnvironmentAssessmentScope.from_environment(),
+        job_id_factory=lambda: f"job-{uuid.uuid4()}",
+        assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
+    )
+    return JobHttpHandler(service)
+
+
+def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWorkflowDispatcher]:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    queue_url = _required_string(os.environ.get("ASSESSMENT_QUEUE_URL"), "ASSESSMENT_QUEUE_URL")
+    dynamodb = boto3.resource("dynamodb")
+    return (
+        DynamoDbAssessmentWorkflowRepository(
+            dynamodb.Table(table_name),
+            table_name=table_name,
+            transaction_client=boto3.client("dynamodb"),
+        ),
+        SqsWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
+    )
+
+
+def _selector_pairs(value: object) -> frozenset[tuple[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError
+    pairs: set[tuple[str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            raise ValueError
+        pairs.add(
+            (
+                _required_string(entry.get("repository_id"), "repository_id"),
+                _required_string(entry.get("policy_profile_id"), "policy_profile_id"),
+            )
+        )
+    return frozenset(pairs)
+
+
+def _required_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value

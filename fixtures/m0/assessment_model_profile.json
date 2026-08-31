@@ -1,0 +1,9 @@
+{
+  "model_profile_id": "assessment-nova-lite-m0-v1",
+  "role": "ASSESSMENT",
+  "region": "us-east-1",
+  "model_id": "amazon.nova-lite-v1:0",
+  "prompt_version": "assessment-s3-v1",
+  "rubric_version": "mvp-v1",
+  "golden_dataset_version": "m0-s3-v1"
+}

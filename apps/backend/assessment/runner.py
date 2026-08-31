@@ -3,7 +3,7 @@
 from typing import Protocol
 
 from apps.backend.policy import PolicyContext
-from packages.contracts import EvaluationResult, PolicyRule
+from packages.contracts import EvaluationResult, ModelProfile, PolicyRule
 
 
 class EvaluationContractError(ValueError):
@@ -12,7 +12,12 @@ class EvaluationContractError(ValueError):
 
 class Evaluator(Protocol):
     def evaluate(
-        self, *, resource_id: str, rule: PolicyRule, context: PolicyContext
+        self,
+        *,
+        resource_id: str,
+        rule: PolicyRule,
+        context: PolicyContext,
+        model_profile: ModelProfile,
     ) -> EvaluationResult: ...
 
 
@@ -25,15 +30,22 @@ class AssessmentRunner:
         self._evaluator = evaluator
 
     def evaluate_resource(
-        self, *, resource_id: str, context: PolicyContext
+        self, *, resource_id: str, context: PolicyContext, model_profile: ModelProfile
     ) -> tuple[EvaluationResult, ...]:
         if not isinstance(resource_id, str) or not resource_id.strip():
             raise ValueError("resource_id must be a non-empty string")
         if not isinstance(context, PolicyContext):
             raise TypeError("context must be a PolicyContext")
+        if not isinstance(model_profile, ModelProfile):
+            raise TypeError("model_profile must be a ModelProfile")
         results = tuple(
             self._validated_result(
-                self._evaluator.evaluate(resource_id=resource_id, rule=rule, context=context),
+                self._evaluator.evaluate(
+                    resource_id=resource_id,
+                    rule=rule,
+                    context=context,
+                    model_profile=model_profile,
+                ),
                 resource_id=resource_id,
                 rule_id=rule.rule_id,
                 rule_version=rule.version,
