@@ -98,7 +98,7 @@ Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
 형식별 Parser는 `docs/POLICY_INGESTION.md`의 공통 Normalized Policy Document와 stable locator를
 생성해야 한다. `READY` 및 사람 승인 상태의 정확한 Source version에서 생성된 Rule만 Profile이
 참조할 수 있다. 이 Contract와 통합 테스트가 없으면 서비스는 임의 형식의 고객 문서를 읽거나
-평가할 수 있다고 간주하지 않는다. 결정 근거는 ADR-0014다.
+평가할 수 있다고 간주하지 않는다. 결정 근거는 ADR-0015다.
 
 ## M0 Golden Dataset boundary
 

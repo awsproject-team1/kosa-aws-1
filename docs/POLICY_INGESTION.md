@@ -5,7 +5,7 @@
 > Delivery gate: this boundary must be implemented and integration-tested before the service claims
 > that a customer can evaluate against an uploaded internal policy.
 >
-> Decision record: `docs/decisions/ADR-0014-customer-policy-ingestion.md`
+> Decision record: `docs/decisions/ADR-0015-customer-policy-ingestion.md`
 
 ## Goal
 

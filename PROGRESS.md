@@ -7,7 +7,7 @@
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
 - 고객 사내 정책 수집은 미구현: 현재 Rule Registry와 `policies-local/`은 개발 seed이며, 업로드 →
   형식 검증·파싱 → 정규화 → 사람 승인 → Profile 게시 경계는 `docs/POLICY_INGESTION.md`
-  (ADR-0014) 기준으로 A/B/C 통합 구현 대기
+  (ADR-0015) 기준으로 A/B/C 통합 구현 대기
 
 ## Completed
 

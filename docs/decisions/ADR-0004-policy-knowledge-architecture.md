@@ -13,4 +13,4 @@ MVP에서는 RAG, Vector DB, Bedrock Knowledge Base를 사용하지 않는다. �
 Evidence에는 원문 locator 또는 content hash를 기록한다. 정책 문서가 Context Window를 초과할 정도로 증가하면 Retrieval 도입 여부를 별도 ADR로 재검토한다.
 
 이 ADR은 승인된 정책 지식을 평가에 전달하는 방식만 정한다. 고객이 사내 정책 원문을 업로드해
-Policy Source가 되기까지의 수집·정규화·승인 경계는 ADR-0014로 확장했다.
+Policy Source가 되기까지의 수집·정규화·승인 경계는 ADR-0015로 확장했다.
