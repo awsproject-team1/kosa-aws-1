@@ -10,11 +10,14 @@ the AWS table, lifecycle retention, index use, and API ownership need one shared
 ## Decision
 
 The customer-deployed M0 stack receives `ProjectName` and `Environment` CloudFormation
-parameters and derives physical resource names as `<project>-<env>-<component>`. It creates
-one on-demand DynamoDB metadata table and one private artifact bucket. The table enables
-server-side encryption, PITR, `expires_at` TTL, and the documented GSI1–GSI3 indexes. Data is
-retained by default; only terminal Job/checkpoint records get an `expires_at` 30 days after
-their terminal transition.
+parameters and normally derives physical resource names as `<project>-<env>-<component>`.
+Because S3 bucket names are globally scoped, the artifact bucket is the explicit exception:
+`<project>-<env>-artifacts-<account-id>`. It creates one on-demand DynamoDB metadata table and
+one private, versioned artifact bucket. The table enables deletion protection, server-side
+encryption, PITR, `expires_at` TTL, and the documented GSI1–GSI3 indexes. The bucket uses
+bucket-owner-enforced ownership, blocks public access, and denies non-TLS requests. Data and the
+bucket TLS policy are retained by default; only terminal Job/checkpoint records get an
+`expires_at` 30 days after their terminal transition.
 
 The Backend is the sole owner of tenant identity, opaque IDs, timestamps, revisions, keys,
 and TTL values. Clients provide approved scope selectors only. Job reads use the base-table
