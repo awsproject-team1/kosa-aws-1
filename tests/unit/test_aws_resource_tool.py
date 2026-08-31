@@ -148,6 +148,30 @@ class AwsResourceToolTest(unittest.TestCase):
             },
         )
 
+    def test_resource_view_isolates_attributes_from_caller_mutation(self) -> None:
+        source = {"public_access_block": True}
+        view = AwsResourceView(
+            aws_account_id=ACCOUNT_ID,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+            attributes=source,
+        )
+
+        source["public_access_block"] = False
+
+        self.assertEqual(view.attributes["public_access_block"], True)
+
+    def test_resource_view_attributes_reject_item_mutation(self) -> None:
+        view = AwsResourceView(
+            aws_account_id=ACCOUNT_ID,
+            resource_type="AWS::S3::Bucket",
+            resource_id="logs-bucket",
+            attributes={"public_access_block": True},
+        )
+
+        with self.assertRaises(TypeError):
+            view.attributes["injected"] = "x"  # type: ignore[index]
+
     def test_tool_rejects_resource_view_from_a_different_account(self) -> None:
         with self.assertRaises(ValueError):
             MockAwsResourceTool(

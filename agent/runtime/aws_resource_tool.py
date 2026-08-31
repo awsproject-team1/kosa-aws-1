@@ -9,6 +9,7 @@ and callers must not delegate that scope to policy or AI input.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Protocol
 
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
@@ -46,6 +47,9 @@ class AwsResourceView:
                 raise ValueError(f"{name} must be a non-empty string")
         if not isinstance(self.attributes, Mapping):
             raise TypeError("attributes must be a mapping")
+        # Defensively copy then wrap read-only so the promised immutability holds:
+        # a frozen field still aliases a caller's dict and allows item mutation.
+        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
 
     def to_dict(self) -> dict[str, object]:
         return {
