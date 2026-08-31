@@ -14,3 +14,9 @@ __pycache__/
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# 정책 원문은 저장소에 커밋하지 않는다 (ADR-0004). 이 저장소는 공개다.
+# 저장소에는 Rule 정의와 `SourceReference` locator만 둔다.
+policies-local/
+*.xlsx
+*.xls
