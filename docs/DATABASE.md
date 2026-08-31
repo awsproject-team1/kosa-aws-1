@@ -151,9 +151,11 @@ ID/version, 처리 상태, 원본·정규화 Artifact ID/hash, warning/error cod
 저장한다. 새 Source version은 기존 Artifact를 덮어쓰지 않으며, 승인 전에는 Policy Profile이
 참조할 수 없다. 상세 lifecycle과 보안 경계는 `docs/POLICY_INGESTION.md`를 따른다.
 
-Ingestion 레코드의 SK는 `POLICY_SOURCE#{source_id}#VERSION#{version}`과 같은 (source, version)
-좌표를 사용한다. 상태 조회 API는 별도 ingestion ID 없이 base table에서 직접 읽고, 고객 단위
-처리 목록은 `GSI2`의 `INGESTION_STATUS` partition으로 조회한다. 두 경로 모두 scan을 쓰지 않는다.
+Ingestion 레코드의 SK prefix는 `POLICY_INGESTION`이다. 별도 ingestion ID를 두지 않고
+`POLICY_INGESTION#{source_id}#VERSION#{version}`으로 `POLICY_SOURCE` 항목과 같은
+(source_id, version) 좌표를 공유하므로, 같은 Source version의 수집 상태와 승인된 Source가
+같은 키로 대응된다. 상태 조회 API는 이 SK로 base table에서 직접 읽고, 고객 단위 처리 목록은
+`GSI2`의 `INGESTION_STATUS` partition으로 조회한다. 두 경로 모두 scan을 쓰지 않는다.
 
 ## Consistency, state, and retention
 
