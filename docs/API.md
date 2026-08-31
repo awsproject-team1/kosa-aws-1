@@ -2,11 +2,16 @@
 
 ## Conventions
 
-- 인증: Cognito JWT. Backend가 Role과 Customer/Repository/AWS Account Scope를 검증한다.
+- 인증: Cognito access-token JWT. Backend는 `sub`, `client_id`, `custom:customer_id`,
+  `cognito:groups`를 fail-closed로 검증하고 Role과 Customer/Repository/AWS Account Scope를
+  검증한다.
 - 장시간 작업: `202 Accepted`와 `job_id`를 반환한다.
 - 모든 요청·응답은 버전 관리되는 `packages/contracts/` 스키마를 따른다.
 - Client는 `customer_id`, Job ID, Job revision, status, timestamp, TTL 또는 DynamoDB key를
   요청 body에 보낼 수 없다. Backend가 verified JWT와 server state에서 이 값을 결정한다.
+- Assessment, Remediation, Deployment의 public API는 Queue·Worker 이름 또는 checkpoint를
+  노출하지 않는다. Backend는 검증 뒤 `WorkflowTask` outbox를 영속화하고 내부 dispatcher가 Queue로
+  전송하며 Client는 `GET /jobs/{jobId}`로 상태를 조회한다.
 
 ## Initial endpoints
 
@@ -21,13 +26,17 @@
 
 ## M0 boundary payloads
 
-- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`와 Resource/AWS
-  Account Scope를 지정한다. Backend는 요청 값이 아니라 JWT claim으로 Customer와 허용
-  scope를 판정한다.
+- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`를 지정한다. Resource/AWS
+  Account Scope는 이후 Contract 확장 전까지 JWT claim과 승인된 Repository 설정에서 판정하며,
+  현재 M0 요청 body에는 포함하지 않는다.
 - Policy Profile 조회·평가는 `PolicyProfile.rule_ids`의 versioned Rule만 사용하고,
   `SourceReference`를 Evidence locator로 반환한다.
-- Remediation 생성 결과는 `IaCSnapshot`과 `RemediationPatch` Artifact reference를
-  반환한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.
+- Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
+  구분해 반환한다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할
+  권한을 부여하지 않는다.
+- IaC 변경이 필요한 Remediation 결과는 `IaCSnapshot`과 `RemediationPatch` Artifact
+  reference를 반환한다. IaC가 이미 안전한 Actual Drift 동기화는 Patch 없이 IaC Snapshot의
+  commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.
 - Deployment 승인 요청은 `commit_sha`와 `plan_hash`를 포함한다. Backend는 저장된
   `TerraformPlan`과 정확히 일치할 때만 승인 상태를 기록하며, Apply 직전에 다시 검증한다.
 
@@ -42,14 +51,22 @@ Workflow만 Job의 `status`, `current_step`, 연결된 domain ID를 변경할 �
 base-table read 뒤 Job owner/administrator authorization을 적용한다. GSI1로 ID를 먼저
 찾아 authorization을 우회해서는 안 된다.
 
+명시적 Assessment·Remediation·Deployment 요청은 대응 Workflow를 직접 시작한다. 자연어
+요청의 Parent는 30초 안에 Policy Q&A 응답 또는 실행 제안만 반환한다. Job을 만들거나
+실행을 시작하는 것은 사용자 확인 뒤의 Backend API뿐이다. GitHub Actions의 Plan/Apply 완료는
+OIDC EventBridge Event를 통해 Deployment Worker를 재개하며, Client callback은 사용하지 않는다.
+
 ## Error envelope
 
 ```json
 {
-  "code": "SCOPE_DENIED",
-  "message": "The requested repository is outside the approved scope.",
-  "request_id": "req_..."
+  "error": {
+    "code": "SCOPE_DENIED",
+    "message": "The requested resource is outside the approved scope"
+  }
 }
 ```
 
-초기 오류 코드: `UNAUTHORIZED`, `FORBIDDEN`, `SCOPE_DENIED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `EXECUTION_ERROR`.
+`packages/contracts.ApiErrorResponse`가 error envelope의 실행 가능한 정본이다. 초기 오류 코드:
+`UNAUTHORIZED`, `SCOPE_DENIED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`,
+`EXECUTION_ERROR`.

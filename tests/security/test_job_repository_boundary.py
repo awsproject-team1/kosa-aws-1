@@ -43,6 +43,7 @@ class JobRepositoryBoundarySecurityTest(unittest.TestCase):
         other_user = Principal(
             subject="other-subject",
             client_id="client-001",
+            customer_id="cust-001",
             roles=frozenset({Role.USER}),
         )
 
@@ -61,7 +62,7 @@ class JobRepositoryBoundarySecurityTest(unittest.TestCase):
                     operation()
                 public = sanitize_public_error(caught.exception).to_dict()
                 serialized = str(public)
-                self.assertEqual(public["code"], "EXTERNAL_SERVICE_ERROR")
+                self.assertEqual(public["code"], "EXECUTION_ERROR")
                 for secret in (
                     "AKIAEXAMPLE",
                     "provider-secret",
@@ -77,7 +78,7 @@ class JobRepositoryBoundarySecurityTest(unittest.TestCase):
 
         self.assertEqual(
             public,
-            {"code": "INTERNAL_ERROR", "message": "An internal error occurred"},
+            {"code": "EXECUTION_ERROR", "message": "An internal error occurred"},
         )
 
 

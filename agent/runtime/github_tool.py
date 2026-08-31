@@ -11,7 +11,7 @@ policy or AI input.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from packages.contracts import IaCSnapshot
 
@@ -55,6 +55,7 @@ class IaCSnapshotRequest:
         }
 
 
+@runtime_checkable
 class GitHubTool(Protocol):
     """Read-only operations required to inspect Customer IaC state."""
 
@@ -71,4 +72,21 @@ def require_snapshot_request(request: object) -> IaCSnapshotRequest:
     """
     if not isinstance(request, IaCSnapshotRequest):
         raise TypeError("request must be an IaCSnapshotRequest")
+    return request
+
+
+def require_repository_scope(
+    request: IaCSnapshotRequest, *, customer_id: str, repository_id: str
+) -> IaCSnapshotRequest:
+    """Require a request to stay within one approved (customer, repo) scope.
+
+    ADR-0007 grants least-privilege access to approved Customer IaC
+    repositories only. This shared guard enforces that scope axis so every
+    adapter (mock or real GitHub App) applies the same check instead of
+    relying on per-adapter convention.
+    """
+    if not isinstance(request, IaCSnapshotRequest):
+        raise TypeError("request must be an IaCSnapshotRequest")
+    if request.customer_id != customer_id or request.repository_id != repository_id:
+        raise GitHubToolScopeError("request customer_id/repository_id is outside the tool scope")
     return request

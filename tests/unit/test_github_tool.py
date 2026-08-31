@@ -4,9 +4,11 @@ import unittest
 
 from agent.runtime import (
     GitHubSnapshotNotFoundError,
+    GitHubTool,
     GitHubToolScopeError,
     IaCSnapshotRequest,
     MockGitHubTool,
+    require_repository_scope,
     require_snapshot_request,
 )
 from packages.contracts import ArtifactReference, ArtifactType, IaCSnapshot
@@ -90,9 +92,31 @@ class GitHubToolTest(unittest.TestCase):
         public_methods = {name for name in dir(MockGitHubTool) if not name.startswith("_")}
         self.assertEqual(public_methods, {"read_iac_snapshot"})
 
+    def test_mock_tool_satisfies_the_github_tool_protocol(self) -> None:
+        self.assertIsInstance(build_tool(), GitHubTool)
+
     def test_require_snapshot_request_rejects_non_request_objects(self) -> None:
         with self.assertRaises(TypeError):
             require_snapshot_request(object())
+
+    def test_require_repository_scope_rejects_out_of_scope_request(self) -> None:
+        with self.assertRaises(GitHubToolScopeError):
+            require_repository_scope(
+                snapshot_request(commit_sha=COMMIT_A),
+                customer_id="cust-999",
+                repository_id=REPOSITORY_ID,
+            )
+
+    def test_tool_rejects_duplicate_commit_snapshots(self) -> None:
+        with self.assertRaises(ValueError):
+            MockGitHubTool(
+                customer_id=CUSTOMER_ID,
+                repository_id=REPOSITORY_ID,
+                snapshots=[
+                    build_snapshot(commit_sha=COMMIT_A),
+                    build_snapshot(commit_sha=COMMIT_A),
+                ],
+            )
 
     def test_snapshot_request_round_trips_to_dict(self) -> None:
         request = snapshot_request(commit_sha=COMMIT_A)

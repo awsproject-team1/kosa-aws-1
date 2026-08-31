@@ -10,8 +10,8 @@ from collections.abc import Iterable
 
 from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
-    GitHubToolScopeError,
     IaCSnapshotRequest,
+    require_repository_scope,
     require_snapshot_request,
 )
 from packages.contracts import IaCSnapshot
@@ -39,6 +39,8 @@ class MockGitHubTool:
                 raise ValueError("snapshot customer_id must match tool scope")
             if snapshot.repository_id != repository_id:
                 raise ValueError("snapshot repository_id must match tool scope")
+            if snapshot.commit_sha in self._by_commit:
+                raise ValueError(f"duplicate snapshot for commit {snapshot.commit_sha!r}")
             self._by_commit[snapshot.commit_sha] = snapshot
 
     def read_iac_snapshot(self, request: IaCSnapshotRequest) -> IaCSnapshot:
@@ -53,10 +55,11 @@ class MockGitHubTool:
         return snapshot
 
     def _require_scope(self, request: IaCSnapshotRequest) -> None:
-        if request.customer_id != self._customer_id or request.repository_id != self._repository_id:
-            raise GitHubToolScopeError(
-                "request customer_id/repository_id is outside the tool scope"
-            )
+        require_repository_scope(
+            request,
+            customer_id=self._customer_id,
+            repository_id=self._repository_id,
+        )
 
 
 def _require_non_empty_string(value: object, field_name: str) -> None:

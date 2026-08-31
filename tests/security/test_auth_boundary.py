@@ -17,6 +17,7 @@ def access_claims(*groups: object) -> dict[str, object]:
         "token_use": "access",
         "sub": "subject-001",
         "client_id": "client-001",
+        "custom:customer_id": "cust-001",
         "cognito:groups": list(groups),
     }
 
@@ -24,7 +25,7 @@ def access_claims(*groups: object) -> dict[str, object]:
 class AuthBoundarySecurityTest(unittest.TestCase):
     def test_missing_or_malformed_identity_claims_are_denied(self) -> None:
         invalid_claims: list[tuple[str, dict[str, object]]] = []
-        for name in ("token_use", "sub", "client_id", "cognito:groups"):
+        for name in ("token_use", "sub", "client_id", "custom:customer_id", "cognito:groups"):
             claims = access_claims("User")
             del claims[name]
             invalid_claims.append((f"missing {name}", claims))
