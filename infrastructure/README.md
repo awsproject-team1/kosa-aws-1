@@ -17,6 +17,12 @@ on the separately approved GitHub Actions OIDC Apply path.
 private versioned artifact bucket, Assessment/Remediation/Deployment queues with DLQs,
 Cognito User Pool/client, HTTP API JWT authorizer, Job API Lambda, EventBridge-scheduled Outbox
 sweeper Lambda, and Assessment SQS Worker Lambda. The worker is deliberately restricted to the
-packaged synthetic S3 Fixture in M0. `LambdaCodeS3Bucket` and `LambdaCodeS3Key` must identify a versioned ZIP
-created by CI; no stack is deployed from a local developer or Agent session. `AssessmentScopeJson`
-is a fail-closed, customer-scoped M0 selector map and must be supplied by the deployment workflow.
+packaged synthetic S3 Fixture in M0. The HTTP API uses its `$default` stage with auto deployment,
+and the User Pool is retained on stack deletion or replacement. `LambdaCodeS3Bucket` and
+`LambdaCodeS3Key` must identify the versioned ZIP built by `scripts/package-m0-lambda.sh`; the
+script verifies that application imports and the required `fixtures/m0/` files are present.
+`.github/workflows/deploy-m0-foundation.yml` is the approval-gated manual GitHub Actions OIDC path
+that uploads that ZIP to the versioning-enabled customer-owned bucket and deploys the stack. The
+chosen GitHub Environment must be configured with required reviewers before a customer deployment.
+No stack is deployed from a local developer or Agent session. `AssessmentScopeJson` is a fail-closed,
+customer-scoped M0 selector map and must be supplied by the deployment workflow.

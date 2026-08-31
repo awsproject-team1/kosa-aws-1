@@ -1,0 +1,90 @@
+name: Deploy M0 Foundation
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: CloudFormation stack name
+        required: true
+        type: string
+      project_name:
+        description: ProjectName CloudFormation parameter
+        required: true
+        type: string
+      environment:
+        description: Environment CloudFormation parameter and protected GitHub Environment
+        required: true
+        type: environment
+      aws_region:
+        description: Customer deployment region
+        required: true
+        default: us-east-1
+        type: string
+      role_to_assume:
+        description: Customer-approved GitHub Actions OIDC deployment role ARN
+        required: true
+        type: string
+      lambda_code_s3_bucket:
+        description: Versioned customer-owned bucket for the Lambda ZIP
+        required: true
+        type: string
+      assessment_scope_json:
+        description: Approved M0 customer/repository/profile selector map
+        required: true
+        default: '{}'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The selected GitHub Environment must require reviewers before this manual
+    # workflow is enabled for a customer deployment.
+    environment: ${{ inputs.environment }}
+    env:
+      STACK_NAME: ${{ inputs.stack_name }}
+      PROJECT_NAME: ${{ inputs.project_name }}
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+      AWS_REGION: ${{ inputs.aws_region }}
+      LAMBDA_CODE_S3_BUCKET: ${{ inputs.lambda_code_s3_bucket }}
+      ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Build and verify the Lambda ZIP
+        run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"
+
+      - name: Configure customer deployment credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ inputs.role_to_assume }}
+          role-session-name: m0-foundation-deploy
+
+      - name: Upload immutable Lambda ZIP
+        env:
+          LAMBDA_CODE_S3_KEY: lambda/m0/${{ github.sha }}.zip
+        run: |
+          set -euo pipefail
+          test "$(aws s3api get-bucket-versioning --bucket "${LAMBDA_CODE_S3_BUCKET}" --query Status --output text)" = "Enabled"
+          aws s3 cp "${RUNNER_TEMP}/m0-lambda.zip" \
+            "s3://${LAMBDA_CODE_S3_BUCKET}/${LAMBDA_CODE_S3_KEY}"
+          echo "LAMBDA_CODE_S3_KEY=${LAMBDA_CODE_S3_KEY}" >> "${GITHUB_ENV}"
+
+      - name: Deploy CloudFormation stack
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/m0-foundation.yaml \
+            --stack-name "${STACK_NAME}" \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "Environment=${DEPLOYMENT_ENVIRONMENT}" \
+              "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
+              "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
+              "AssessmentScopeJson=${ASSESSMENT_SCOPE_JSON}" \
+            --no-fail-on-empty-changeset
