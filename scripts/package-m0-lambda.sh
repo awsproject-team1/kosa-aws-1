@@ -29,8 +29,9 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 output_path = Path(sys.argv[1])
 repository_root = Path.cwd()
-source_roots = (Path("apps"), Path("packages"), Path("fixtures"))
+source_roots = (Path("agent"), Path("apps"), Path("packages"), Path("fixtures"))
 required_paths = {
+    "agent/runtime/__init__.py",
     "apps/backend/api/runtime.py",
     "apps/backend/assessment/runtime.py",
     "packages/contracts/__init__.py",
