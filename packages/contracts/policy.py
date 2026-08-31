@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
-from packages.contracts.assessments import AssessmentPhase, EvaluationStatus, ScoringMode
+from packages.contracts.assessments import (
+    AssessmentPhase,
+    EvaluationPerspective,
+    EvaluationStatus,
+    ScoringMode,
+)
 
 
 class PolicySourceKind(StrEnum):
@@ -108,24 +113,40 @@ class PolicyRule:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PolicyRuleReference:
+    """An immutable Profile reference to one exact version of a Policy Rule."""
+
+    rule_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.rule_id, "rule_id")
+        require_non_empty_string(self.version, "version")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"rule_id": self.rule_id, "version": self.version}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PolicyProfile:
     policy_profile_id: str
     version: str
-    rule_ids: tuple[str, ...]
+    rule_references: tuple[PolicyRuleReference, ...]
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.policy_profile_id, "policy_profile_id")
         require_non_empty_string(self.version, "version")
-        if not self.rule_ids:
-            raise ValueError("rule_ids must not be empty")
-        for rule_id in self.rule_ids:
-            require_non_empty_string(rule_id, "rule_ids item")
+        if not self.rule_references:
+            raise ValueError("rule_references must not be empty")
+        for reference in self.rule_references:
+            if not isinstance(reference, PolicyRuleReference):
+                raise TypeError("rule_references items must be PolicyRuleReference values")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "policy_profile_id": self.policy_profile_id,
             "version": self.version,
-            "rule_ids": list(self.rule_ids),
+            "rule_references": [reference.to_dict() for reference in self.rule_references],
         }
 
 
@@ -133,6 +154,7 @@ class PolicyProfile:
 class GoldenDatasetCase:
     case_id: str
     phase: AssessmentPhase
+    perspective: EvaluationPerspective
     rubric_version: str
     scoring_mode: ScoringMode
     resource_snapshot_artifact_id: str
@@ -146,6 +168,8 @@ class GoldenDatasetCase:
             require_non_empty_string(getattr(self, name), name)
         if not isinstance(self.phase, AssessmentPhase):
             raise TypeError("phase must be an AssessmentPhase")
+        if not isinstance(self.perspective, EvaluationPerspective):
+            raise TypeError("perspective must be an EvaluationPerspective")
         if not isinstance(self.scoring_mode, ScoringMode):
             raise TypeError("scoring_mode must be a ScoringMode")
         if not isinstance(self.expected_status, EvaluationStatus):
@@ -165,6 +189,7 @@ class GoldenDatasetCase:
         return {
             "case_id": self.case_id,
             "phase": self.phase.value,
+            "perspective": self.perspective.value,
             "rubric_version": self.rubric_version,
             "scoring_mode": self.scoring_mode.value,
             "resource_snapshot_artifact_id": self.resource_snapshot_artifact_id,

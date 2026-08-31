@@ -12,6 +12,14 @@ class AssessmentPhase(StrEnum):
     POST_DEPLOY_VERIFICATION = "POST_DEPLOY_VERIFICATION"
 
 
+class EvaluationPerspective(StrEnum):
+    """The source relationship represented by a Resource × Rule result."""
+
+    IAC = "IAC"
+    AWS_ACTUAL = "AWS_ACTUAL"
+    DRIFT = "DRIFT"
+
+
 class EvaluationStatus(StrEnum):
     PASS = "PASS"
     FAIL = "FAIL"
@@ -37,6 +45,7 @@ class EvaluationResult:
 
     resource_id: str
     rule_id: str
+    perspective: EvaluationPerspective
     status: EvaluationStatus
     severity: str
     score: float
@@ -44,6 +53,7 @@ class EvaluationResult:
     evidence_references: tuple[str, ...]
     rule_version: str
     rubric_version: str
+    model_profile_id: str
     scoring_mode: ScoringMode = ScoringMode.CONTINUOUS
 
     def __post_init__(self) -> None:
@@ -54,8 +64,11 @@ class EvaluationResult:
             "rationale",
             "rule_version",
             "rubric_version",
+            "model_profile_id",
         ):
             require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.perspective, EvaluationPerspective):
+            raise TypeError("perspective must be an EvaluationPerspective")
         if not isinstance(self.status, EvaluationStatus):
             raise TypeError("status must be an EvaluationStatus")
         if not isinstance(self.scoring_mode, ScoringMode):
@@ -75,6 +88,7 @@ class EvaluationResult:
         return {
             "resource_id": self.resource_id,
             "rule_id": self.rule_id,
+            "perspective": self.perspective.value,
             "status": self.status.value,
             "severity": self.severity,
             "score": self.score,
@@ -82,5 +96,6 @@ class EvaluationResult:
             "evidence_references": list(self.evidence_references),
             "rule_version": self.rule_version,
             "rubric_version": self.rubric_version,
+            "model_profile_id": self.model_profile_id,
             "scoring_mode": self.scoring_mode.value,
         }

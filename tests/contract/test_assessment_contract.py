@@ -4,6 +4,7 @@ import unittest
 
 from packages.contracts import (
     AssessmentPhase,
+    EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     ScoringMode,
@@ -21,6 +22,7 @@ class AssessmentContractTest(unittest.TestCase):
         result = EvaluationResult(
             resource_id="s3_bucket_logs",
             rule_id="S3-PUBLIC-001",
+            perspective=EvaluationPerspective.AWS_ACTUAL,
             status=EvaluationStatus.FAIL,
             severity="HIGH",
             score=27.5,
@@ -28,6 +30,7 @@ class AssessmentContractTest(unittest.TestCase):
             evidence_references=("policy#s3-public", "aws:s3:public-access-block"),
             rule_version="2026-08-01",
             rubric_version="v1",
+            model_profile_id="assessment-nova-lite-m0-v1",
         )
 
         self.assertEqual(result.to_dict()["score"], 27.5)
@@ -37,6 +40,7 @@ class AssessmentContractTest(unittest.TestCase):
             EvaluationResult(
                 resource_id="resource-001",
                 rule_id="RULE-001",
+                perspective=EvaluationPerspective.IAC,
                 status=EvaluationStatus.PASS,
                 severity="LOW",
                 score=101,
@@ -44,6 +48,7 @@ class AssessmentContractTest(unittest.TestCase):
                 evidence_references=(),
                 rule_version="v1",
                 rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
             )
 
     def test_anchored_mode_accepts_only_approved_score_anchors(self) -> None:
@@ -51,6 +56,7 @@ class AssessmentContractTest(unittest.TestCase):
             EvaluationResult(
                 resource_id="resource-001",
                 rule_id="RULE-001",
+                perspective=EvaluationPerspective.DRIFT,
                 status=EvaluationStatus.FAIL,
                 severity="HIGH",
                 score=25,
@@ -58,7 +64,24 @@ class AssessmentContractTest(unittest.TestCase):
                 evidence_references=(),
                 rule_version="v1",
                 rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
                 scoring_mode=ScoringMode.ANCHORED,
+            )
+
+    def test_evaluation_result_rejects_an_unknown_perspective(self) -> None:
+        with self.assertRaisesRegex(TypeError, "EvaluationPerspective"):
+            EvaluationResult(
+                resource_id="resource-001",
+                rule_id="RULE-001",
+                perspective="AWS_ACTUAL",  # type: ignore[arg-type]
+                status=EvaluationStatus.FAIL,
+                severity="HIGH",
+                score=20,
+                rationale="Invalid perspective test value.",
+                evidence_references=("aws:resource-001",),
+                rule_version="v1",
+                rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
             )
 
 

@@ -4,7 +4,9 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from apps.backend.assessment import Assessment
 from apps.backend.jobs.models import Job
+from apps.backend.jobs.outbox import OutboxRepository, WorkflowOutboxEntry
 
 
 class RepositoryError(RuntimeError):
@@ -80,6 +82,16 @@ class JobRepository(Protocol):
 
     def update_job(self, job: Job, *, expected_revision: int) -> None:
         """Persist a next Job state only when the stored revision matches."""
+        ...
+
+
+class AssessmentWorkflowRepository(JobRepository, OutboxRepository, Protocol):
+    """Atomically persist the Assessment, Job, and its pending workflow dispatch."""
+
+    def create_assessment_workflow(
+        self, assessment: Assessment, job: Job, outbox: WorkflowOutboxEntry
+    ) -> None:
+        """Create all workflow-start state in one storage transaction."""
         ...
 
 

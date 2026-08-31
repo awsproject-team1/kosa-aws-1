@@ -43,6 +43,7 @@ def create_job(
     job_type: str,
     initial_step: JobCurrentStep,
     requested_by: str,
+    assessment_id: str | None = None,
 ) -> Job:
     """Create a QUEUED Job with an explicit workflow-owned initial step."""
     return Job(
@@ -53,6 +54,7 @@ def create_job(
         current_step=initial_step,
         requested_by=requested_by,
         revision=0,
+        assessment_id=assessment_id,
     )
 
 

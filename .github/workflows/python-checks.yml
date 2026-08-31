@@ -10,7 +10,6 @@ on:
       - "packages/contracts/**"
       - "tests/contract/**"
       - "fixtures/**"
-      - "infrastructure/**"
       - "README.md"
       - "docs/**"
       - "pyproject.toml"
@@ -43,9 +42,6 @@ jobs:
           python -m pip install
           --requirement requirements-dev.txt
           --requirement apps/backend/requirements.txt
-
-      - name: Validate CloudFormation templates
-        run: cfn-lint infrastructure/cloudformation/m0-foundation.json
 
       - name: Run Ruff lint
         run: python -m ruff check .

@@ -6,10 +6,12 @@ from pathlib import Path
 
 from packages.contracts import (
     AssessmentPhase,
+    EvaluationPerspective,
     EvaluationStatus,
     GoldenDatasetCase,
     PolicyProfile,
     PolicyRule,
+    PolicyRuleReference,
     PolicySource,
     PolicySourceKind,
     RuleSeverity,
@@ -46,7 +48,14 @@ class PolicyContractTest(unittest.TestCase):
                 SourceReference(**reference) for reference in rule_data["source_references"]
             ),
         )
-        profile = PolicyProfile(**fixture["policy_profile"])
+        profile_data = fixture["policy_profile"]
+        profile = PolicyProfile(
+            policy_profile_id=profile_data["policy_profile_id"],
+            version=profile_data["version"],
+            rule_references=tuple(
+                PolicyRuleReference(**reference) for reference in profile_data["rule_references"]
+            ),
+        )
 
         self.assertEqual(source.to_dict(), fixture["policy_source"])
         self.assertEqual(rule.to_dict(), rule_data)
@@ -57,6 +66,7 @@ class PolicyContractTest(unittest.TestCase):
         case = GoldenDatasetCase(
             case_id=fixture["case_id"],
             phase=AssessmentPhase(fixture["phase"]),
+            perspective=EvaluationPerspective(fixture["perspective"]),
             rubric_version=fixture["rubric_version"],
             scoring_mode=ScoringMode(fixture["scoring_mode"]),
             resource_snapshot_artifact_id=fixture["resource_snapshot_artifact_id"],
@@ -89,6 +99,7 @@ class PolicyContractTest(unittest.TestCase):
             GoldenDatasetCase(
                 case_id="case-001",
                 phase=AssessmentPhase.INITIAL,
+                perspective=EvaluationPerspective.IAC,
                 rubric_version="v1",
                 scoring_mode=ScoringMode.CONTINUOUS,
                 resource_snapshot_artifact_id="artifact-001",

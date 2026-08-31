@@ -12,7 +12,7 @@
     "version": "2026-08-01",
     "title": "S3 buckets must block public access",
     "severity": "HIGH",
-    "applicable_phases": ["INITIAL", "POST_DEPLOY_VERIFICATION"],
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
     "resource_types": ["AWS::S3::Bucket"],
     "source_references": [
       {
@@ -25,6 +25,8 @@
   "policy_profile": {
     "policy_profile_id": "profile-mvp-baseline",
     "version": "v1",
-    "rule_ids": ["S3-PUBLIC-001"]
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-01"}
+    ]
   }
 }

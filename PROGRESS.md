@@ -3,6 +3,8 @@
 ## Current
 
 - Repository V3 문서 구조와 개발 골격 초기화
+- M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료
+- M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
 
 ## Completed
 
@@ -11,15 +13,43 @@
 - 3차 멘토링의 평가 품질 목표, 점수 정책, 의존성·Contract Review 운영 규칙 반영
 - M0 B/C/D 실행 Contract와 결정적 Fixture 확정: Policy Source/Rule/Profile, Golden Dataset,
   IaC Snapshot/Patch/Plan, Read-Only AWS Query, Approval의 commit/plan binding
+- Initial Assessment의 IaC Compliance, AWS Actual Compliance, Drift를 분리하고, IaC
+  Remediation → refresh된 Plan 검증 → 승인 Apply → Actual 재검증 흐름을 Contract/ADR로 확정
+- 명시 요청의 직접 Assessment/Remediation/Deployment Subgraph 진입, 자연어 Parent
+  Orchestrator(Policy Q&A 포함) routing, 역할별 Golden Dataset 승인 Model Profile 사용 경계를
+  ADR-0012로 확정
+- Assessment·Remediation·Deployment별 SQS Worker Queue, DynamoDB/S3 checkpoint 재개,
+  3분 전 재큐잉, 작업별 재시도/DLQ와 Apply 수동 reconciliation, EventBridge GitHub 완료 Event를
+  ADR-0013으로 확정
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
-- M0 A CloudFormation storage foundation 구현: DynamoDB/S3 보안·보존 설정, S3 TLS
-  강제 정책, 후속 IAM/adapter용 name·ARN Outputs 및 `cfn-lint` CI 검증
+- M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
+  EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
+- PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool
+  retention, CI-verified Lambda ZIP과 승인된 GitHub Actions OIDC deployment path 추가
+- PR #7 latest deployment review 반영: named IAM CloudFormation capability, pinned AWS OIDC
+  credentials action, template-change `cfn-lint` CI를 추가
+- M0 storage hardening: account-qualified S3 이름 제약, DynamoDB deletion protection,
+  BucketOwnerEnforced/TLS deny, 리소스 태그, storage ARN Outputs와 pinned `cfn-lint` 검증 추가
+- M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
+  customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
+- PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
+  인증/공개 오류 Contract 단일화, `Evaluator`의 `PolicyRule` 타입 명시
+- Assessment·Job·Workflow Outbox의 DynamoDB transactional write와 pending Outbox 재전송 경계 추가
+- M0 A deployment wiring: Cognito JWT HTTP API, API Lambda, EventBridge Outbox sweeper,
+  Assessment SQS event-source Worker와 CI-provided Lambda ZIP parameters를 CloudFormation에 추가
+- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
+  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
+  강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
+- M1 D read-only GitHub Integration Tool Port와 결정적 Mock 어댑터 구현: `IaCSnapshot`
+  Contract 소비, IaC snapshot 조회 read만 허용, (customer_id, repository_id) scope 강제,
+  write/PR 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 GitHub App/OIDC는 미연결)
 
 ## Next
 
-- M0 A 최소 권한 IAM, injected DynamoDB/S3 adapter, Job API Handler 구현
-- M0 Contract를 사용하는 Policy Context, Assessment, Remediation 구현을 Fixture/Mock으로 시작
+- M1 D: read-only AWS Resource Tool + GitHub Integration Tool 경계 완료(PR #8) →
+  실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합
+- M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
 
 ## Blocked
 
@@ -33,11 +63,11 @@
 
 **Exit criteria:** 공통 Contract, 데이터 접근 패턴, 검증 진입점이 합의되고 각 역할이 Mock/Fixture로 병렬 개발을 시작할 수 있다.
 
-- [ ] **A — Platform/Backend:** Cognito/API Gateway/Lambda 기본 구조, Job API 경계, DynamoDB/S3 인프라 초안 *(Python Job/Auth/Repository bootstrap 및 테스트 완료)*
-- [ ] **B — Policy/Governance Boundary:** Policy Source, Rule, Policy Profile, Source Reference의 초기 Contract
-- [ ] **C — AI Evaluation:** `EvaluationResult` 출력 Schema, Score/Rubric Version, Golden Dataset 최소 Case *(V3 Output Contract bootstrap 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** GitHub/AWS Resource Tool Interface, IaC Snapshot·Patch·Plan Contract
-- [ ] **Shared:** `docs/API.md`, `docs/CONTRACTS.md`, `docs/DATABASE.md` Review 및 PR Gate/기본 CI 구성 *(Python Checks, PR source validation, Secret Scan bootstrap 완료)*
+- [x] **A — Platform/Backend:** Cognito/API Gateway/Lambda 기본 구조, Job API 경계, DynamoDB/S3 인프라 초안 *(CloudFormation/IAM/Queue, Cognito JWT endpoint, request Lambda, Outbox sweeper, Assessment Worker Lambda wiring, Python Job/Auth/Repository/HTTP boundary 및 Fixture 검증 완료)*
+- [x] **B — Policy/Governance Boundary:** Policy Source, Rule, Policy Profile, Source Reference의 초기 Contract *(Fixture 기반 read-only Policy Catalog, Rule ID+version pinning, Profile allow-list Policy Context bootstrap 완료; DynamoDB catalog는 M1 통합 대상으로 이관)*
+- [x] **C — AI Evaluation:** `EvaluationResult` 출력 Schema, Score/Rubric Version, Golden Dataset 최소 Case *(S3 단일 대상, `us-east-1` Nova Lite 승인 Profile, API → Outbox → revision-checked Assessment worker → immutable DynamoDB result Fixture integration 및 반복 Golden quality gate 구현 완료; Snapshot/Bedrock invoke/Lambda wiring은 M1 통합 대상으로 이관)*
+- [x] **D — Remediation/GitHub/Deployment:** GitHub/AWS Resource Tool Interface, IaC Snapshot·Patch·Plan Contract *(IaC snapshot-bound Remediation guard bootstrap 완료)*
+- [x] **Shared:** `docs/API.md`, `docs/CONTRACTS.md`, `docs/DATABASE.md` Review 및 PR Gate/기본 CI 구성 *(Python Checks, PR source validation, Secret Scan bootstrap 완료)*
 
 **Dependencies:** B/C/D Contract는 A의 Job/Storage 경계와 합의한다. 구현체가 없는 Interface는 Fixture/Mock으로 진행한다.
 

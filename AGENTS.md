@@ -9,6 +9,7 @@
 - `.ai/`는 프로젝트를 받은 개발자/Agent가 **최초 1회 로컬에서 생성**하는 Git 제외 상태 디렉터리다. 개인 Agent 상태는 `.ai/task/taskN.md`에 기능별로 누적하며 기존 Task는 덮어쓰지 않는다.
 - 작업 브랜치는 최신 `dev`에서 만들며 일반 PR의 base는 `dev`다. `main` 직접 push와 개발 중 `main` 대상 PR은 금지한다.
 - AI와 Tool은 Customer, AWS Account, Repository, Policy Profile Scope 밖으로 접근할 수 없다.
+- 정책 원문은 저장소에 커밋하지 않는다. 원문은 로컬 `policies-local/`에 두고, 저장소에는 Rule 정의와 `SourceReference` locator만 둔다. 이 저장소는 공개다.
 - AWS Resource Tool은 읽기 전용이다. 실제 인프라 변경은 승인된 `commit_sha`와 `plan_hash`를 검증한 뒤 Human Approval 및 GitHub Actions를 통해서만 수행한다.
 - AI 평가는 기본적으로 0–100 연속 점수를 사용한다. Golden Dataset 반복 평가에서 편차가 ±10점을 지속 초과할 때만 Anchor 정책을 적용한다.
 
@@ -39,6 +40,7 @@
 | 팀 Current/Completed/Next/Blocked/Milestone | 루트 `PROGRESS.md` |
 | 개인 Agent 세부 진행, 검증, 다음 세션 메모 | `.ai/PROGRESS.md` |
 | 공용 Task/Handoff/ADR 형식 | `templates/` |
+| 정책 원문(인증기준, 사내 점검 문서) | 로컬 `policies-local/` (Git 제외, B 역할이 보관). 저장소에는 없다 |
 
 실행 가능한 Contract와 문서가 충돌하면 Contract를 우선하고 문서를 같은 변경에서 동기화한다.
 

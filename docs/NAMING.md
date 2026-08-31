@@ -10,7 +10,10 @@
 
 ## M0 CloudFormation parameters
 
-- `ProjectName`: 3-40 lowercase letters, numbers, or hyphens; starts and ends with a letter or number.
+- `ProjectName`: 2-31 lowercase letters, digits, or hyphens; starts with a letter and ends with a letter or digit.
 - `ProjectName` must not start with the S3-reserved prefixes `xn--`, `sthree-`, or `amzn-s3-demo-`.
-- `Environment`: 2-12 lowercase letters, numbers, or hyphens; starts and ends with a letter or number.
-- `ProjectName` must qualify the deployment sufficiently to keep the derived artifact bucket globally unique.
+- `Environment`: 2-8 lowercase letters, digits, or hyphens; starts with a letter and ends with a letter or digit.
+- The globally named artifact bucket is the AWS-resource naming exception:
+  `<project>-<env>-artifacts-<account-id>`.
+- The parameter maxima keep the derived artifact bucket within S3's 63-character limit. The
+  account ID suffix reduces collision risk, but the resulting bucket name must still be globally unique.

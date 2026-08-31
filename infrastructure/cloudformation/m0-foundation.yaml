@@ -1,0 +1,418 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: M0 customer-scoped metadata, artifact, and asynchronous workflow foundation.
+
+Parameters:
+  ProjectName:
+    Type: String
+    MinLength: 2
+    MaxLength: 31
+    AllowedPattern: "^(?!xn--)(?!sthree-)(?!amzn-s3-demo-)[a-z](?:[a-z0-9-]*[a-z0-9])?$"
+    ConstraintDescription: Use 2-31 lowercase letters, digits, and hyphens; start with a letter, end with a letter or digit, and avoid S3-reserved prefixes.
+  Environment:
+    Type: String
+    MinLength: 2
+    MaxLength: 8
+    AllowedPattern: "^[a-z](?:[a-z0-9-]*[a-z0-9])?$"
+    ConstraintDescription: Use 2-8 lowercase letters, digits, and hyphens; start with a letter and end with a letter or digit.
+  LambdaCodeS3Bucket:
+    Type: String
+    MinLength: 3
+    ConstraintDescription: Versioned deployment-artifact bucket containing the packaged Python ZIP.
+  LambdaCodeS3Key:
+    Type: String
+    MinLength: 1
+    ConstraintDescription: Object key for the packaged Python ZIP.
+  AssessmentScopeJson:
+    Type: String
+    Default: "{}"
+    NoEcho: true
+    ConstraintDescription: Customer-scoped approved repository/profile selector map for M0.
+
+Resources:
+  MetadataTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${ProjectName}-${Environment}-metadata"
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+        - AttributeName: GSI3PK
+          AttributeType: S
+        - AttributeName: GSI3SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI3
+          KeySchema:
+            - AttributeName: GSI3PK
+              KeyType: HASH
+            - AttributeName: GSI3SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: metadata
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-artifacts-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: artifacts
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub "${ArtifactBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  AssessmentDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-assessment-dlq"
+      MessageRetentionPeriod: 1209600
+  RemediationDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-remediation-dlq"
+      MessageRetentionPeriod: 1209600
+  DeploymentDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-deployment-dlq"
+      MessageRetentionPeriod: 1209600
+  AssessmentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-assessment"
+      VisibilityTimeout: 960
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AssessmentDlq.Arn
+        maxReceiveCount: 3
+  RemediationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-remediation"
+      VisibilityTimeout: 960
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RemediationDlq.Arn
+        maxReceiveCount: 3
+  DeploymentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-deployment"
+      VisibilityTimeout: 960
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeploymentDlq.Arn
+        maxReceiveCount: 3
+
+  ApiRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-api-runtime"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: MetadataAndWorkflowDispatch
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                # DynamoDB transactions authorize each underlying item action; there is no
+                # separate dynamodb:TransactWriteItems IAM action.
+                Action:
+                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
+                Resource:
+                  - !GetAtt MetadataTable.Arn
+                  - !Sub "${MetadataTable.Arn}/index/*"
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: [!GetAtt AssessmentQueue.Arn, !GetAtt RemediationQueue.Arn, !GetAtt DeploymentQueue.Arn]
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: "*"
+
+  WorkflowRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-workflow-runtime"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WorkflowStateAndArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
+                Resource:
+                  - !GetAtt MetadataTable.Arn
+                  - !Sub "${MetadataTable.Arn}/index/*"
+              - Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject"]
+                Resource: !Sub "${ArtifactBucket.Arn}/customers/*"
+              - Effect: Allow
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
+                Resource:
+                  - !GetAtt AssessmentQueue.Arn
+                  - !GetAtt RemediationQueue.Arn
+                  - !GetAtt DeploymentQueue.Arn
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: "*"
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-${Environment}-users"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "${ProjectName}-${Environment}-api"
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+
+  ApiRuntimeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-api"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.lambda_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
+
+  OutboxSweeperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-outbox-sweeper"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.outbox_sweeper_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+
+  AssessmentWorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-assessment-worker"
+      Runtime: python3.12
+      Handler: apps.backend.assessment.runtime.lambda_handler
+      Role: !GetAtt WorkflowRuntimeRole.Arn
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          M0_SYNTHETIC_ASSESSMENT: "true"
+  AssessmentQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt AssessmentQueue.Arn
+      FunctionName: !Ref AssessmentWorkerFunction
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
+  OutboxSweepSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt OutboxSweeperFunction.Arn
+          Id: OutboxSweeper
+  AllowEventBridgeOutboxSweep:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OutboxSweeperFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt OutboxSweepSchedule.Arn
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api"
+      ProtocolType: HTTP
+  HttpApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+      Name: CognitoJwt
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiRuntimeFunction.Arn
+      PayloadFormatVersion: "2.0"
+  PostAssessmentsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /assessments"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetJobsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /jobs/{jobId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  HttpApiDefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: "$default"
+      AutoDeploy: true
+  AllowHttpApiInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiRuntimeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+Outputs:
+  MetadataTableName:
+    Description: Name injected into Backend DynamoDB adapters.
+    Value: !Ref MetadataTable
+  MetadataTableArn:
+    Description: ARN used by least-privilege IAM and integration consumers.
+    Value: !GetAtt MetadataTable.Arn
+  ArtifactBucketName:
+    Description: Name injected into Backend S3 artifact adapters.
+    Value: !Ref ArtifactBucket
+  ArtifactBucketArn:
+    Description: ARN used by least-privilege IAM and integration consumers.
+    Value: !GetAtt ArtifactBucket.Arn
+  AssessmentQueueUrl:
+    Value: !Ref AssessmentQueue
+  RemediationQueueUrl:
+    Value: !Ref RemediationQueue
+  DeploymentQueueUrl:
+    Value: !Ref DeploymentQueue
+  HttpApiEndpoint:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
