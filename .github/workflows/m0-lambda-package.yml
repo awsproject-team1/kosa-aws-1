@@ -1,0 +1,25 @@
+name: M0 Lambda Package
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "fixtures/m0/**"
+      - "scripts/package-m0-lambda.sh"
+      - ".github/workflows/m0-lambda-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-m0-lambda:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Build and verify the Lambda ZIP
+        run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"

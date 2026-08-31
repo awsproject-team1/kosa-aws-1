@@ -53,6 +53,7 @@ class EvaluationResult:
     evidence_references: tuple[str, ...]
     rule_version: str
     rubric_version: str
+    model_profile_id: str
     scoring_mode: ScoringMode = ScoringMode.CONTINUOUS
 
     def __post_init__(self) -> None:
@@ -63,6 +64,7 @@ class EvaluationResult:
             "rationale",
             "rule_version",
             "rubric_version",
+            "model_profile_id",
         ):
             require_non_empty_string(getattr(self, name), name)
         if not isinstance(self.perspective, EvaluationPerspective):
@@ -94,5 +96,6 @@ class EvaluationResult:
             "evidence_references": list(self.evidence_references),
             "rule_version": self.rule_version,
             "rubric_version": self.rubric_version,
+            "model_profile_id": self.model_profile_id,
             "scoring_mode": self.scoring_mode.value,
         }

@@ -9,9 +9,21 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    ModelProfile,
+    ModelProfileRole,
     PolicyRule,
     RuleSeverity,
     SourceReference,
+)
+
+MODEL_PROFILE = ModelProfile(
+    model_profile_id="assessment-nova-lite-m0-v1",
+    role=ModelProfileRole.ASSESSMENT,
+    region="us-east-1",
+    model_id="amazon.nova-lite-v1:0",
+    prompt_version="assessment-s3-v1",
+    rubric_version="mvp-v1",
+    golden_dataset_version="m0-s3-v1",
 )
 
 
@@ -41,7 +53,12 @@ class Evaluator:
         self.result = result
 
     def evaluate(
-        self, *, resource_id: str, rule: PolicyRule, context: PolicyContext
+        self,
+        *,
+        resource_id: str,
+        rule: PolicyRule,
+        context: PolicyContext,
+        model_profile: ModelProfile,
     ) -> EvaluationResult:
         return self.result
 
@@ -58,18 +75,19 @@ def result(rule_id: str = "S3-001") -> EvaluationResult:
         evidence_references=("terraform:aws_s3_bucket_public_access_block",),
         rule_version="v1",
         rubric_version="mvp-v1",
+        model_profile_id=MODEL_PROFILE.model_profile_id,
     )
 
 
 class AssessmentRunnerTest(unittest.TestCase):
     def test_evaluates_every_context_rule_and_returns_validated_result(self) -> None:
         outcomes = AssessmentRunner(Evaluator(result())).evaluate_resource(
-            resource_id="bucket-001", context=context()
+            resource_id="bucket-001", context=context(), model_profile=MODEL_PROFILE
         )
         self.assertEqual(outcomes[0].rule_id, "S3-001")
 
     def test_rejects_evaluator_result_for_an_unapproved_rule(self) -> None:
         with self.assertRaises(EvaluationContractError):
             AssessmentRunner(Evaluator(result("EC2-001"))).evaluate_resource(
-                resource_id="bucket-001", context=context()
+                resource_id="bucket-001", context=context(), model_profile=MODEL_PROFILE
             )

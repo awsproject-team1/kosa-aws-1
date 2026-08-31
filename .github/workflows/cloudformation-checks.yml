@@ -1,0 +1,32 @@
+name: CloudFormation Checks
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "infrastructure/cloudformation/**"
+      - ".github/workflows/cloudformation-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cfn-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install CloudFormation linter
+        run: python -m pip install cfn-lint==1.52.1
+
+      - name: Lint M0 foundation template
+        run: >-
+          cfn-lint --non-zero-exit-code error
+          infrastructure/cloudformation/m0-foundation.yaml

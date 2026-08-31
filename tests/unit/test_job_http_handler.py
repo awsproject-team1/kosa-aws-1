@@ -5,14 +5,17 @@ import unittest
 
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import JobApiService
+from apps.backend.jobs import OutboxDispatcher
 
 
 class InMemoryJobRepository:
     def __init__(self) -> None:
         self.jobs = {}
+        self.outbox = []
 
     def create_assessment_workflow(self, assessment, job, outbox) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
+        self.outbox.append(outbox)
 
     def create_job(self, job) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
@@ -22,6 +25,17 @@ class InMemoryJobRepository:
 
     def update_job(self, job, *, expected_revision: int) -> None:
         self.jobs[(job.customer_id, job.job_id)] = job
+
+    def mark_outbox_dispatched(self, entry) -> None:
+        self.outbox.remove(entry)
+
+    def record_outbox_dispatch_failure(self, entry) -> None:
+        return None
+
+
+class Dispatcher:
+    def dispatch(self, task) -> None:
+        return None
 
 
 class ApprovedScope:
@@ -56,6 +70,7 @@ class JobHttpHandlerTest(unittest.TestCase):
         service = JobApiService(
             repository=self.repository,
             assessment_scope=ApprovedScope(),
+            outbox_dispatcher=OutboxDispatcher(repository=self.repository, dispatcher=Dispatcher()),
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
         )

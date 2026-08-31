@@ -25,6 +25,8 @@
   "policy_profile": {
     "policy_profile_id": "profile-mvp-baseline",
     "version": "v1",
-    "rule_ids": ["S3-PUBLIC-001"]
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-01"}
+    ]
   }
 }

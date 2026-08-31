@@ -76,8 +76,9 @@ M0의 `POST /assessments`는 `ASSESSMENT#{assessment_id}`, 연결된 `JOB#{job_i
 `OUTBOX#JOB#{job_id}`를 DynamoDB transaction으로 함께 저장한다. Assessment 레코드는
 `repository_id`, `policy_profile_id`, `job_id`를 영속화하므로 Worker는 최소 Queue payload만으로도
 평가 selector를 복원한다. Outbox는 `GSI2PK = OUTBOX#PENDING`으로 pending 전송을 조회하며,
-Outbox sweeper가 SQS 전송 성공 후에만 `DISPATCHED`로 전이한다. SQS 또는 상태 갱신 실패는
-`PENDING`으로 남아 다음 sweeper 실행에서 at-least-once로 재시도된다.
+API는 커밋 직후 해당 task의 SQS 전송을 즉시 시도하고 성공한 경우에만 `DISPATCHED`로 전이한다.
+SQS 또는 상태 갱신 실패는 `PENDING`으로 남아, Outbox sweeper가 다음 실행에서 at-least-once로
+재시도한다.
 
 ## Example items
 

@@ -30,6 +30,7 @@ class AssessmentContractTest(unittest.TestCase):
             evidence_references=("policy#s3-public", "aws:s3:public-access-block"),
             rule_version="2026-08-01",
             rubric_version="v1",
+            model_profile_id="assessment-nova-lite-m0-v1",
         )
 
         self.assertEqual(result.to_dict()["score"], 27.5)
@@ -47,6 +48,7 @@ class AssessmentContractTest(unittest.TestCase):
                 evidence_references=(),
                 rule_version="v1",
                 rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
             )
 
     def test_anchored_mode_accepts_only_approved_score_anchors(self) -> None:
@@ -62,6 +64,7 @@ class AssessmentContractTest(unittest.TestCase):
                 evidence_references=(),
                 rule_version="v1",
                 rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
                 scoring_mode=ScoringMode.ANCHORED,
             )
 
@@ -78,6 +81,7 @@ class AssessmentContractTest(unittest.TestCase):
                 evidence_references=("aws:resource-001",),
                 rule_version="v1",
                 rubric_version="v1",
+                model_profile_id="assessment-nova-lite-m0-v1",
             )
 
 

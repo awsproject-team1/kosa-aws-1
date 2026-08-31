@@ -7,6 +7,7 @@ from packages.contracts import (
     AssessmentPhase,
     PolicyProfile,
     PolicyRule,
+    PolicyRuleReference,
     RuleSeverity,
     SourceReference,
 )
@@ -15,7 +16,12 @@ from packages.contracts import (
 class Catalog:
     def __init__(self) -> None:
         self.profile = PolicyProfile(
-            policy_profile_id="profile-001", version="v1", rule_ids=("S3-001", "EC2-001")
+            policy_profile_id="profile-001",
+            version="v1",
+            rule_references=(
+                PolicyRuleReference(rule_id="S3-001", version="v1"),
+                PolicyRuleReference(rule_id="EC2-001", version="v1"),
+            ),
         )
         reference = SourceReference(
             source_id="isms-p", locator="control/5.2.1", content_sha256="digest-001"
@@ -44,8 +50,9 @@ class Catalog:
     def get_profile(self, policy_profile_id: str):
         return self.profile if policy_profile_id == self.profile.policy_profile_id else None
 
-    def get_rule(self, rule_id: str):
-        return self.rules.get(rule_id)
+    def get_rule(self, rule_id: str, version: str):
+        rule = self.rules.get(rule_id)
+        return rule if rule is not None and rule.version == version else None
 
 
 class PolicyContextResolverTest(unittest.TestCase):
