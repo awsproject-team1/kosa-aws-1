@@ -3,6 +3,7 @@
 ## Current
 
 - Repository V3 문서 구조와 개발 골격 초기화
+- M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
 
 ## Completed
 
@@ -21,11 +22,17 @@
   ADR-0013으로 확정
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
+<<<<<<< HEAD
+- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
+  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
+  강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
+=======
 - M0 실행 bootstrap: CloudFormation metadata/artifact/worker queue/IAM skeleton, JWT-derived
   customer Job API, Policy Context allow-list, Assessment/Remediation Contract guard 구현 및 검증
 - PR #3 review 반영: Assessment selector 영속화 및 Job 연결, dispatch 실패 보상 전이,
   인증/공개 오류 Contract 단일화, `Evaluator`의 `PolicyRule` 타입 명시
 - Assessment·Job·Workflow Outbox의 DynamoDB transactional write와 pending Outbox 재전송 경계 추가
+>>>>>>> dev
 
 ## Next
 
