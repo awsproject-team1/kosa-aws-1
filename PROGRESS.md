@@ -53,6 +53,9 @@
   Assessment API·React report로 조회
 - M1 A auth bootstrap: Cognito local-user `Admin`/`User` group과 Hosted UI PKCE를 구성하고,
   React 로그인·Assessment 시작 화면 및 고객 sandbox E2E handoff 절차를 추가
+- M1 통합 개발: Worker가 M0 단일 Rule fixture 대신 승인된 6개 S3 MVP Rule Registry를
+  사용하도록 전환하고, API → Outbox → structured evaluator → immutable Result/Finding →
+  Coverage/Readiness report의 multi-rule fixture integration test를 고정
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
@@ -142,9 +145,10 @@
 - [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장,
   고객 AWS Account용 Auth bootstrap *(고객 소유 IdP federation 또는 Cognito local user 결정, 초기
   Admin 인수, Admin/User claim·group, 로그인 UI 및 고객 측 사용자 관리 절차 E2E 검증)*
-- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; Policy Ingestion의 형식 allow-list·정규화 Schema·Parser 구현 완료; C의 Registry 채택, 실제 테이블 적재, Rule 승인·Profile publication은 대기)*
-- [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
-  Finding·Readiness Score projection, Assessment UI 기본 화면
+- [x] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog 구현 완료; Worker가 Registry를 채택한 multi-rule fixture integration 완료. 실제 고객 정책 업로드·테이블 적재는 별도 Delivery gate)*
+- [x] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
+  Finding·Readiness Score projection, Assessment UI 기본 화면 *(6개 S3 Rule의 fixture integration으로
+   결과·Finding·Coverage·Readiness까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기)*
 - [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; 실제 SDK/GitHub App 통합 대기)*
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
 

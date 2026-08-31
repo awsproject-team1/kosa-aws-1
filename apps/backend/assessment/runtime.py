@@ -1,4 +1,10 @@
-"""M0 SQS worker composition using only the synthetic S3 fixture mode."""
+"""M1 SQS worker composition with the approved, version-pinned Rule Registry.
+
+The packaged worker remains deliberately fixture-backed until a customer-approved
+AWS/GitHub integration is configured.  It must nevertheless load the same
+multi-rule registry that the M1 report, coverage, and readiness flows use; the
+old M0 one-rule profile is only retained for isolated compatibility tests.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from apps.backend.assessment import (
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
 )
-from apps.backend.policy import PolicyContext, PolicyContextResolver, load_m0_fixture_catalog
+from apps.backend.policy import PolicyContext, PolicyContextResolver, load_rule_registry
 from packages.contracts import (
     AssessmentPhase,
     EvaluationPerspective,
@@ -131,10 +137,10 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         golden_dataset_version=_string(profile_data.get("golden_dataset_version")),
     )
     table = boto3.resource("dynamodb").Table(_string(os.environ.get("METADATA_TABLE_NAME")))
-    _, catalog = load_m0_fixture_catalog(_fixture_path("policy_profile.json"))
+    registry = load_rule_registry(_rules_path())
     worker = AssessmentWorker(
         work_repository=DynamoFixtureWorkRepository(table, snapshot),
-        context_resolver=PolicyContextResolver(catalog),
+        context_resolver=PolicyContextResolver(registry.catalog),
         runner=AssessmentRunner(SyntheticS3Evaluator(snapshot)),
         model_profiles=InMemoryModelProfileRegistry((profile,)),
         result_store=DynamoDbEvaluationResultStore(table),
@@ -167,6 +173,10 @@ def _fixture(name: str) -> dict[str, object]:
 
 def _fixture_path(name: str) -> Path:
     return Path(__file__).parents[3] / "fixtures" / "m0" / name
+
+
+def _rules_path() -> Path:
+    return Path(__file__).parents[3] / "fixtures" / "rules"
 
 
 def _string(value: object) -> str:
