@@ -3,7 +3,7 @@
 ## Current
 
 - Repository V3 문서 구조와 개발 골격 초기화
-- M1 D 착수: AWS Resource Tool(read-only) 경계와 결정적 Mock 어댑터 (GitHub Tool은 후속)
+- M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
 
 ## Completed
@@ -23,9 +23,6 @@
   ADR-0013으로 확정
 - M0 A 병렬 개발 전 공통 기준 확정: CloudFormation parameter naming, DynamoDB/GSI/30일
   terminal Job TTL, Job API ownership·revision·tenant scope 규칙 (ADR-0010)
-- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
-  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
-  강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
 - M0 Assessment API가 transactionally persisted Outbox를 SQS로 즉시 전송하고, 실패 시
   EventBridge Outbox sweeper가 at-least-once 재시도하도록 보완
 - PR #7 infrastructure review 반영: HTTP API `$default` auto-deploy stage, Cognito User Pool
@@ -39,10 +36,17 @@
 - Assessment·Job·Workflow Outbox의 DynamoDB transactional write와 pending Outbox 재전송 경계 추가
 - M0 A deployment wiring: Cognito JWT HTTP API, API Lambda, EventBridge Outbox sweeper,
   Assessment SQS event-source Worker와 CI-provided Lambda ZIP parameters를 CloudFormation에 추가
+- M1 D read-only AWS Resource Tool Port와 결정적 Mock 어댑터 구현: `AwsResourceQuery`
+  Contract 소비, READ_RESOURCE/LIST_RESOURCES만 허용, (customer_id, aws_account_id) scope
+  강제, 쓰기 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 SDK/AssumeRole은 미연결)
+- M1 D read-only GitHub Integration Tool Port와 결정적 Mock 어댑터 구현: `IaCSnapshot`
+  Contract 소비, IaC snapshot 조회 read만 허용, (customer_id, repository_id) scope 강제,
+  write/PR 표현 불가를 테스트로 고정 (Fixture/Mock 단계, 실제 GitHub App/OIDC는 미연결)
 
 ## Next
 
-- M1 D: AWS Resource Tool의 실제 SDK/AssumeRole 통합과 GitHub Tool 경계 구현
+- M1 D: read-only AWS Resource Tool + GitHub Integration Tool 경계 완료(PR #8) →
+  실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합
 - M1 A/C: 실제 Snapshot/Bedrock 평가와 Assessment 결과·Coverage 조회 통합
 
 ## Blocked
