@@ -55,7 +55,26 @@
 
 ## Blocked
 
-- 없음
+- **M1 Exit criteria의 `Finding`과 `Readiness Score`에 담당 역할이 없다.** (제기: B, 2026-08-31)
+
+  두 산출물은 Exit criteria와 `docs/PRD.md`의 제품 흐름에 있고 저장 모델까지 정의돼 있지만,
+  생산하는 코드가 없고 M1의 A/B/C/D 역할 항목 어디에도 들어 있지 않다.
+
+  | 산출물 | 정의된 것 | 없는 것 |
+  | --- | --- | --- |
+  | `Finding` | `docs/DATABASE.md` item(`ASSESSMENT#{id}#FINDING#{finding_id}`), Job step `GENERATE_FINDINGS`, M2 소비처(`RemediationPatch.finding_id`, `POST /findings/{findingId}/remediations`) | 생성 코드, `packages/contracts`의 Schema, 조회 API, 담당 역할 |
+  | `Readiness Score` | `docs/DATABASE.md`의 Assessment item 예시(`readiness_score`), `docs/PRD.md`가 서비스의 대표 점수로 규정 | 산출 코드, 계산 정의(Score/Severity/Coverage와의 관계), 담당 역할 |
+
+  M2의 `RemediationPatch`가 `finding_id`를 필수로 요구하므로, M1이 Finding을 생산하지 않으면
+  M2 Remediation 전체가 입력을 얻지 못한다.
+
+  - Decision: 두 산출물의 담당 역할과 M1 포함 여부
+  - Owner: 미정
+  - Needed by: M1 Exit criteria 판정 전
+  - Blocks: M1 종료 판정, M2 Remediation 착수
+  - Proposed options: (1) Finding 생성·조회는 A, Readiness Score 산출은 C가 맡는다
+    (2) 둘 다 평가 산출물로 보고 C가 맡는다 (3) M1 Exit criteria에서 빼고 M2로 옮긴다
+  - Final record: 미정
 
 ## Milestones
 
