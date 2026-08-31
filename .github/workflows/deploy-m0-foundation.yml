@@ -12,7 +12,11 @@ on:
         required: true
         type: string
       environment:
-        description: Environment CloudFormation parameter and protected GitHub Environment
+        description: Environment CloudFormation parameter and artifact-preparation GitHub Environment
+        required: true
+        type: environment
+      artifact_approval_environment:
+        description: Separate protected Environment for approving the exact Lambda artifact binding
         required: true
         type: environment
       aws_region:
@@ -39,24 +43,159 @@ permissions:
   id-token: write
 
 jobs:
-  deploy:
+  prepare-artifact:
     runs-on: ubuntu-latest
-    # The selected GitHub Environment must require reviewers before this manual
-    # workflow is enabled for a customer deployment.
+    # This Environment gates the first AWS write and must define EXPECTED_AWS_ACCOUNT_ID.
     environment: ${{ inputs.environment }}
+    outputs:
+      lambda_code_s3_key: ${{ steps.bind-artifact.outputs.lambda_code_s3_key }}
+      lambda_code_s3_object_version: ${{ steps.bind-artifact.outputs.lambda_code_s3_object_version }}
+      lambda_zip_sha256: ${{ steps.bind-artifact.outputs.lambda_zip_sha256 }}
     env:
-      STACK_NAME: ${{ inputs.stack_name }}
-      PROJECT_NAME: ${{ inputs.project_name }}
-      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
       AWS_REGION: ${{ inputs.aws_region }}
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+      ARTIFACT_APPROVAL_ENVIRONMENT: ${{ inputs.artifact_approval_environment }}
+      ROLE_TO_ASSUME: ${{ inputs.role_to_assume }}
       LAMBDA_CODE_S3_BUCKET: ${{ inputs.lambda_code_s3_bucket }}
-      ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+      EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Build and verify the Lambda ZIP
         run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"
+
+      - name: Validate protected artifact inputs
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
+          [[ "${ROLE_TO_ASSUME}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
+          test "${ARTIFACT_APPROVAL_ENVIRONMENT}" != "${DEPLOYMENT_ENVIRONMENT}"
+
+      - name: Configure customer artifact credentials
+        # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ inputs.role_to_assume }}
+          role-session-name: m0-artifact-prepare
+          allowed-account-ids: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Verify artifact account and bucket
+        run: |
+          set -euo pipefail
+          actual_account_id=$(aws sts get-caller-identity --query Account --output text)
+          test "${actual_account_id}" = "${EXPECTED_AWS_ACCOUNT_ID}"
+          versioning_status=$(
+            aws s3api get-bucket-versioning \
+              --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+              --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+              --query Status \
+              --output text
+          )
+          test "${versioning_status}" = "Enabled"
+
+      - name: Create or verify immutable Lambda artifact
+        id: bind-artifact
+        env:
+          LAMBDA_CODE_S3_KEY: lambda/m0/${{ github.sha }}.zip
+        run: |
+          set -euo pipefail
+
+          zip_sha256_hex=$(sha256sum "${RUNNER_TEMP}/m0-lambda.zip" | cut -d ' ' -f1)
+          zip_sha256_base64=$(openssl dgst -sha256 -binary "${RUNNER_TEMP}/m0-lambda.zip" | base64)
+          put_error="${RUNNER_TEMP}/put-object.error"
+
+          set +e
+          upload_response=$(
+            aws s3api put-object \
+              --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+              --key "${LAMBDA_CODE_S3_KEY}" \
+              --body "${RUNNER_TEMP}/m0-lambda.zip" \
+              --if-none-match "*" \
+              --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+              --checksum-algorithm SHA256 \
+              --checksum-sha256 "${zip_sha256_base64}" \
+              --metadata "commit-sha=${GITHUB_SHA},zip-sha256=${zip_sha256_hex}" \
+              --output json \
+              2> "${put_error}"
+          )
+          upload_status=$?
+          set -e
+
+          if (( upload_status == 0 )); then
+            artifact_response="${upload_response}"
+            artifact_disposition="created"
+            recorded_commit_sha="${GITHUB_SHA}"
+            recorded_zip_sha256="${zip_sha256_hex}"
+          else
+            if ! artifact_response=$(
+              aws s3api head-object \
+                --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+                --key "${LAMBDA_CODE_S3_KEY}" \
+                --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+                --checksum-mode ENABLED \
+                --output json
+            ); then
+              cat "${put_error}" >&2
+              exit "${upload_status}"
+            fi
+            artifact_disposition="verified existing"
+            recorded_commit_sha=$(jq -r '.Metadata["commit-sha"] // empty' <<< "${artifact_response}")
+            recorded_zip_sha256=$(jq -r '.Metadata["zip-sha256"] // empty' <<< "${artifact_response}")
+          fi
+
+          object_version=$(jq -r '.VersionId // empty' <<< "${artifact_response}")
+          returned_checksum=$(jq -r '.ChecksumSHA256 // empty' <<< "${artifact_response}")
+          test -n "${object_version}"
+          test "${returned_checksum}" = "${zip_sha256_base64}"
+          test "${recorded_commit_sha}" = "${GITHUB_SHA}"
+          test "${recorded_zip_sha256}" = "${zip_sha256_hex}"
+
+          echo "lambda_code_s3_key=${LAMBDA_CODE_S3_KEY}" >> "${GITHUB_OUTPUT}"
+          echo "lambda_code_s3_object_version=${object_version}" >> "${GITHUB_OUTPUT}"
+          echo "lambda_zip_sha256=${zip_sha256_hex}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### M0 Lambda artifact awaiting deployment approval"
+            echo "- Disposition: ${artifact_disposition}"
+            echo "- Commit SHA: \`${GITHUB_SHA}\`"
+            echo "- Object key: \`${LAMBDA_CODE_S3_KEY}\`"
+            echo "- S3 Version ID: \`${object_version}\`"
+            echo "- ZIP SHA-256: \`${zip_sha256_hex}\`"
+            echo "- AWS account boundary: matched artifact-preparation Environment"
+            echo "- Next gate: approve the separate artifact deployment Environment only after reviewing these values"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    needs: prepare-artifact
+    runs-on: ubuntu-latest
+    # This distinct Environment creates a second human gate after artifact evidence exists.
+    environment: ${{ inputs.artifact_approval_environment }}
+    env:
+      STACK_NAME: ${{ inputs.stack_name }}
+      PROJECT_NAME: ${{ inputs.project_name }}
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+      AWS_REGION: ${{ inputs.aws_region }}
+      ROLE_TO_ASSUME: ${{ inputs.role_to_assume }}
+      LAMBDA_CODE_S3_BUCKET: ${{ inputs.lambda_code_s3_bucket }}
+      LAMBDA_CODE_S3_KEY: ${{ needs.prepare-artifact.outputs.lambda_code_s3_key }}
+      LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
+      LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
+      ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+      EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
+    steps:
+      - name: Check out approved repository revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Validate protected deployment inputs
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
+          [[ "${ROLE_TO_ASSUME}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
+          test -n "${LAMBDA_CODE_S3_KEY}"
+          test -n "${LAMBDA_CODE_S3_OBJECT_VERSION}"
+          [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
 
       - name: Configure customer deployment credentials
         # v6.2.3
@@ -65,18 +204,30 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: ${{ inputs.role_to_assume }}
           role-session-name: m0-foundation-deploy
+          allowed-account-ids: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
 
-      - name: Upload immutable Lambda ZIP
-        env:
-          LAMBDA_CODE_S3_KEY: lambda/m0/${{ github.sha }}.zip
+      - name: Reverify approved account and artifact version
         run: |
           set -euo pipefail
-          test "$(aws s3api get-bucket-versioning --bucket "${LAMBDA_CODE_S3_BUCKET}" --query Status --output text)" = "Enabled"
-          aws s3 cp "${RUNNER_TEMP}/m0-lambda.zip" \
-            "s3://${LAMBDA_CODE_S3_BUCKET}/${LAMBDA_CODE_S3_KEY}"
-          echo "LAMBDA_CODE_S3_KEY=${LAMBDA_CODE_S3_KEY}" >> "${GITHUB_ENV}"
+          actual_account_id=$(aws sts get-caller-identity --query Account --output text)
+          test "${actual_account_id}" = "${EXPECTED_AWS_ACCOUNT_ID}"
+          artifact_response=$(
+            aws s3api head-object \
+              --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+              --key "${LAMBDA_CODE_S3_KEY}" \
+              --version-id "${LAMBDA_CODE_S3_OBJECT_VERSION}" \
+              --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+              --checksum-mode ENABLED \
+              --output json
+          )
+          test "$(jq -r '.VersionId // empty' <<< "${artifact_response}")" = "${LAMBDA_CODE_S3_OBJECT_VERSION}"
+          test "$(jq -r '.Metadata["commit-sha"] // empty' <<< "${artifact_response}")" = "${GITHUB_SHA}"
+          test "$(jq -r '.Metadata["zip-sha256"] // empty' <<< "${artifact_response}")" = "${LAMBDA_ZIP_SHA256}"
+          expected_checksum=$(printf '%s' "${LAMBDA_ZIP_SHA256}" | xxd -r -p | base64)
+          test "$(jq -r '.ChecksumSHA256 // empty' <<< "${artifact_response}")" = "${expected_checksum}"
 
-      - name: Deploy CloudFormation stack
+      - name: Deploy approved CloudFormation artifact
         run: |
           set -euo pipefail
           aws cloudformation deploy \
@@ -88,5 +239,6 @@ jobs:
               "Environment=${DEPLOYMENT_ENVIRONMENT}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
+              "LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}" \
               "AssessmentScopeJson=${ASSESSMENT_SCOPE_JSON}" \
             --no-fail-on-empty-changeset

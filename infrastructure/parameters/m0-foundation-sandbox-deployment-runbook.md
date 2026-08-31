@@ -29,44 +29,63 @@ Environment 또는 고객 승인 채널에서만 공유하며, 이 저장소와 
 | --- | --- | --- |
 | Source revision | Merged `dev` commit SHA and PR/CI links | Required CI is green for the exact revision dispatched. |
 | Stack identity | Non-sensitive stack name, project name, environment, region | Names satisfy `infrastructure/parameters/README.md`; target is an approved sandbox. |
-| GitHub Environment | Selected protected Environment and reviewer list | Required reviewers are configured and approve before the deployment job receives credentials. |
-| OIDC deployment role | Customer-managed role ARN and trust-policy attestation | Trust is restricted to this repository, approved ref/environment, and the deployment workflow; permissions are limited to the M0 stack, Lambda artifact bucket, CloudTrail, and audit destination. |
-| Lambda artifact bucket | Bucket name and versioning evidence | Customer-owned, versioning is `Enabled`, and the OIDC role can upload the immutable workflow key. |
+| GitHub Environments | Artifact-preparation Environment, separate artifact-deployment approval Environment, and reviewer lists | Both define the same `EXPECTED_AWS_ACCOUNT_ID`; required reviewers approve preparation first and exact artifact deployment only after evidence exists. |
+| Expected AWS account | Customer-approved 12-digit account ID stored only as the protected Environment variable | Role ARN, assumed STS identity, and deployment-artifact bucket ownership must all match it. |
+| OIDC deployment role | Customer-managed role ARN and trust-policy attestation | Trust is restricted to this repository and the two approved Environments. Permissions are limited to the M0 stack, CloudTrail/audit destination, artifact-bucket versioning check, conditional `PutObject`, and exact-key `GetObject`/`GetObjectVersion` needed to verify/reuse the approved package. |
+| Lambda artifact bucket | Bucket name and versioning evidence | Customer-owned by the expected account, versioning is `Enabled`, and the OIDC role can conditionally create or read only the commit-qualified workflow key/version. |
+| Lambda artifact binding | Reviewed commit SHA and expected packaging path | Workflow approval evidence must record the commit SHA, ZIP SHA-256, object key, and returned S3 Version ID; every Lambda uses that Version ID. |
 | Assessment scope | Approved selector map | Fail-closed JSON; contains no credentials, policy originals, prompts, or full IaC content. `{}` is valid when no selector is approved. |
 | Retention operations | Named customer owner and retention decision | Owner accepts retained metadata/audit resources, CloudTrail data-event cost, audit-log access boundary, and the stack termination-protection decision. |
 | Sandbox test principal | Customer-approved controlled principal and window | May perform only one verification `PutObject` and `GetObject` for the opaque ArtifactBucket key; it is not a Worker runtime identity. |
 | Evidence executor | Customer-approved separate principal and window | May list the approved account/region/day audit prefixes and transiently `GetObject` only for those CloudTrail logs/digests during validation; it cannot write audit artifacts or read other prefixes. |
 
-Stop before dispatch if any item is missing, the revision differs from the reviewed revision, the
-Environment lacks required reviewers, the artifact bucket is not versioned, or the OIDC trust
-boundary cannot be attested.
+Stop before dispatch if any item is missing, the revision differs from the reviewed revision, either
+Environment lacks required reviewers or the same valid `EXPECTED_AWS_ACCOUNT_ID`, the artifact bucket
+is not versioned or owned by that account, or the OIDC trust boundary cannot be attested.
 
 ## 2. Workflow inputs
 
 Dispatch `.github/workflows/deploy-m0-foundation.yml` manually from the reviewed merged `dev`
-revision. Populate only the workflow inputs below. `LambdaCodeS3Key` is derived by the workflow as
-`lambda/m0/<GitHub commit SHA>.zip`; do not provide it separately.
+revision. Populate only the workflow inputs below. Before dispatch, both selected protected
+Environments must define the same customer-approved 12-digit `EXPECTED_AWS_ACCOUNT_ID`; it is not a
+workflow input. `LambdaCodeS3Key` is derived as `lambda/m0/<GitHub commit SHA>.zip`, and
+`LambdaCodeS3ObjectVersion` is taken from the successful conditional upload response. Do not provide
+either value manually.
 
 | Workflow input | Source and validation |
 | --- | --- |
 | `stack_name` | Customer-approved sandbox stack name. It must not identify a production workload. |
 | `project_name` | Same constraints as `ProjectName`: 2–31 lowercase letters, digits, or hyphens; starts with a letter; ends with a letter or digit; avoids reserved S3 prefixes. |
-| `environment` | The exact protected GitHub Environment selected for the sandbox. It is also the CloudFormation `Environment` value and must satisfy its 2–8 lowercase-character constraint. |
+| `environment` | Protected artifact-preparation GitHub Environment and the CloudFormation `Environment` value; it must satisfy the template's 2–8 lowercase-character constraint. |
+| `artifact_approval_environment` | A distinct protected GitHub Environment whose reviewers approve the generated commit/key/hash/Version ID before deployment. It must not equal `environment`. |
 | `aws_region` | Customer-approved deployment region. M0 design currently targets `us-east-1` unless an approved exception exists. |
 | `role_to_assume` | Customer-approved OIDC deployment role ARN. Do not enter an Agent, user, or workload runtime role. |
 | `lambda_code_s3_bucket` | Versioning-enabled customer-owned deployment-artifact bucket. The workflow checks versioning before upload. |
 | `assessment_scope_json` | Approved fail-closed selector JSON. Do not paste sensitive policy or artifact data into the workflow input. |
 
-Before approving the job, reviewers compare the displayed inputs and checked-out revision with the
-approval packet. They also confirm the expected resource inventory: metadata table, artifact bucket,
-separate audit bucket, artifact-access trail, queues/DLQs, IAM roles, Cognito, API, and Lambda
-functions. The workflow packages the Lambda ZIP, uploads it to the derived immutable key, then
-performs the CloudFormation update with `CAPABILITY_NAMED_IAM`.
+Before approving the artifact-preparation job, reviewers compare the dispatch inputs and checked-out
+revision with the approval packet. The workflow rejects a role ARN outside `EXPECTED_AWS_ACCOUNT_ID`;
+the pinned credential action independently enforces the same account; the next step compares STS
+caller identity; and all deployment-artifact bucket calls use S3's expected-owner condition. Reviewers
+also confirm the expected resource inventory: metadata table, artifact bucket, separate audit bucket,
+artifact-access trail, queues/DLQs, IAM roles, Cognito, API, and Lambda functions.
+
+The first job packages the Lambda ZIP, calculates its SHA-256, and attempts conditional S3 `PutObject`
+with `If-None-Match: *`. On a rerun, it may reuse the current object only after `HeadObject` proves its
+checksum, commit metadata, ZIP-hash metadata, and non-empty Version ID match the newly rebuilt ZIP and
+reviewed commit; any mismatch fails closed. Versioning alone is not treated as immutability.
+
+After that job completes, the separate artifact-deployment Environment pauses the deployment job.
+Its reviewers inspect the first job's summary and approve the exact commit SHA, object key, ZIP
+SHA-256, and S3 Version ID. After approval, the second job independently revalidates its Environment
+account, STS identity, bucket owner, selected object Version ID, checksum, and metadata before passing
+`LambdaCodeS3ObjectVersion` to all Lambda resources and invoking CloudFormation with
+`CAPABILITY_NAMED_IAM`.
 
 The workflow currently uses `aws cloudformation deploy` rather than a separately archived change
-set. Reviewers must therefore review the exact template revision and inputs before Environment
-approval. The customer operator owns any stack termination-protection configuration outside this
-repository.
+set. Artifact-deployment Environment reviewers must therefore review the exact template revision,
+inputs, and first-job artifact summary before approving the second job. The customer operator owns
+any stack termination-protection configuration outside this repository.
 
 ## 3. Sandbox CloudTrail acceptance test
 
@@ -113,12 +132,14 @@ second key, or change bucket/trail policy.
 ```bash
 aws s3api put-object \
   --bucket "${ARTIFACT_BUCKET}" \
+  --expected-bucket-owner "${ACCOUNT_ID}" \
   --key "${VERIFY_KEY}" \
   --body "${TEST_BODY}" \
   --output json
 
 aws s3api get-object \
   --bucket "${ARTIFACT_BUCKET}" \
+  --expected-bucket-owner "${ACCOUNT_ID}" \
   --key "${VERIFY_KEY}" \
   "${READBACK_BODY}" \
   --output json
@@ -130,8 +151,9 @@ rm -- "${TEST_BODY}" "${READBACK_BODY}"
 The evidence executor does not manually export or retain raw CloudTrail log content. It may retrieve
 the selected log/digest objects transiently only while executing `validate-logs`; validation output
 and retained evidence stay in customer-controlled storage. It lists only the expected account/region/day
-prefixes for the approved window. If the window crosses UTC midnight, repeat the two bounded list
-commands for each date in that approved window.
+prefixes for the approved window. Each command disables AWS CLI auto-pagination, so the single S3
+request and displayed result are limited to at most 20 object metadata entries. If the window crosses
+UTC midnight, repeat the two bounded list commands for each date in that approved window.
 
 ```bash
 export LOG_PREFIX="AWSLogs/${ACCOUNT_ID}/CloudTrail/${AWS_REGION}/${WINDOW_DATE_UTC}/"
@@ -139,15 +161,19 @@ export DIGEST_PREFIX="AWSLogs/${ACCOUNT_ID}/CloudTrail-Digest/${AWS_REGION}/${WI
 
 aws s3api list-objects-v2 \
   --bucket "${AUDIT_BUCKET}" \
+  --expected-bucket-owner "${ACCOUNT_ID}" \
   --prefix "${LOG_PREFIX}" \
   --max-keys 20 \
+  --no-paginate \
   --query 'Contents[].{Key:Key,LastModified:LastModified,Size:Size}' \
   --output table
 
 aws s3api list-objects-v2 \
   --bucket "${AUDIT_BUCKET}" \
+  --expected-bucket-owner "${ACCOUNT_ID}" \
   --prefix "${DIGEST_PREFIX}" \
   --max-keys 20 \
+  --no-paginate \
   --query 'Contents[].{Key:Key,LastModified:LastModified,Size:Size}' \
   --output table
 
@@ -178,8 +204,10 @@ aws cloudtrail validate-logs \
 Mark the sandbox verification failed and do not promote the stack or grant ArtifactBucket access to
 any runtime when any of the following occurs:
 
-- The workflow, Environment approval, OIDC role assumption, Lambda artifact upload, or CloudFormation
-  update fails.
+- The workflow, Environment approval, expected-account validation, OIDC role assumption, Lambda artifact
+  upload/binding, or CloudFormation update fails.
+- The role ARN, STS caller identity, or artifact-bucket expected owner does not match the protected
+  Environment account value; or the ZIP checksum/S3 Version ID cannot be bound to the reviewed commit.
 - The audit bucket receives no matching delivered data event in the approved observation window.
 - The event is not limited to the expected ArtifactBucket test operation, the identity/time/key does
   not match the controlled test, or log-file validation fails.
@@ -194,6 +222,7 @@ Environment, run a local deployment, or retry with broader IAM/S3 permissions.
 ## Completion record
 
 The customer security owner records the approval packet reference, workflow run URL, exact revision,
-CloudTrail acceptance result, evidence location, retained-resource owner, and any cost/lifecycle
-decision in the customer-controlled deployment record. This repository stores only non-sensitive
-architecture and runbook updates.
+ZIP SHA-256, S3 object key and Version ID, successful expected-account checks, CloudTrail acceptance
+result, evidence location, retained-resource owner, and any cost/lifecycle decision in the
+customer-controlled deployment record. This repository stores only non-sensitive architecture and
+runbook updates.

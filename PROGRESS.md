@@ -5,8 +5,9 @@
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료
 - M1 Initial Assessment MVP 준비: M0 배선·Fixture 검증 완료, 실제 Snapshot/Bedrock 평가 통합 대기
-- M0 deployment readiness: protected GitHub Actions OIDC dispatch 입력 및 customer-approved
-  sandbox CloudTrail delivery/log-file-validation 확인 절차 문서화 (실제 AWS 배포 승인 대기)
+- M0 deployment readiness: 2단계 protected GitHub Environment 승인, expected-account fail-closed
+  검증, 재실행 가능한 exact SHA-256/S3 Version ID Lambda artifact binding 및 customer-approved
+  sandbox CloudTrail delivery/log-file-validation 절차 문서화 (실제 AWS 배포 승인 대기)
 
 ## Completed
 

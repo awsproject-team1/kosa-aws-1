@@ -21,5 +21,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Build and verify the Lambda ZIP
-        run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"
+      - name: Build and verify deterministic Lambda ZIP
+        run: |
+          set -euo pipefail
+          bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda-first.zip"
+          bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda-second.zip"
+          cmp -- "${RUNNER_TEMP}/m0-lambda-first.zip" "${RUNNER_TEMP}/m0-lambda-second.zip"
+          sha256sum "${RUNNER_TEMP}/m0-lambda-first.zip"
