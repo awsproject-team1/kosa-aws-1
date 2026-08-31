@@ -7,13 +7,11 @@ from collections.abc import Mapping
 
 from apps.backend.api.jobs import (
     AssessmentRequest,
-    AssessmentScopeDenied,
     JobApiService,
-    JobNotFoundError,
 )
-from apps.backend.auth import AuthorizationDenied, InvalidIdentityClaims, Principal
-from apps.backend.repositories import DuplicateJobError, RepositoryError
-from packages.contracts import ApiError, ApiErrorResponse
+from apps.backend.auth import InvalidIdentityClaims, Principal
+from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
+from packages.contracts import ApiErrorResponse
 
 
 class JobHttpHandler:
@@ -30,31 +28,22 @@ class JobHttpHandler:
             method, path, claims = _request_parts(event)
             principal = Principal.from_verified_claims(claims)
             if method == "POST" and path == "/assessments":
-                request = _assessment_request(event.get("body"))
+                try:
+                    request = _assessment_request(event.get("body"))
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("assessment body is invalid") from error
                 response = self._service.create_assessment(principal, request)
                 return _response(202, response.to_dict())
             if method == "GET" and path.startswith("/jobs/"):
                 job_id = path.removeprefix("/jobs/")
                 if not job_id or "/" in job_id:
-                    return _error(404, "NOT_FOUND", "The requested resource was not found")
+                    raise JobNotFoundError("job not found")
                 return _response(200, self._service.get_job(principal, job_id).to_dict())
-            return _error(404, "NOT_FOUND", "The requested resource was not found")
-        except InvalidIdentityClaims:
-            return _error(401, "UNAUTHORIZED", "Authentication is required")
-        except (AuthorizationDenied, AssessmentScopeDenied):
-            return _error(
-                403, "SCOPE_DENIED", "The requested resource is outside the approved scope"
-            )
-        except JobNotFoundError:
-            return _error(404, "NOT_FOUND", "The requested resource was not found")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return _error(400, "VALIDATION_ERROR", "The request is invalid")
-        except DuplicateJobError:
-            return _error(409, "CONFLICT", "The request conflicts with current state")
-        except RepositoryError:
-            return _error(503, "EXECUTION_ERROR", "The service is temporarily unavailable")
-        except Exception:
-            return _error(500, "EXECUTION_ERROR", "An internal error occurred")
+            raise JobNotFoundError("route not found")
+        except InvalidIdentityClaims as error:
+            return _public_error(error)
+        except Exception as error:
+            return _public_error(error)
 
 
 def _request_parts(event: Mapping[str, object]) -> tuple[str, str, Mapping[str, object]]:
@@ -62,12 +51,19 @@ def _request_parts(event: Mapping[str, object]) -> tuple[str, str, Mapping[str, 
         raise TypeError("event must be a mapping")
     request_context = _mapping(event.get("requestContext"))
     http = _mapping(request_context.get("http"))
-    authorizer = _mapping(request_context.get("authorizer"))
-    jwt = _mapping(authorizer.get("jwt"))
-    claims = _mapping(jwt.get("claims"))
+    claims = _identity_claims(request_context)
     method = _non_empty_string(http.get("method"), "method")
     path = _non_empty_string(event.get("rawPath"), "rawPath")
     return method, path, claims
+
+
+def _identity_claims(request_context: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        authorizer = _mapping(request_context.get("authorizer"))
+        jwt = _mapping(authorizer.get("jwt"))
+        return _mapping(jwt.get("claims"))
+    except (TypeError, ValueError) as error:
+        raise InvalidIdentityClaims("verified JWT claims are required") from error
 
 
 def _assessment_request(raw_body: object) -> AssessmentRequest:
@@ -103,8 +99,6 @@ def _response(status_code: int, body: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _error(status_code: int, code: str, message: str) -> dict[str, object]:
-    return _response(
-        status_code,
-        ApiErrorResponse(error=ApiError(code=code, message=message)).to_dict(),
-    )
+def _public_error(error: BaseException) -> dict[str, object]:
+    failure = sanitize_public_failure(error)
+    return _response(failure.status_code, ApiErrorResponse(error=failure.error).to_dict())

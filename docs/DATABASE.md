@@ -72,6 +72,12 @@ is populated only when the Job repository gains the customer-scoped list operati
 current `get_job(customer_id, job_id)` path must use the base table. This avoids exposing a
 global Job lookup as an authorization shortcut.
 
+M0의 `POST /assessments`는 Queue 전송 전에 `ASSESSMENT#{assessment_id}` 레코드와 연결된
+`JOB#{job_id}`를 저장한다. Assessment 레코드는 `repository_id`, `policy_profile_id`, `job_id`를
+영속화하므로 Worker는 최소 Queue payload만으로도 평가 selector를 복원한다. Queue 전송 실패 시
+Backend는 Job을 `FAILED`로 보상 전이하고 503을 반환한다. 보상 쓰기까지 실패할 수 있으므로
+Worker 도입 시에는 오래된 `QUEUED` 상태를 탐지·reconcile하는 운영 sweeper를 추가한다.
+
 ## Example items
 
 ```json

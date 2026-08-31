@@ -2,8 +2,9 @@
 
 import unittest
 
+from apps.backend.assessment import Assessment
 from apps.backend.jobs import create_job
-from apps.backend.repositories import DynamoDbJobRepository
+from apps.backend.repositories import DynamoDbAssessmentRepository, DynamoDbJobRepository
 from packages.contracts import JobCurrentStep
 
 
@@ -46,6 +47,26 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         self.assertIn(("CUSTOMER#cust-001", "JOB#job-001"), table.items)
         self.assertEqual(repository.get_job("cust-001", "job-001"), job)
         self.assertIsNone(repository.get_job("cust-002", "job-001"))
+
+    def test_assessment_persists_worker_selectors_and_repository_history_index(self) -> None:
+        table = InMemoryTable()
+        repository = DynamoDbAssessmentRepository(table)
+
+        repository.create_assessment(
+            Assessment(
+                assessment_id="asm-001",
+                customer_id="cust-001",
+                job_id="job-001",
+                repository_id="repo-001",
+                policy_profile_id="profile-001",
+            )
+        )
+
+        item = table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001")]
+        self.assertEqual(item["job_id"], "job-001")
+        self.assertEqual(item["repository_id"], "repo-001")
+        self.assertEqual(item["policy_profile_id"], "profile-001")
+        self.assertEqual(item["GSI3PK"], "REPOSITORY#repo-001")
 
 
 if __name__ == "__main__":

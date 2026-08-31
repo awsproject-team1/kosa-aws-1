@@ -2,14 +2,9 @@
 
 import unittest
 
-from apps.backend.api.jobs import (
-    AssessmentRequest,
-    AssessmentScopeDenied,
-    JobApiService,
-    JobNotFoundError,
-)
+from apps.backend.api.jobs import AssessmentRequest, JobApiService
 from apps.backend.auth import AuthorizationDenied, Principal, Role
-from apps.backend.jobs import create_job
+from apps.backend.jobs import AssessmentScopeDenied, JobNotFoundError, create_job
 from packages.contracts import JobCurrentStep, WorkflowTask
 
 
@@ -22,6 +17,17 @@ class InMemoryJobRepository:
 
     def get_job(self, customer_id: str, job_id: str):
         return self.jobs.get((customer_id, job_id))
+
+    def update_job(self, job, *, expected_revision: int) -> None:
+        self.jobs[(job.customer_id, job.job_id)] = job
+
+
+class InMemoryAssessmentRepository:
+    def __init__(self) -> None:
+        self.assessments = {}
+
+    def create_assessment(self, assessment) -> None:
+        self.assessments[(assessment.customer_id, assessment.assessment_id)] = assessment
 
 
 class ApprovedScope:
@@ -43,6 +49,11 @@ class RecordingDispatcher:
         self.tasks.append(task)
 
 
+class FailingDispatcher:
+    def dispatch(self, task: WorkflowTask) -> None:
+        raise RuntimeError("queue unavailable")
+
+
 def principal(subject: str = "subject-001", customer_id: str = "cust-001") -> Principal:
     return Principal(
         subject=subject,
@@ -55,13 +66,16 @@ def principal(subject: str = "subject-001", customer_id: str = "cust-001") -> Pr
 class JobApiServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repository = InMemoryJobRepository()
+        self.assessment_repository = InMemoryAssessmentRepository()
         self.scope = ApprovedScope()
         self.dispatcher = RecordingDispatcher()
         self.service = JobApiService(
             repository=self.repository,
+            assessment_repository=self.assessment_repository,
             assessment_scope=self.scope,
             dispatcher=self.dispatcher,
             job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
         )
 
     def test_create_uses_jwt_customer_and_dispatches_only_internal_task_fields(self) -> None:
@@ -75,6 +89,11 @@ class JobApiServiceTest(unittest.TestCase):
         self.assertIsNotNone(stored)
         self.assertEqual(stored.customer_id, "cust-001")
         self.assertEqual(stored.requested_by, "subject-001")
+        self.assertEqual(stored.assessment_id, "asm-001")
+        assessment = self.assessment_repository.assessments[("cust-001", "asm-001")]
+        self.assertEqual(assessment.job_id, "job-001")
+        self.assertEqual(assessment.repository_id, "repo-001")
+        self.assertEqual(assessment.policy_profile_id, "profile-001")
         self.assertEqual(
             self.dispatcher.tasks[0].to_dict(),
             {
@@ -94,7 +113,28 @@ class JobApiServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(self.repository.jobs, {})
+        self.assertEqual(self.assessment_repository.assessments, {})
         self.assertEqual(self.dispatcher.tasks, [])
+
+    def test_dispatch_failure_marks_persisted_job_failed_for_recovery(self) -> None:
+        self.service = JobApiService(
+            repository=self.repository,
+            assessment_repository=self.assessment_repository,
+            assessment_scope=self.scope,
+            dispatcher=FailingDispatcher(),
+            job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
+        )
+
+        with self.assertRaisesRegex(Exception, "workflow dispatch failed"):
+            self.service.create_assessment(
+                principal(),
+                AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-001"),
+            )
+
+        stored = self.repository.get_job("cust-001", "job-001")
+        self.assertEqual(stored.status.value, "FAILED")
+        self.assertEqual(stored.revision, 1)
 
     def test_get_reads_only_jwt_customer_partition_then_applies_owner_check(self) -> None:
         job = create_job(

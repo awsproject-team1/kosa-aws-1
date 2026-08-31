@@ -40,7 +40,9 @@ class Evaluator:
     def __init__(self, result: EvaluationResult) -> None:
         self.result = result
 
-    def evaluate(self, *, resource_id: str, rule, context: PolicyContext) -> EvaluationResult:
+    def evaluate(
+        self, *, resource_id: str, rule: PolicyRule, context: PolicyContext
+    ) -> EvaluationResult:
         return self.result
 
 

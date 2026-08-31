@@ -3,7 +3,7 @@
 from typing import Protocol
 
 from apps.backend.policy import PolicyContext
-from packages.contracts import EvaluationResult
+from packages.contracts import EvaluationResult, PolicyRule
 
 
 class EvaluationContractError(ValueError):
@@ -11,7 +11,9 @@ class EvaluationContractError(ValueError):
 
 
 class Evaluator(Protocol):
-    def evaluate(self, *, resource_id: str, rule, context: PolicyContext) -> EvaluationResult: ...
+    def evaluate(
+        self, *, resource_id: str, rule: PolicyRule, context: PolicyContext
+    ) -> EvaluationResult: ...
 
 
 class AssessmentRunner:

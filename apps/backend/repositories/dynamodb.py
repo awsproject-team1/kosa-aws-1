@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Protocol
 
+from apps.backend.assessment import Assessment
 from apps.backend.jobs.lifecycle import InvalidJobTransition, StaleJobRevision, transition_job
 from apps.backend.jobs.models import Job
 from apps.backend.repositories.ports import (
@@ -97,6 +98,40 @@ class DynamoDbJobRepository:
             if _provider_error_code(error) == "ConditionalCheckFailedException":
                 raise RevisionConflictError("job revision conflict") from None
             raise RepositoryError("job update failed") from None
+
+
+class DynamoDbAssessmentRepository:
+    """Persist Assessment selectors so workers can restore their evaluation target."""
+
+    def __init__(self, table: DynamoTable) -> None:
+        if table is None:
+            raise TypeError("table is required")
+        self._table = table
+
+    def create_assessment(self, assessment: Assessment) -> None:
+        if not isinstance(assessment, Assessment):
+            raise TypeError("assessment must be an Assessment")
+        try:
+            self._table.put_item(
+                Item={
+                    "PK": _customer_pk(assessment.customer_id),
+                    "SK": f"ASSESSMENT#{assessment.assessment_id}",
+                    "entity_type": "ASSESSMENT",
+                    "customer_id": assessment.customer_id,
+                    "assessment_id": assessment.assessment_id,
+                    "job_id": assessment.job_id,
+                    "repository_id": assessment.repository_id,
+                    "policy_profile_id": assessment.policy_profile_id,
+                    "status": "QUEUED",
+                    "GSI3PK": f"REPOSITORY#{assessment.repository_id}",
+                    "GSI3SK": f"ASSESSMENT#{assessment.assessment_id}",
+                },
+                ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            )
+        except Exception as error:
+            if _provider_error_code(error) == "ConditionalCheckFailedException":
+                raise DuplicateJobError("assessment already exists") from None
+            raise RepositoryError("assessment create failed") from None
 
 
 def _item_from_job(job: Job) -> dict[str, object]:

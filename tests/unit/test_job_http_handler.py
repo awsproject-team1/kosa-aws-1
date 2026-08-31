@@ -17,6 +17,14 @@ class InMemoryJobRepository:
     def get_job(self, customer_id: str, job_id: str):
         return self.jobs.get((customer_id, job_id))
 
+    def update_job(self, job, *, expected_revision: int) -> None:
+        self.jobs[(job.customer_id, job.job_id)] = job
+
+
+class InMemoryAssessmentRepository:
+    def create_assessment(self, assessment) -> None:
+        return None
+
 
 class ApprovedScope:
     def authorize(self, principal, *, repository_id: str, policy_profile_id: str) -> None:
@@ -54,9 +62,11 @@ class JobHttpHandlerTest(unittest.TestCase):
         self.repository = InMemoryJobRepository()
         service = JobApiService(
             repository=self.repository,
+            assessment_repository=InMemoryAssessmentRepository(),
             assessment_scope=ApprovedScope(),
             dispatcher=RecordingDispatcher(),
             job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
         )
         self.handler = JobHttpHandler(service)
 
@@ -88,6 +98,15 @@ class JobHttpHandlerTest(unittest.TestCase):
         request = event("GET", "/jobs/job-001")
         claims = request["requestContext"]["authorizer"]["jwt"]["claims"]
         del claims["custom:customer_id"]
+
+        response = self.handler.handle(request)
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(json.loads(response["body"])["error"]["code"], "UNAUTHORIZED")
+
+    def test_missing_authorizer_is_unauthorized(self) -> None:
+        request = event("GET", "/jobs/job-001")
+        del request["requestContext"]["authorizer"]
 
         response = self.handler.handle(request)
 

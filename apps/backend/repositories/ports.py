@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from apps.backend.assessment import Assessment
 from apps.backend.jobs.models import Job
 
 
@@ -80,6 +81,14 @@ class JobRepository(Protocol):
 
     def update_job(self, job: Job, *, expected_revision: int) -> None:
         """Persist a next Job state only when the stored revision matches."""
+        ...
+
+
+class AssessmentRepository(Protocol):
+    """Persistence operation for the selectors that start an Assessment workflow."""
+
+    def create_assessment(self, assessment: Assessment) -> None:
+        """Persist a new Assessment record without replacing an existing record."""
         ...
 
 

@@ -26,9 +26,9 @@
 
 ## M0 boundary payloads
 
-- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`와 Resource/AWS
-  Account Scope를 지정한다. Backend는 요청 값이 아니라 JWT claim으로 Customer와 허용
-  scope를 판정한다.
+- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`를 지정한다. Resource/AWS
+  Account Scope는 이후 Contract 확장 전까지 JWT claim과 승인된 Repository 설정에서 판정하며,
+  현재 M0 요청 body에는 포함하지 않는다.
 - Policy Profile 조회·평가는 `PolicyProfile.rule_ids`의 versioned Rule만 사용하고,
   `SourceReference`를 Evidence locator로 반환한다.
 - Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
@@ -60,10 +60,13 @@ OIDC EventBridge Event를 통해 Deployment Worker를 재개하며, Client callb
 
 ```json
 {
-  "code": "SCOPE_DENIED",
-  "message": "The requested repository is outside the approved scope.",
-  "request_id": "req_..."
+  "error": {
+    "code": "SCOPE_DENIED",
+    "message": "The requested resource is outside the approved scope"
+  }
 }
 ```
 
-초기 오류 코드: `UNAUTHORIZED`, `FORBIDDEN`, `SCOPE_DENIED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `EXECUTION_ERROR`.
+`packages/contracts.ApiErrorResponse`가 error envelope의 실행 가능한 정본이다. 초기 오류 코드:
+`UNAUTHORIZED`, `SCOPE_DENIED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`,
+`EXECUTION_ERROR`.
