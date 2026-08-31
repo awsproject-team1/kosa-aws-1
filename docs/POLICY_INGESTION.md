@@ -72,7 +72,7 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 - 원본 파일명, 선언/탐지 media type, byte size
 - `parser_id`, `parser_version`, 처리 시각과 처리 상태
 - 정규화 Artifact ID/hash와 추출 경고
-- 문서의 section/paragraph/table/sheet/page 단위
+- 문서의 section/paragraph/table/sheet 단위 (page 단위는 Tier 3의 PDF에서 추가된다)
 - 각 단위의 stable `locator`, 정규화 text hash, 원본 위치
 
 권장 처리 상태는 `UPLOADED`, `VALIDATING`, `PARSING`, `REVIEW_REQUIRED`, `READY`, `FAILED`,
@@ -80,10 +80,13 @@ Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
 
 Locator는 파일 형식과 무관하게 추적 가능해야 한다. 예시는 다음과 같다.
 
-- `page/12/paragraph/3`
-- `sheet/Security/row/27`
-- `heading/access-control/item/5`
-- `table/2/row/8`
+- `heading/access-control/item/5` — Markdown, DOCX
+- `sheet/Security/row/27` — XLSX
+- `table/2/row/8` — XLSX, DOCX
+- `page/12/paragraph/3` — Tier 3의 PDF에서만 쓰인다
+
+Tier 1–2 형식은 문서 구조에서 locator가 직접 나오지만, PDF는 page 좌표에 의존하므로 같은 원문이
+재조판되면 locator가 흔들린다. 이는 PDF를 별도 트랙으로 둔 또 하나의 이유다.
 
 ## Security and tenant isolation
 
