@@ -1,4 +1,4 @@
-"""Assessment input collection combining read-only D tool boundaries."""
+"""read-only D tool 경계를 결합하는 Assessment 입력 수집."""
 
 from agent.context.snapshot_reader import (
     AssessmentInputBundle,

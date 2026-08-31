@@ -1,4 +1,4 @@
-"""Unit tests for the Assessment input collector combining D read-only tools."""
+"""read-only D tool을 결합하는 Assessment 입력 collector에 대한 unit 테스트."""
 
 import unittest
 
@@ -167,9 +167,9 @@ class AssessmentInputCollectorTest(unittest.TestCase):
             build_collector().collect(request)
 
     def test_collect_rejects_other_customer_at_first_scoped_read(self) -> None:
-        # Both tools are scoped to CUSTOMER_ID. The collector reads IaC first,
-        # so an out-of-scope customer is refused by the GitHub scope guard
-        # before any AWS read happens -- the request never crosses tenants.
+        # 두 tool 모두 CUSTOMER_ID로 scope가 제한된다. collector는 IaC를 먼저 read하므로,
+        # scope 밖 customer는 AWS read가 일어나기 전에 GitHub scope 가드에서 거부된다.
+        # 요청이 tenant 경계를 넘지 않는다.
         with self.assertRaises(GitHubToolScopeError):
             build_collector().collect(read_request(customer_id="cust-999"))
 
@@ -196,8 +196,8 @@ class AssessmentInputCollectorTest(unittest.TestCase):
             read_request(selectors=())
 
     def test_read_resource_selector_requires_resource_id(self) -> None:
-        # Contract-level rule: READ_RESOURCE without resource_id is invalid, so
-        # building the query from the selector fails during collection.
+        # Contract 수준 규칙: resource_id 없는 READ_RESOURCE는 유효하지 않으므로,
+        # selector로 query를 만드는 시점(수집 중)에 실패한다.
         request = read_request(
             selectors=(
                 AwsResourceSelector(
