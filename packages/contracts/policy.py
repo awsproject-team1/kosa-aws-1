@@ -26,27 +26,37 @@ class RuleSeverity(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SourceReference:
-    """A traceable locator within an approved policy source artifact."""
+    """A traceable locator within one exact version of an approved policy source.
+
+    `source_version`은 Rule과 Control을 특정 Policy Source version에 고정한다. 원문이 개정되면
+    같은 locator라도 다른 내용을 가리키므로, 버전을 함께 고정해야 Evidence가 재현 가능하다.
+    """
 
     source_id: str
+    source_version: str
     locator: str
     content_sha256: str
 
     def __post_init__(self) -> None:
-        for name in ("source_id", "locator", "content_sha256"):
+        for name in ("source_id", "source_version", "locator", "content_sha256"):
             require_non_empty_string(getattr(self, name), name)
+
+    @property
+    def evidence_reference(self) -> str:
+        """Canonical evidence string: `{source_id}@{source_version}#{locator}`.
+
+        평가 결과의 Evidence는 이 형식을 사용한다. locator만으로는 어떤 Source의 어느 version을
+        인용했는지 복원할 수 없다.
+        """
+        return f"{self.source_id}@{self.source_version}#{self.locator}"
 
     def to_dict(self) -> dict[str, str]:
         return {
             "source_id": self.source_id,
+            "source_version": self.source_version,
             "locator": self.locator,
             "content_sha256": self.content_sha256,
         }
-
-    @property
-    def evidence_reference(self) -> str:
-        """Canonical policy evidence identifier: ``{source_id}#{locator}``."""
-        return f"{self.source_id}#{self.locator}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -151,6 +161,39 @@ class PolicyProfile:
         return {
             "policy_profile_id": self.policy_profile_id,
             "version": self.version,
+            "rule_references": [reference.to_dict() for reference in self.rule_references],
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PolicyControl:
+    """A policy source control and the versioned Rules that implement it.
+
+    Control은 Rule보다 상위의 정책 통제 항목이다. Coverage는 이 매핑을 통해 "어떤 통제가 어떤
+    Rule로 평가됐는지"로 설명된다. Rule의 `resource_types`가 Control을 Resource 유형에 전개한다.
+    """
+
+    control_id: str
+    title: str
+    source_reference: SourceReference
+    rule_references: tuple[PolicyRuleReference, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("control_id", "title"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.source_reference, SourceReference):
+            raise TypeError("source_reference must be a SourceReference")
+        if not self.rule_references:
+            raise ValueError("rule_references must not be empty")
+        for reference in self.rule_references:
+            if not isinstance(reference, PolicyRuleReference):
+                raise TypeError("rule_references items must be PolicyRuleReference values")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "control_id": self.control_id,
+            "title": self.title,
+            "source_reference": self.source_reference.to_dict(),
             "rule_references": [reference.to_dict() for reference in self.rule_references],
         }
 

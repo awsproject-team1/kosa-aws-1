@@ -1,0 +1,14 @@
+[
+  {
+    "policy_profile_id": "profile-mvp-baseline",
+    "version": "v2",
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"},
+      {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
+      {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
+      {"rule_id": "S3-ENCRYPT-001", "version": "2026-08-31"},
+      {"rule_id": "S3-TLS-001", "version": "2026-08-31"},
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
+    ]
+  }
+]

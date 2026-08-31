@@ -24,7 +24,10 @@ class Catalog:
             ),
         )
         reference = SourceReference(
-            source_id="isms-p", locator="control/5.2.1", content_sha256="digest-001"
+            source_id="isms-p",
+            source_version="2023-10-31",
+            locator="control/5.2.1",
+            content_sha256="digest-001",
         )
         self.rules = {
             "S3-001": PolicyRule(

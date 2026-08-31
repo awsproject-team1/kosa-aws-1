@@ -9,6 +9,7 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationStatus,
     GoldenDatasetCase,
+    PolicyControl,
     PolicyProfile,
     PolicyRule,
     PolicyRuleReference,
@@ -21,6 +22,7 @@ from packages.contracts import (
 
 FIXTURE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "policy_profile.json"
 GOLDEN_CASE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "golden_dataset_case.json"
+CONTROLS_PATH = Path(__file__).parents[2] / "fixtures" / "rules" / "controls.json"
 
 
 class PolicyContractTest(unittest.TestCase):
@@ -60,7 +62,10 @@ class PolicyContractTest(unittest.TestCase):
         self.assertEqual(source.to_dict(), fixture["policy_source"])
         self.assertEqual(rule.to_dict(), rule_data)
         self.assertEqual(profile.to_dict(), fixture["policy_profile"])
-        self.assertEqual(rule.source_references[0].evidence_reference, "isms-p-2023#control/5.2.1")
+        self.assertEqual(
+            rule.source_references[0].evidence_reference,
+            "isms-p-2023@2023.1#control/5.2.1",
+        )
 
     def test_golden_case_records_versioned_expected_range(self) -> None:
         fixture = json.loads(GOLDEN_CASE_PATH.read_text())
@@ -90,7 +95,10 @@ class PolicyContractTest(unittest.TestCase):
                 resource_types=("AWS::S3::Bucket",),
                 source_references=(
                     SourceReference(
-                        source_id="source-001", locator="section-1", content_sha256="hash-001"
+                        source_id="source-001",
+                        source_version="v1",
+                        locator="section-1",
+                        content_sha256="hash-001",
                     ),
                 ),
             )
@@ -108,6 +116,72 @@ class PolicyContractTest(unittest.TestCase):
                 expected_score_min=80,
                 expected_score_max=20,
                 expected_evidence_references=(),
+            )
+
+    def test_controls_fixture_serializes_the_control_mapping(self) -> None:
+        fixture = json.loads(CONTROLS_PATH.read_text(encoding="utf-8"))
+
+        for entry in fixture:
+            control = PolicyControl(
+                control_id=entry["control_id"],
+                title=entry["title"],
+                source_reference=SourceReference(**entry["source_reference"]),
+                rule_references=tuple(
+                    PolicyRuleReference(**reference) for reference in entry["rule_references"]
+                ),
+            )
+
+            self.assertEqual(control.to_dict(), entry)
+
+    def test_source_reference_pins_a_source_version_and_renders_evidence(self) -> None:
+        reference = SourceReference(
+            source_id="isms-p-2023",
+            source_version="2023-10-31",
+            locator="control/2.6.2",
+            content_sha256="hash-001",
+        )
+
+        self.assertEqual(reference.evidence_reference, "isms-p-2023@2023-10-31#control/2.6.2")
+        self.assertEqual(
+            reference.to_dict(),
+            {
+                "source_id": "isms-p-2023",
+                "source_version": "2023-10-31",
+                "locator": "control/2.6.2",
+                "content_sha256": "hash-001",
+            },
+        )
+
+    def test_source_reference_requires_a_source_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_version must be a non-empty string"):
+            SourceReference(
+                source_id="isms-p-2023",
+                source_version="  ",
+                locator="control/2.6.2",
+                content_sha256="hash-001",
+            )
+
+    def test_control_requires_at_least_one_rule_reference(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rule_references must not be empty"):
+            PolicyControl(
+                control_id="ISMS-P-2.6.2",
+                title="정보시스템 접근",
+                source_reference=SourceReference(
+                    source_id="isms-p-2023",
+                    source_version="2023-10-31",
+                    locator="control/2.6.2",
+                    content_sha256="hash-001",
+                ),
+                rule_references=(),
+            )
+
+    def test_control_rejects_a_non_source_reference(self) -> None:
+        with self.assertRaisesRegex(TypeError, "source_reference must be a SourceReference"):
+            PolicyControl(
+                control_id="ISMS-P-2.6.2",
+                title="정보시스템 접근",
+                source_reference={"source_id": "isms-p-2023"},
+                rule_references=(PolicyRuleReference(rule_id="S3-ACL-001", version="v1"),),
             )
 
 

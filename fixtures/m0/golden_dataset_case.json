@@ -10,6 +10,6 @@
   "expected_score_max": 30,
   "expected_evidence_references": [
     "aws:s3:public-access-block",
-    "isms-p-2023#control/5.2.1"
+    "isms-p-2023@2023.1#control/5.2.1"
   ]
 }

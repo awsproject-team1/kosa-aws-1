@@ -1,0 +1,74 @@
+[
+  {
+    "control_id": "ISMS-P-2.6.2",
+    "title": "정보시스템 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.2",
+      "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+    },
+    "rule_references": [
+      {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
+      {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-SNAPSHOT-PUBLIC-001", "version": "2026-08-31"}
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.7.1",
+    "title": "암호정책 적용",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.7.1",
+      "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+    },
+    "rule_references": [
+      {"rule_id": "S3-ENCRYPT-001", "version": "2026-08-31"},
+      {"rule_id": "S3-TLS-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-EBS-ENCRYPT-001", "version": "2026-08-31"}
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.4",
+    "title": "로그 및 접속기록 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.4",
+      "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+    },
+    "rule_references": [
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.2",
+    "title": "클라우드 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.2",
+      "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+    },
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"},
+      {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
+      {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.3",
+    "title": "공개서버 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.3",
+      "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
+    },
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"}
+    ]
+  }
+]
