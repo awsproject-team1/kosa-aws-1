@@ -110,6 +110,11 @@ class RemediationPolicy:
         if finding.resource_id != target.resource_id:
             # 다른 리소스의 상태로 판정하면 관리 여부와 IaC 판정이 통째로 어긋난다.
             raise ValueError("target describes a different resource than the finding")
+        if (target.rule_id, target.rule_version) != (finding.rule_id, finding.rule_version):
+            # `iac_status`는 같은 Rule version의 판정일 때만 의미가 있다. 대조하지 않으면 같은
+            # 리소스의 다른 Rule에서 나온 `PASS`가 `ACTUAL_SYNC`를 열어, 안전하지 않은 IaC를
+            # 배포 대상으로 삼게 된다.
+            raise ValueError("target describes a different rule than the finding")
 
         exception = self._active_exception(
             finding, customer_id=customer_id, at=at, exceptions=exceptions
@@ -173,8 +178,9 @@ class RemediationPolicy:
     ) -> RemediationException | None:
         """Return the narrowest active exemption covering this Finding, or `None`.
 
-        여러 예외가 겹치면 리소스 단위가 Rule 전체보다 우선한다. 같은 범위가 여러 건이면 주어진
-        순서의 첫 번째다 — 판정은 입력이 같으면 항상 같아야 한다.
+        여러 예외가 겹치면 리소스 단위가 Rule 전체보다 우선한다. 같은 좁기가 여러 건이면
+        `exception_id` 순으로 첫 번째다 — 입력 순서를 기준으로 삼으면 저장소 조회 순서가 달라질
+        때 감사 기록에 남는 `exception_id`가 같은 사실에 대해 달라진다.
         """
         matches: list[RemediationException] = []
         for exception in exceptions:
@@ -188,12 +194,15 @@ class RemediationPolicy:
             ):
                 continue
             if not exception.is_active_at(at):
-                # 만료된 예외는 없는 것과 같다. Finding은 다시 조치 판정을 받는다.
+                # 승인 전이거나 만료된 예외는 없는 것과 같다. Finding은 조치 판정을 받는다.
                 continue
             matches.append(exception)
         if not matches:
             return None
-        return min(matches, key=lambda exception: exception.resource_id is None)
+        return min(
+            matches,
+            key=lambda exception: (exception.resource_id is None, exception.exception_id),
+        )
 
     def _manual(self, finding: Finding, code: ManualReviewCode) -> RemediationDecision:
         return self._decision(

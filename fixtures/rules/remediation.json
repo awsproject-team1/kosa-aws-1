@@ -17,7 +17,7 @@
   {
     "rule_id": "S3-ENCRYPT-001",
     "version": "2026-08-31",
-    "eligibility": "AUTOMATIC"
+    "eligibility": "MANUAL_ONLY"
   },
   {
     "rule_id": "S3-TLS-001",

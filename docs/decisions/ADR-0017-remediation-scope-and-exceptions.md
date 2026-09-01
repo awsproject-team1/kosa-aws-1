@@ -31,11 +31,11 @@ an enumerated value, never free text that could quote a policy original.
 `AUTOMATIC` only when (1) the Rule alone determines a unique compliant target
 state and (2) reaching that state does not require resource replacement or data
 loss. Everything else is `MANUAL_ONLY`. Under this criterion S3 Block Public
-Access, ACL ownership, default encryption, and TLS-only transport are automatic;
-a bucket policy's intended network scope and a server access log destination are
-not determined by the Rule, and encrypting an existing EBS volume requires
-replacing it, so those are manual. The classification lives in
-`fixtures/rules/remediation.json` next to the Rules it judges.
+Access, ACL ownership, and TLS-only transport are automatic. A bucket policy's
+intended network scope, a server access log destination, and an S3 encryption
+algorithm or KMS key are not determined by their Rules; encrypting an existing
+EBS volume requires replacing it. Those Rules are manual. The classification
+lives in `fixtures/rules/remediation.json` next to the Rules it judges.
 
 **Eligibility governs patch synthesis, not every automatic action.** Both criteria
 ask whether a safe change can be derived from the Rule alone, so `MANUAL_ONLY`
@@ -65,9 +65,20 @@ customer and passes them to the judgement, because their lifetime is the
 customer's, not the Rule's.
 
 **An active exception is evaluated first.** It expresses "this Rule is not acted
-on for this resource", so there is no action type left to compute.
+on for this resource", so there is no action type left to compute. Active means
+`approved_at <= moment < expires_at`: checking only expiry would let an exception
+registered today retroactively suppress a Finding evaluated before anyone
+approved it. Where several active exceptions cover one Finding, the
+resource-scoped one wins, and ties break on `exception_id` so the audit record
+does not depend on repository iteration order.
 
 **An Actual or Drift Finding needs the IaC verdict for the same Resource × Rule.**
+`RemediationTarget` therefore carries `rule_id`, `rule_version`, and the
+perspective paired with `iac_status`. `decide()` refuses a target whose identity
+differs from the Finding's, and the Contract only accepts `IAC` as the paired
+perspective: a `PASS` from another Rule or an Actual evaluation on the same
+resource is not evidence that this Rule's IaC is safe, and accepting one would
+make unsafe IaC a deployment target.
 `PASS` means the IaC is already safe, so the current commit is synced rather than
 patched. `FAIL` means the IaC must change. Any other value — including
 `OUT_OF_SCOPE` and `EXECUTION_ERROR` — is unknown, not safe, and produces

@@ -113,7 +113,8 @@ class RemediationException:
     하나만 덮는다.
 
     예외는 반드시 만료된다. 만료 없는 예외는 통제를 조용히 영구 제거하고, 그 사실이 어느 화면에도
-    남지 않는다. 만료 시각이 지나면 Finding은 다시 조치 판정을 받는다 (ADR-0017).
+    남지 않는다. 유효 구간은 `approved_at`부터 `expires_at` 직전까지이며, 그 바깥에서 Finding은
+    다시 조치 판정을 받는다 (ADR-0017).
     """
 
     exception_id: str
@@ -146,16 +147,25 @@ class RemediationException:
             raise ValueError("expires_at must be later than approved_at")
 
     @property
+    def approved_at_utc(self) -> datetime:
+        return require_offset_aware_timestamp(self.approved_at, "approved_at")
+
+    @property
     def expires_at_utc(self) -> datetime:
         return require_offset_aware_timestamp(self.expires_at, "expires_at")
 
     def is_active_at(self, moment: datetime) -> bool:
-        """Whether the exemption still holds at one exact moment."""
+        """Whether the exemption has taken effect and not yet expired at one exact moment.
+
+        유효 구간은 `approved_at <= moment < expires_at`이다. 만료만 확인하면 나중에 등록된
+        예외가 승인 이전에 평가된 Finding까지 소급해 덮는다. 그 Finding은 아무도 면제를 승인한
+        적 없는 시점의 위반이므로, 억제된 채로 감사 기록에 남으면 승인 경계가 무너진다.
+        """
         if not isinstance(moment, datetime):
             raise TypeError("moment must be a datetime")
         if moment.tzinfo is None or moment.utcoffset() is None:
             raise ValueError("moment must be offset-aware")
-        return moment < self.expires_at_utc
+        return self.approved_at_utc <= moment < self.expires_at_utc
 
     def covers(
         self, *, customer_id: str, rule_id: str, rule_version: str, resource_id: str
@@ -199,27 +209,52 @@ class RemediationTarget:
 
     `iac_status`는 같은 `Resource × Rule`의 `IAC` 관점 판정이다. Actual/Drift Finding의 조치
     유형은 IaC가 이미 안전한지에 따라 갈리므로, 이 값 없이는 Patch와 동기화를 구분할 수 없다.
+
+    그래서 그 판정이 **어느 Rule version과 관점의 것인지**를 값이 스스로 들고
+    다닌다. `resource_id`만 맞춰서는 같은 리소스의 다른 Rule이나 Actual 관점에서 나온
+    `PASS`가 `ACTUAL_SYNC`를 열 수 있고, 그러면 실제로 안전하지 않은 IaC를 배포 대상으로
+    삼게 된다. `decide()`가 Resource·Rule identity를 Finding과 대조하고, Contract가
+    `iac_status`와 `IAC` perspective를 한 쌍으로 강제한다.
     """
 
     resource_id: str
     resource_type: str
+    rule_id: str
+    rule_version: str
     terraform_managed: bool
     iac_status: EvaluationStatus | None = None
+    iac_perspective: EvaluationPerspective | None = None
 
     def __post_init__(self) -> None:
-        require_non_empty_string(self.resource_id, "resource_id")
-        require_non_empty_string(self.resource_type, "resource_type")
+        for name in ("resource_id", "resource_type", "rule_id", "rule_version"):
+            require_non_empty_string(getattr(self, name), name)
         if not isinstance(self.terraform_managed, bool):
             raise TypeError("terraform_managed must be a bool")
         if self.iac_status is not None and not isinstance(self.iac_status, EvaluationStatus):
             raise TypeError("iac_status must be an EvaluationStatus or None")
+        if self.iac_perspective is not None and not isinstance(
+            self.iac_perspective, EvaluationPerspective
+        ):
+            raise TypeError("iac_perspective must be an EvaluationPerspective or None")
+        if (self.iac_status is None) != (self.iac_perspective is None):
+            raise ValueError("iac_status and iac_perspective must be provided together")
+        if (
+            self.iac_perspective is not None
+            and self.iac_perspective is not EvaluationPerspective.IAC
+        ):
+            raise ValueError("iac_perspective must identify an IAC evaluation")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "resource_id": self.resource_id,
             "resource_type": self.resource_type,
+            "rule_id": self.rule_id,
+            "rule_version": self.rule_version,
             "terraform_managed": self.terraform_managed,
             "iac_status": None if self.iac_status is None else self.iac_status.value,
+            "iac_perspective": (
+                None if self.iac_perspective is None else self.iac_perspective.value
+            ),
         }
 
 
