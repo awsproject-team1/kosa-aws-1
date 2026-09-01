@@ -110,7 +110,7 @@ class XmlEntityExpansionTest(unittest.TestCase):
             '<?xml version="1.0" encoding="UTF-16"?>'
             '<document xmlns:w="http://schemas.openxmlformats.org/'
             'wordprocessingml/2006/main"><w:body>'
-            f'{paragraph("Controls", style="Heading1")}{paragraph("A rule.")}'
+            f"{paragraph('Controls', style='Heading1')}{paragraph('A rule.')}"
             "</w:body></document>"
         )
 
