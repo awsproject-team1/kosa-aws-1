@@ -1,10 +1,10 @@
 # Bedrock 모델 실측 평가
 
-외부 벤치마크·단가가 아닌 이 실행의 유효성, 반복 결정 일치율, Assessment score 편차, 지연시간, 토큰 사용량만 사용했습니다.
+외부 벤치마크·단가가 아닌 이 실행의 유효성, 유효 출력 내 최소 Case 결정 일치율, Assessment score 편차, 지연시간, 토큰 사용량만 사용했습니다. 결정 일치율은 유효 출력만 분모로 계산하며, invalid 실행은 유효율에 별도로 반영했습니다.
 
 ## ASSESSMENT
 
-| 후보 모델 | 품질 Gate | 유효 실행 | 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
+| 후보 모델 | 품질 Gate | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Amazon Nova Micro (`amazon.nova-micro-v1:0`) | PASS | 5/5 (100%) | 100% | 0.0 | 881 ms | 450 | - |
 | Qwen Qwen3-Coder-30B-A3B-Instruct (`qwen.qwen3-coder-30b-a3b-v1:0`) | PASS | 5/5 (100%) | 100% | 0.0 | 921 ms | 449 | - |
@@ -54,11 +54,11 @@
 
 **선정:** Amazon Nova Micro (`amazon.nova-micro-v1:0`)
 
-선정 이유: 품질 Gate 통과 후보를 유효율, Case별 결정 일치율, score 편차, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
+선정 이유: 품질 Gate 통과 후보를 유효율, 유효 출력 내 최소 Case 결정 일치율, score 편차, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
 
 ## Parent
 
-| 후보 모델 | 품질 Gate | 유효 실행 | 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
+| 후보 모델 | 품질 Gate | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Google Gemma 3 4B IT (`google.gemma-3-4b-it`) | PASS | 15/15 (100%) | 100% | - | 659 ms | 164 | - |
 | Z.AI GLM 4.7 Flash (`zai.glm-4.7-flash`) | PASS | 15/15 (100%) | 100% | - | 725 ms | 155 | - |
@@ -108,11 +108,11 @@
 
 **선정:** Google Gemma 3 4B IT (`google.gemma-3-4b-it`)
 
-선정 이유: 품질 Gate 통과 후보를 유효율, Case별 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
+선정 이유: 품질 Gate 통과 후보를 유효율, 유효 출력 내 최소 Case 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
 
 ## POLICY_QA
 
-| 후보 모델 | 품질 Gate | 유효 실행 | 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
+| 후보 모델 | 품질 Gate | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Mistral AI Voxtral Mini 3B 2507 (`mistral.voxtral-mini-3b-2507`) | PASS | 5/5 (100%) | 100% | - | 610 ms | 210 | - |
 | Qwen Qwen3-Coder-30B-A3B-Instruct (`qwen.qwen3-coder-30b-a3b-v1:0`) | PASS | 5/5 (100%) | 100% | - | 674 ms | 213 | - |
@@ -162,11 +162,11 @@
 
 **선정:** Mistral AI Voxtral Mini 3B 2507 (`mistral.voxtral-mini-3b-2507`)
 
-선정 이유: 품질 Gate 통과 후보를 유효율, Case별 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
+선정 이유: 품질 Gate 통과 후보를 유효율, 유효 출력 내 최소 Case 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
 
 ## REMEDIATION_DEPLOYMENT
 
-| 후보 모델 | 품질 Gate | 유효 실행 | 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
+| 후보 모델 | 품질 Gate | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Mistral AI Devstral 2 123B (`mistral.devstral-2-123b`) | PASS | 5/5 (100%) | 100% | - | 5563 ms | 664 | - |
 | Z.AI GLM 5 (`zai.glm-5`) | FAIL | 4/5 (80%) | 100% | - | 6903 ms | 589 | - |
@@ -216,4 +216,4 @@
 
 **선정:** Mistral AI Devstral 2 123B (`mistral.devstral-2-123b`)
 
-선정 이유: 품질 Gate 통과 후보를 유효율, Case별 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
+선정 이유: 품질 Gate 통과 후보를 유효율, 유효 출력 내 최소 Case 결정 일치율, 중앙 지연, 중앙 토큰 순으로 정렬했습니다.
