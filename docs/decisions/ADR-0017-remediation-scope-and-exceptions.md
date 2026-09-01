@@ -64,21 +64,40 @@ an old approval. Exceptions are not committed to the registry; A stores them per
 customer and passes them to the judgement, because their lifetime is the
 customer's, not the Rule's.
 
-**An active exception is evaluated first.** It expresses "this Rule is not acted
-on for this resource", so there is no action type left to compute. Active means
-`approved_at <= moment < expires_at`: checking only expiry would let an exception
-registered today retroactively suppress a Finding evaluated before anyone
-approved it. Where several active exceptions cover one Finding, the
+**An in-force exception is evaluated first.** It expresses "this Rule is not acted
+on for this resource", so there is no action type left to compute. In force means
+two separate comparisons, not one: the approval must precede the moment the
+Finding was evaluated (`approved_at <= finding_evaluated_at`), and the exemption
+must not yet have expired when the judgement runs (`at < expires_at`). Comparing
+both against a single moment cannot hold both rules, because a remediation request
+normally arrives later than the assessment it acts on — a human reads the report
+and chooses. Using the decision time for the approval check would let an exception
+registered today retroactively suppress a Finding evaluated before anyone approved
+it; using the evaluation time for the expiry check would revive an exemption that
+has since lapsed. Where several in-force exceptions cover one Finding, the
 resource-scoped one wins, and ties break on `exception_id` so the audit record
 does not depend on repository iteration order.
 
-**An Actual or Drift Finding needs the IaC verdict for the same Resource × Rule.**
-`RemediationTarget` therefore carries `rule_id`, `rule_version`, and the
-perspective paired with `iac_status`. `decide()` refuses a target whose identity
-differs from the Finding's, and the Contract only accepts `IAC` as the paired
+**An Actual or Drift Finding needs the IaC verdict for the same Resource × Rule,
+from the commit being remediated.** `RemediationTarget` therefore carries
+`rule_id`, `rule_version`, the perspective, and `iac_commit_sha`, all paired with
+`iac_status` as one bundle. `decide()` refuses a target whose identity differs
+from the Finding's, and the Contract only accepts `IAC` as the paired
 perspective: a `PASS` from another Rule or an Actual evaluation on the same
 resource is not evidence that this Rule's IaC is safe, and accepting one would
 make unsafe IaC a deployment target.
+
+The commit binding closes the same hole across time rather than across identity.
+A repository advancing after an assessment is normal, so a verdict produced from
+one commit can be paired with a newer snapshot; `ACTUAL_SYNC` must deploy the
+commit that passed `IAC`, and an unevaluated newer commit is not that commit. A
+verdict whose `iac_commit_sha` differs from the commit being remediated is
+therefore unknown and produces `IAC_VERDICT_COMMIT_MISMATCH`, whether it says
+`PASS` or `FAIL`: a stale `FAIL` may already be fixed, and synthesizing a patch
+on top of it can revert the fix a human wrote. An `IAC` Finding does not re-read
+its own perspective's verdict, so the comparison does not apply to it; its patch
+is bound to the snapshot D was asked for.
+
 `PASS` means the IaC is already safe, so the current commit is synced rather than
 patched. `FAIL` means the IaC must change. Any other value — including
 `OUT_OF_SCOPE` and `EXECUTION_ERROR` — is unknown, not safe, and produces
@@ -99,6 +118,13 @@ against the old version, which is the intended cost of a version pin.
 Expiry comparison is the first place the contracts order timestamps, so
 `approved_at` and `expires_at` must carry an explicit UTC offset. Other contract
 timestamps remain opaque display strings.
+
+A must supply three request-shaped values it already holds: the commit being
+remediated, the moment the Finding was evaluated, and the moment of judgement.
+`Finding` gains no timestamp — it stays C's immutable projection — so the
+evaluation moment travels as an argument rather than inside the Contract. Callers
+that cannot name the commit or the evaluation moment cannot obtain an actionable
+decision, which is the intended direction of failure.
 
 The boundary judges; it does not persist. A binds the decision to the Job state
 and audit record, and D still validates that a generated patch matches the

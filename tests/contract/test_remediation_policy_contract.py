@@ -21,6 +21,7 @@ CUSTOMER = "customer-001"
 RESOURCE = "arn:aws:s3:::example-bucket"
 RULE_ID = "S3-PUBLIC-001"
 RULE_VERSION = "2026-08-31"
+COMMIT = "a" * 40
 
 
 def _exception(**overrides: object) -> RemediationException:
@@ -71,6 +72,7 @@ class RemediationEnumContractTests(unittest.TestCase):
                 "RULE_MANUAL_ONLY",
                 "RESOURCE_NOT_IAC_MANAGED",
                 "IAC_OUTCOME_UNKNOWN",
+                "IAC_VERDICT_COMMIT_MISMATCH",
                 "INSUFFICIENT_EVIDENCE",
                 "EVALUATION_REQUIRES_REVIEW",
             },
@@ -136,6 +138,41 @@ class RemediationExceptionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _exception().is_active_at(datetime(2026, 9, 1, 0, 0))
 
+    def test_being_in_force_separates_approval_from_expiry(self):
+        """승인은 Finding 평가 시각과, 만료는 판정 시각과 비교한다 (ADR-0017)."""
+        exception = _exception(
+            approved_at="2026-09-01T00:00:00+00:00", expires_at="2026-09-03T00:00:00+00:00"
+        )
+        evaluated = datetime(2026, 9, 2, 0, 0, tzinfo=UTC)
+
+        self.assertTrue(
+            exception.is_in_force_for(
+                evaluated_at=evaluated, at=datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+            )
+        )
+        # 판정 시각에 이미 만료됐다.
+        self.assertFalse(
+            exception.is_in_force_for(
+                evaluated_at=evaluated, at=datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
+            )
+        )
+        # Finding이 승인보다 먼저 평가됐다 — 소급 억제는 열리지 않는다.
+        self.assertFalse(
+            exception.is_in_force_for(
+                evaluated_at=datetime(2026, 8, 31, 0, 0, tzinfo=UTC),
+                at=datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
+            )
+        )
+
+    def test_being_in_force_requires_two_offset_aware_moments(self):
+        aware = datetime(2026, 9, 2, 0, 0, tzinfo=UTC)
+        naive = datetime(2026, 9, 2, 0, 0)
+
+        for kwargs in ({"evaluated_at": naive, "at": aware}, {"evaluated_at": aware, "at": naive}):
+            with self.subTest(kwargs=sorted(kwargs)):
+                with self.assertRaises(ValueError):
+                    _exception().is_in_force_for(**kwargs)
+
     def test_an_exception_serializes_its_full_scope(self):
         payload = _exception(resource_id=RESOURCE, ticket_reference="SEC-42").to_dict()
 
@@ -178,6 +215,7 @@ class RemediationTargetContractTests(unittest.TestCase):
 
         self.assertIsNone(target.to_dict()["iac_status"])
         self.assertIsNone(target.to_dict()["iac_perspective"])
+        self.assertIsNone(target.to_dict()["iac_commit_sha"])
 
     def test_an_iac_outcome_serializes_as_its_status_value(self):
         target = RemediationTarget(
@@ -188,18 +226,25 @@ class RemediationTargetContractTests(unittest.TestCase):
             terraform_managed=True,
             iac_status=EvaluationStatus.PASS,
             iac_perspective=EvaluationPerspective.IAC,
+            iac_commit_sha=COMMIT,
         )
 
         self.assertEqual(target.to_dict()["iac_status"], "PASS")
         self.assertEqual(target.to_dict()["iac_perspective"], "IAC")
+        self.assertEqual(target.to_dict()["iac_commit_sha"], COMMIT)
 
-    def test_iac_status_and_perspective_must_be_provided_together(self):
+    def test_the_iac_verdict_status_perspective_and_commit_are_one_bundle(self):
+        """부분적으로 채워진 판정은 없는 것보다 위험하다 — 대조를 건너뛰고 값이 쓰인다."""
         cases = (
             {"iac_status": EvaluationStatus.PASS},
             {"iac_perspective": EvaluationPerspective.IAC},
+            {"iac_commit_sha": COMMIT},
+            {"iac_status": EvaluationStatus.PASS, "iac_perspective": EvaluationPerspective.IAC},
+            {"iac_status": EvaluationStatus.PASS, "iac_commit_sha": COMMIT},
+            {"iac_perspective": EvaluationPerspective.IAC, "iac_commit_sha": COMMIT},
         )
         for fields in cases:
-            with self.subTest(fields=fields):
+            with self.subTest(fields=sorted(fields)):
                 with self.assertRaises(ValueError):
                     RemediationTarget(
                         resource_id=RESOURCE,
@@ -209,6 +254,19 @@ class RemediationTargetContractTests(unittest.TestCase):
                         terraform_managed=True,
                         **fields,
                     )
+
+    def test_a_blank_verdict_commit_is_refused(self):
+        with self.assertRaises(ValueError):
+            RemediationTarget(
+                resource_id=RESOURCE,
+                resource_type="AWS::S3::Bucket",
+                rule_id=RULE_ID,
+                rule_version=RULE_VERSION,
+                terraform_managed=True,
+                iac_status=EvaluationStatus.PASS,
+                iac_perspective=EvaluationPerspective.IAC,
+                iac_commit_sha="   ",
+            )
 
     def test_only_an_iac_perspective_can_provide_the_iac_status(self):
         with self.assertRaises(ValueError):
@@ -220,6 +278,7 @@ class RemediationTargetContractTests(unittest.TestCase):
                 terraform_managed=True,
                 iac_status=EvaluationStatus.PASS,
                 iac_perspective=EvaluationPerspective.AWS_ACTUAL,
+                iac_commit_sha=COMMIT,
             )
 
 

@@ -26,12 +26,13 @@
 각 PR 브랜치에서 직접 읽어 확인했다 (2026-09-01). **세 PR 모두 아직 `dev`에 merge되지 않았다** —
 `dev`에 있는 것은 `apps/backend/remediation/service.py`뿐이다. B 항목은
 `feature/m2-policy-remediation-scope`의 working tree 기준이며 커밋 `ae4c823` 이후의 보강
-(`RemediationTarget`의 `rule_id`/`rule_version`, 예외 유효 구간)을 포함한다.
+(`RemediationTarget`의 `rule_id`/`rule_version`/`iac_commit_sha`, 예외의 승인·만료 분리)을
+포함한다.
 
 | 역할 | 위치 | 지금 하는 일 |
 | --- | --- | --- |
-| B (#24) | `apps/backend/policy/remediation.py` | `RemediationPolicy.decide(finding, *, customer_id, target, at, exceptions) -> RemediationDecision`. 아무것도 영속화하지 않고 GitHub·AWS·Terraform을 건드리지 않는다 |
-| B (#24) | `packages/contracts/remediation_policy.py` | `RemediationAction`(`TERRAFORM_PATCH`/`ACTUAL_SYNC`/`MANUAL_REVIEW`/`SUPPRESSED`), `RemediationDecision`, `RemediationTarget`(`resource_id`, `resource_type`, `rule_id`, `rule_version`, `terraform_managed`, `iac_status?`), `RemediationException`, `RemediationEligibility`, `ManualReviewCode` |
+| B (#24) | `apps/backend/policy/remediation.py` | `RemediationPolicy.decide(finding, *, customer_id, target, commit_sha, finding_evaluated_at, at, exceptions) -> RemediationDecision`. 아무것도 영속화하지 않고 GitHub·AWS·Terraform을 건드리지 않는다 |
+| B (#24) | `packages/contracts/remediation_policy.py` | `RemediationAction`(`TERRAFORM_PATCH`/`ACTUAL_SYNC`/`MANUAL_REVIEW`/`SUPPRESSED`), `RemediationDecision`, `RemediationTarget`(`resource_id`, `resource_type`, `rule_id`, `rule_version`, `terraform_managed`, `iac_status?`, `iac_perspective?`, `iac_commit_sha?`), `RemediationException`, `RemediationEligibility`, `ManualReviewCode` |
 | D (#21) | `apps/backend/remediation/service.py` | `RemediationService.generate(*, finding_id, snapshot) -> RemediationPatch`. patch가 finding·snapshot·customer·repository에 묶였는지 **검증만** 한다. 판정을 묻지 않는다 |
 | D (#21) | `apps/backend/remediation/generator.py` | `FixturePatchGenerator.generate(*, finding_id, snapshot)`. `PatchGenerator` Protocol 구현체 |
 | A (#23) | `apps/backend/api/remediations.py` | `RemediationApiService.create_remediation(principal, finding_id)`. `authorize(START_REMEDIATION)` → `RemediationContextReader.get_context(customer_id, finding_id)` → `job_type="REMEDIATION"`, `JobCurrentStep.GENERATE_REMEDIATION` Job 생성 → `WorkflowCommand.GENERATE_REMEDIATION` outbox dispatch |
@@ -53,12 +54,13 @@
 
 | | B `RemediationPolicy.decide()` | C `build_remediation_context()` |
 | --- | --- | --- |
-| 입력 | Finding, customer_id, `RemediationTarget`, 시각, 고객 예외 | Finding, snapshot, IaC/Actual `EvaluationResult` |
+| 입력 | Finding, customer_id, `RemediationTarget`, 조치 대상 commit, Finding 평가 시각, 판정 시각, 고객 예외 | Finding, snapshot, IaC/Actual `EvaluationResult` |
 | 고객 승인 예외 | 반영 (`SUPPRESSED`) | **미반영** |
 | Rule version 허용 범위 | 반영 (`RULE_NOT_IN_SCOPE`, `RULE_MANUAL_ONLY`) | **미반영** |
 | Terraform 관리 여부 | 반영 (`RESOURCE_NOT_IAC_MANAGED`) | **미반영** |
-| 예외 유효 구간 | 반영 (`approved_at <= at < expires_at`) | 없음 |
+| 예외 유효 구간 | 반영 (`approved_at <= finding_evaluated_at`, `at < expires_at`) | 없음 |
 | `iac_status`의 Rule version 대조 | 반영 (`target`의 rule과 Finding을 대조) | 없음 |
+| `iac_status`의 commit 대조 | 반영 (`IAC_VERDICT_COMMIT_MISMATCH`) | 없음 |
 | 거부 사유 | `ManualReviewCode` 열거값 | 없음 (`MANUAL_REVIEW` 한 값) |
 
 두 엔진을 그대로 두면 "고객 예외가 있는데 patch가 만들어졌다"가 버그가 아니라 **설계상 가능한
@@ -76,9 +78,10 @@ B는 "D의 Patch 생성과 A의 Remediation API가 이 판정을 **앞에서** �
 
 ### D1. `decide()`는 A의 Remediation API가 호출한다. 강제는 D가 타입으로 한다
 
-판정 입력 네 가지(`customer_id`, 고객 예외 목록, 판정 시각, `RemediationTarget`)가 모두 A의
-HTTP 진입점에 모인다. 대신 D의 `generate()`가 **판정 값을 인자로 요구**하게 만들어, A를
-우회하는 경로(worker 직접 호출, 재시도, 배치)가 판정 없이 patch를 만들 수 없게 한다.
+판정 입력(`customer_id`, 고객 예외 목록, `RemediationTarget`, 조치 대상 commit, Finding 평가
+시각, 판정 시각)이 모두 A의 HTTP 진입점에 모인다. 대신 D의 `generate()`가 **판정 값을 인자로
+요구**하게 만들어, A를 우회하는 경로(worker 직접 호출, 재시도, 배치)가 판정 없이 patch를 만들 수
+없게 한다.
 
 D는 `RemediationPolicy`를 import하지 않는다. 판정 **값**(`RemediationDecision`)에만 의존하므로
 B 구현과 분리된 채 남는다. 정책 집행을 generator 안에 두는 안은 채택하지 않는다 — generator는
@@ -90,12 +93,23 @@ B 구현과 분리된 채 남는다. 정책 집행을 generator 안에 두는 �
 | --- | --- |
 | `resource_id`, `rule_id`, `rule_version` | Finding. `decide()`가 세 값을 Finding과 대조해 어긋나면 `ValueError`다 |
 | `resource_type`, `terraform_managed` | D의 IaC Snapshot 계층 (조회 경로는 Open decision 3) |
-| `iac_status` | **같은 `Resource × Rule version`**의 `IAC` 관점 `EvaluationResult` (C) |
+| `iac_status`, `iac_perspective` | **같은 `Resource × Rule version`**의 `IAC` 관점 `EvaluationResult` (C) |
+| `iac_commit_sha` | 그 `IAC` 결과가 평가한 Assessment의 IaC Snapshot commit (C/D) |
 
 `rule_id`/`rule_version`이 `RemediationTarget`에 있는 이유는 `iac_status`가 어느 Rule version의
 판정인지를 값이 스스로 들고 다녀야 하기 때문이다. `resource_id`만 맞추면 같은 리소스의 **다른**
 Rule에서 나온 `PASS`가 `ACTUAL_SYNC`를 열어 안전하지 않은 IaC를 배포 대상으로 삼는다. A는 조립할
 때 Finding의 값을 그대로 넣고, `iac_status`는 그 Rule version의 `IAC` 결과만 조회해야 한다.
+
+`iac_commit_sha`는 같은 구멍의 **시간축**을 막는다. Assessment 이후 Repository가 진행하는 것은
+정상이므로, A가 옛 판정을 새 Snapshot과 짝지으면 평가된 적 없는 commit이 `ACTUAL_SYNC` 대상이
+된다. 그래서 A는 판정의 출처 commit과 `decide(commit_sha=...)`를 **각각** 넘기고, 두 값이 다르면
+판정은 `IAC_VERDICT_COMMIT_MISMATCH`로 사람에게 간다. Contract가 `iac_status`·`iac_perspective`·
+`iac_commit_sha`를 한 묶음으로 요구하므로 출처 없는 판정은 조립 단계에서 표현되지 않는다.
+
+`finding_evaluated_at`도 A가 Finding record에서 읽어 넘긴다. 예외의 승인 시점은 이 값과, 만료는
+판정 시각과 비교된다 (ADR-0017) — 조치 요청이 평가보다 늦게 오는 것이 정상이므로 두 시각을 하나로
+합치면 나중에 승인된 예외가 옛 Finding을 소급 억제한다.
 
 Finding 조회와 예외 로드가 이미 A에 있으므로 조인 주체도 A다. C의 `RemediationContext`가
 `iac_result`를 이미 다루므로, A는 그 값을 `RemediationTarget.iac_status`로 옮긴다.
@@ -253,9 +267,9 @@ sequenceDiagram
     API->>ST: 고객 예외 조회 (customer_id)
     ST-->>API: RemediationException 목록
     API->>ST: IaCSnapshot + IAC 관점 EvaluationResult 조회
-    ST-->>API: snapshot, iac_result
-    API->>API: RemediationTarget 조립 (resource_type·terraform_managed ← D, iac_status ← C)
-    API->>PL: decide(finding, customer_id, target, at, exceptions)
+    ST-->>API: snapshot, iac_result (평가된 commit 포함)
+    API->>API: RemediationTarget 조립 (resource_type·terraform_managed ← D, iac_status·iac_commit_sha ← C)
+    API->>PL: decide(finding, customer_id, target, commit_sha, finding_evaluated_at, at, exceptions)
     PL-->>API: RemediationDecision(action)
 
     alt action == TERRAFORM_PATCH
@@ -302,11 +316,11 @@ immutable하므로 재조회 결과가 같고, patch digest는 `(finding_id, com
 | # | 호출자 | 피호출자 | 넘기는 값 | 반환 |
 | --- | --- | --- | --- | --- |
 | 1 | 고객 UI | A `RemediationApiService.create_remediation` | `principal`, `finding_id` **뿐** | `JobResponse` 또는 판정 사유 |
-| 2 | A | 저장소 | `customer_id`, `finding_id` | `Finding` (클라이언트 입력 금지) |
+| 2 | A | 저장소 | `customer_id`, `finding_id` | `Finding` + 평가 시각 (클라이언트 입력 금지) |
 | 3 | A | 저장소 | `customer_id` | `RemediationException` 목록 |
-| 4 | A | IaC Snapshot 계층 | `customer_id`, `repository_id`, `resource_id` | `IaCSnapshot`, `resource_type`, `terraform_managed` |
-| 5 | A | 저장소 | Finding identity | `IAC` 관점 `EvaluationResult` → `iac_status` |
-| 6 | A | B `RemediationPolicy.decide` | `finding`, `customer_id`, `target`, `at`, `exceptions` | `RemediationDecision` |
+| 4 | A | IaC Snapshot 계층 | `customer_id`, `repository_id`, `resource_id` | `IaCSnapshot`(`commit_sha`), `resource_type`, `terraform_managed` |
+| 5 | A | 저장소 | Finding identity | `IAC` 관점 `EvaluationResult` → `iac_status` + 그 평가의 `iac_commit_sha` |
+| 6 | A | B `RemediationPolicy.decide` | `finding`, `customer_id`, `target`, `commit_sha`, `finding_evaluated_at`, `at`, `exceptions` | `RemediationDecision` |
 | 7 | A | 저장소 | Job + remediation record + `decision.to_dict()` (한 조건부 write) | — |
 | 8 | A | Outbox/SQS | `WorkflowTask(job_id, expected_revision, command)` — **판정은 싣지 않는다** | — |
 | 9 | D Worker | 저장소 | `customer_id`, `remediation_id`, `expected_revision` | `RemediationDecision`, `IaCSnapshot` |
@@ -338,6 +352,9 @@ Open decision 3이다. 값의 출처와 조립 주체(A)는 D2에서 확정이�
   불가능해진다. 대가로 C의 `RemediationContext` Contract와 테스트가 바뀐다.
 - `RemediationDecision`이 저장 대상이 되므로 `docs/DATABASE.md`에 항목이 추가된다.
   판정은 immutable이며 재시도가 같은 값을 읽는다.
+- A의 조립 부담이 세 값 늘어난다: 조치 대상 commit, 판정 출처 commit(`iac_commit_sha`), Finding
+  평가 시각. 셋 다 A가 이미 읽는 record에 있고, 없으면 actionable 판정이 나오지 않는다
+  (ADR-0017). Finding 평가 시각이 저장돼 있지 않다면 그 컬럼을 채우는 것이 A의 선행 작업이다.
 - `ACTUAL_SYNC`용 `WorkflowCommand`가 늘어난다. `GENERATE_REMEDIATION`을 재사용하지 않는 대가다.
 - 이음새에 이름이 붙는다(D7). "정책 판정이 왜 호출되지 않았는가"의 책임자가 생기고 Reviewer가
   A·B로 고정되므로, 같은 형태의 누락이 리뷰 없이 merge되지 않는다.
