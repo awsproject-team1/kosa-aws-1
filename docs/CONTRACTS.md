@@ -77,7 +77,9 @@ Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
 `EvaluationResult` 중 `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`는 C가 각각 하나의
 immutable `Finding`으로 투영한다. Finding ID는 `resource_id`, `rule_id`, `rule_version`,
 `perspective`에서 결정적으로 만들며, 원 Evaluation Result의 status, severity, score, rationale,
-evidence를 보존한다. `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
+evidence와 평가 provenance(`assessed_commit_sha`, offset-aware `evaluated_at`)를 보존한다.
+legacy Result/Finding은 provenance 없이 읽을 수 있으나 remediation 자동화에는 사용할 수 없다
+(fail-closed). `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
 
 `ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`와
 `DRIFT` 관점은 점수 계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`,
@@ -329,7 +331,8 @@ Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Reposi
 exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지 못한 Finding → 허용 범위 등록 여부
 → Terraform 관리 여부 → IaC 판정의 commit 대조 → 관점별 조치 유형 → Patch일 때만 `MANUAL_ONLY`
 확인. `commit_sha`는 이번 조치가 대상으로 삼는 IaC commit이고, `finding_evaluated_at`은 Finding이
-평가된 시각, `at`은 판정 시각이다.
+평가된 시각, `at`은 판정 시각이다. A는 Finding provenance가 context snapshot commit과 정확히
+같고 `finding_evaluated_at <= at`일 때만 이 호출을 수행한다.
 
 - 허용 범위에 **등록되지 않은** Rule은 어떤 자동 조치도 받지 못한다. 판단의 부재는
   `MANUAL_ONLY`라는 판단과 다르다

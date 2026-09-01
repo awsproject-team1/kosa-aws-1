@@ -117,6 +117,8 @@ class RemediationPolicy:
                 raise TypeError(f"{name} must be a datetime")
             if moment.tzinfo is None or moment.utcoffset() is None:
                 raise ValueError(f"{name} must be offset-aware")
+        if finding_evaluated_at > at:
+            raise ValueError("finding_evaluated_at must not be after the decision time")
         if finding.resource_id != target.resource_id:
             # 다른 리소스의 상태로 판정하면 관리 여부와 IaC 판정이 통째로 어긋난다.
             raise ValueError("target describes a different resource than the finding")

@@ -2,6 +2,8 @@
 
 ## Current
 
+- PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
+  identity 검증을 통합했고, 후속 PR 검토 대기
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.

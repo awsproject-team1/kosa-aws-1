@@ -52,6 +52,8 @@ def finding_from_result(result: EvaluationResult) -> Finding | None:
         score=result.score,
         rationale=result.rationale,
         evidence_references=result.evidence_references,
+        assessed_commit_sha=result.assessed_commit_sha,
+        evaluated_at=result.evaluated_at,
     )
 
 

@@ -1,6 +1,7 @@
 """Assessment phases and structured AI evaluation output contracts."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
@@ -86,6 +87,8 @@ class EvaluationResult:
     rubric_version: str
     model_profile_id: str
     scoring_mode: ScoringMode = ScoringMode.CONTINUOUS
+    assessed_commit_sha: str | None = None
+    evaluated_at: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -114,6 +117,7 @@ class EvaluationResult:
             raise TypeError("evidence_references must be a tuple")
         for reference in self.evidence_references:
             require_non_empty_string(reference, "evidence_references item")
+        _require_provenance(self.assessed_commit_sha, self.evaluated_at)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -129,6 +133,8 @@ class EvaluationResult:
             "rubric_version": self.rubric_version,
             "model_profile_id": self.model_profile_id,
             "scoring_mode": self.scoring_mode.value,
+            "assessed_commit_sha": self.assessed_commit_sha,
+            "evaluated_at": self.evaluated_at,
         }
 
 
@@ -146,6 +152,8 @@ class Finding:
     score: float
     rationale: str
     evidence_references: tuple[str, ...]
+    assessed_commit_sha: str | None = None
+    evaluated_at: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -173,6 +181,7 @@ class Finding:
             raise TypeError("evidence_references must be a tuple")
         for reference in self.evidence_references:
             require_non_empty_string(reference, "evidence_references item")
+        _require_provenance(self.assessed_commit_sha, self.evaluated_at)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -186,7 +195,28 @@ class Finding:
             "score": self.score,
             "rationale": self.rationale,
             "evidence_references": list(self.evidence_references),
+            "assessed_commit_sha": self.assessed_commit_sha,
+            "evaluated_at": self.evaluated_at,
         }
+
+
+def _require_provenance(assessed_commit_sha: str | None, evaluated_at: str | None) -> None:
+    """Validate present provenance; absent values represent legacy records only.
+
+    Remediation consumers must reject absent provenance rather than infer it from
+    a current snapshot.  Keeping it representable allows those legacy records to
+    be read and reported without accidentally reopening an automated action.
+    """
+    if (assessed_commit_sha is None) != (evaluated_at is None):
+        raise ValueError("assessed_commit_sha and evaluated_at must be provided together")
+    if assessed_commit_sha is None:
+        return
+    require_non_empty_string(assessed_commit_sha, "assessed_commit_sha")
+    if not isinstance(evaluated_at, str) or not evaluated_at.strip():
+        raise ValueError("evaluated_at must be an offset-aware ISO-8601 timestamp")
+    parsed = datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("evaluated_at must be an offset-aware ISO-8601 timestamp")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
