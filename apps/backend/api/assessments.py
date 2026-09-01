@@ -22,6 +22,7 @@ class AssessmentReportReader(Protocol):
         assessment_id: str,
         limit: int,
         cursor: str | None = None,
+        findings_cursor: str | None = None,
     ) -> AssessmentReport: ...
 
 
@@ -41,6 +42,7 @@ class AssessmentReportApiService:
         *,
         limit: int,
         cursor: str | None,
+        findings_cursor: str | None = None,
     ) -> AssessmentReport:
         if not isinstance(principal, Principal):
             raise TypeError("principal must be a Principal")
@@ -65,6 +67,7 @@ class AssessmentReportApiService:
                 assessment_id=assessment_id,
                 limit=limit,
                 cursor=cursor,
+                findings_cursor=findings_cursor,
             )
         except AssessmentReportNotFoundError:
             raise JobNotFoundError("assessment report not found") from None

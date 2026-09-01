@@ -12,6 +12,8 @@ class Action(StrEnum):
     READ_JOB = "READ_JOB"
     START_REMEDIATION = "START_REMEDIATION"
     APPROVE_DEPLOYMENT = "APPROVE_DEPLOYMENT"
+    MANAGE_POLICY_SOURCES = "MANAGE_POLICY_SOURCES"
+    PUBLISH_POLICY_PROFILE = "PUBLISH_POLICY_PROFILE"
 
 
 class AuthorizationDenied(PermissionError):
@@ -21,7 +23,14 @@ class AuthorizationDenied(PermissionError):
 _USER_ACTIONS = frozenset({Action.START_ASSESSMENT, Action.START_REMEDIATION, Action.READ_JOB})
 _ROLE_ACTIONS = {
     Role.USER: _USER_ACTIONS,
-    Role.ADMIN: _USER_ACTIONS | frozenset({Action.APPROVE_DEPLOYMENT}),
+    Role.ADMIN: _USER_ACTIONS
+    | frozenset(
+        {
+            Action.APPROVE_DEPLOYMENT,
+            Action.MANAGE_POLICY_SOURCES,
+            Action.PUBLISH_POLICY_PROFILE,
+        }
+    ),
 }
 
 

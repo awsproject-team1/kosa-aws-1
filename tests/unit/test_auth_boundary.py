@@ -60,6 +60,8 @@ class AuthBoundaryTest(unittest.TestCase):
                 "START_REMEDIATION",
                 "READ_JOB",
                 "APPROVE_DEPLOYMENT",
+                "MANAGE_POLICY_SOURCES",
+                "PUBLISH_POLICY_PROFILE",
             },
         )
 

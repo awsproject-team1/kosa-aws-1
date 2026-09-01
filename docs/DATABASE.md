@@ -59,7 +59,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
 | Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail |
 
-`Assessment result` and `Finding` are co-located with their Assessment so one query can retrieve the full assessment report. If an Assessment can exceed DynamoDB partition or response limits, results are paginated by `SK` and large report payloads remain in S3.
+`Assessment result` and `Finding` are co-located with their Assessment so one query can retrieve the full assessment report. If an Assessment can exceed DynamoDB partition or response limits, results and Findings are independently paginated by their `SK` prefixes. 새 plan의 `completed_evaluations`는 Result/Finding immutable write와 같은 transaction에서만 증가하며, 진행 중 Coverage read는 이 counter를 사용한다. large report payloads remain in S3.
 
 M1의 Readiness Score는 immutable Result와 Plan에서 report read 시 결정적으로 계산한다. 완료
 counter와 materialized score는 이후 storage migration 전에는 Assessment metadata에 별도 write하지

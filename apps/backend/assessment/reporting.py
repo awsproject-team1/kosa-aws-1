@@ -60,6 +60,7 @@ class AssessmentReport:
     coverage: AssessmentCoverage
     readiness_score: ReadinessScore | None
     next_cursor: str | None = None
+    findings_next_cursor: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.assessment_id, str) or not self.assessment_id.strip():
@@ -82,6 +83,10 @@ class AssessmentReport:
             not isinstance(self.next_cursor, str) or not self.next_cursor
         ):
             raise ValueError("next_cursor must be a non-empty string or None")
+        if self.findings_next_cursor is not None and (
+            not isinstance(self.findings_next_cursor, str) or not self.findings_next_cursor
+        ):
+            raise ValueError("findings_next_cursor must be a non-empty string or None")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -93,6 +98,7 @@ class AssessmentReport:
                 self.readiness_score.to_dict() if self.readiness_score is not None else None
             ),
             "next_cursor": self.next_cursor,
+            "findings_next_cursor": self.findings_next_cursor,
         }
 
 
@@ -150,7 +156,7 @@ class DynamoDbAssessmentReportStore:
         )
         if not isinstance(plan, Mapping):
             raise AssessmentReportNotFoundError("assessment evaluation plan not found")
-        expected = _plan_from_item(plan, customer_id, assessment_id)
+        expected, completed = _plan_from_item(plan, customer_id, assessment_id)
         results = tuple(
             _result_from_item(item, customer_id, assessment_id)
             for item in items
@@ -161,7 +167,11 @@ class DynamoDbAssessmentReportStore:
             for item in items
             if isinstance(item, Mapping) and item.get("entity_type") == "FINDING"
         )
-        coverage = calculate_coverage(results=results, planned_evaluations=expected)
+        coverage = (
+            AssessmentCoverage(planned_evaluations=expected, completed_evaluations=completed)
+            if completed is not None
+            else calculate_coverage(results=results, planned_evaluations=expected)
+        )
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
@@ -196,11 +206,42 @@ class DynamoDbAssessmentReportStore:
         assessment_id: str,
         limit: int,
         cursor: str | None = None,
+        findings_cursor: str | None = None,
     ) -> AssessmentReport:
-        """Return one results page while calculating Coverage over all stored results."""
+        """Return independently pageable results/findings without scanning incomplete reports.
+
+        New plans carry an immutable completion counter.  That makes Coverage a
+        single strongly-consistent plan read while work is in progress; the
+        legacy no-counter path deliberately retains the old full scan until all
+        existing plans have drained.
+        """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer from 1 through 100")
-        report = self.get_report(customer_id=customer_id, assessment_id=assessment_id)
+        plan = self._get_plan(customer_id=customer_id, assessment_id=assessment_id)
+        expected, completed = _plan_from_item(plan, customer_id, assessment_id)
+        if completed is None:
+            # Plans written before the transactional counter need a temporary
+            # compatibility scan to keep their Coverage semantics unchanged.
+            report = self.get_report(customer_id=customer_id, assessment_id=assessment_id)
+            coverage, readiness_score = report.coverage, report.readiness_score
+        else:
+            coverage = AssessmentCoverage(
+                planned_evaluations=expected, completed_evaluations=completed
+            )
+            readiness_score = None
+            # Readiness is intentionally unavailable until every applicable
+            # evaluation is durable.  Once complete, derive it from all results
+            # rather than trusting any page-local slice.
+            if completed == expected:
+                completed_results = tuple(
+                    _result_from_item(item, customer_id, assessment_id)
+                    for item in self._query_prefix_items(
+                        customer_id, _result_sk_prefix(assessment_id)
+                    )
+                )
+                readiness_score = calculate_readiness_score(
+                    results=completed_results, planned_evaluations=expected
+                )
         start_key = _decode_cursor(cursor, customer_id, assessment_id)
         arguments: dict[str, object] = {
             "KeyConditionExpression": "PK = :customer AND begins_with(SK, :results)",
@@ -221,13 +262,48 @@ class DynamoDbAssessmentReportStore:
             raise AssessmentReportStoreError("assessment result page is invalid")
         results = tuple(_result_from_item(item, customer_id, assessment_id) for item in items)
         next_cursor = _encode_cursor(response.get("LastEvaluatedKey"), customer_id, assessment_id)
+        finding_items, findings_next_cursor = self._query_page(
+            customer_id=customer_id,
+            assessment_id=assessment_id,
+            prefix=_finding_sk_prefix(assessment_id),
+            cursor=findings_cursor,
+            limit=limit,
+        )
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
-            findings=report.findings,
-            coverage=report.coverage,
-            readiness_score=report.readiness_score,
+            findings=tuple(
+                _finding_from_item(item, customer_id, assessment_id) for item in finding_items
+            ),
+            coverage=coverage,
+            readiness_score=readiness_score,
             next_cursor=next_cursor,
+            findings_next_cursor=findings_next_cursor,
+        )
+
+    def _query_page(
+        self, *, customer_id: str, assessment_id: str, prefix: str, cursor: str | None, limit: int
+    ) -> tuple[tuple[Mapping[str, object], ...], str | None]:
+        start = _decode_cursor(cursor, customer_id, assessment_id, prefix)
+        arguments: dict[str, object] = {
+            "KeyConditionExpression": "PK = :customer AND begins_with(SK, :results)",
+            "ExpressionAttributeValues": {
+                ":customer": _customer_pk(customer_id),
+                ":results": prefix,
+            },
+            "Limit": limit,
+        }
+        if start is not None:
+            arguments["ExclusiveStartKey"] = start
+        try:
+            response = self._table.query(**arguments)
+        except Exception:
+            raise AssessmentReportStoreError("assessment page query failed") from None
+        items = response.get("Items")
+        if not isinstance(items, list) or not all(isinstance(item, Mapping) for item in items):
+            raise AssessmentReportStoreError("assessment page is invalid")
+        return tuple(items), _encode_cursor(
+            response.get("LastEvaluatedKey"), customer_id, assessment_id, prefix
         )
 
     def _query_assessment_items(
@@ -262,14 +338,66 @@ class DynamoDbAssessmentReportStore:
                 raise AssessmentReportStoreError("assessment report cursor is invalid")
             start_key = last_key
 
+    def _get_plan(self, *, customer_id: str, assessment_id: str) -> Mapping[str, object]:
+        try:
+            response = self._table.get_item(
+                Key={"PK": _customer_pk(customer_id), "SK": _plan_sk(assessment_id)},
+                ConsistentRead=True,
+            )
+        except Exception:
+            raise AssessmentReportStoreError("assessment evaluation plan read failed") from None
+        item = response.get("Item")
+        if not isinstance(item, Mapping) or item.get("entity_type") != "ASSESSMENT_EVALUATION_PLAN":
+            raise AssessmentReportNotFoundError("assessment evaluation plan not found")
+        return item
 
-def _plan_from_item(item: Mapping[str, object], customer_id: str, assessment_id: str) -> int:
+    def _query_prefix_items(
+        self, customer_id: str, prefix: str
+    ) -> tuple[Mapping[str, object], ...]:
+        items: list[Mapping[str, object]] = []
+        start_key: Mapping[str, object] | None = None
+        while True:
+            arguments: dict[str, object] = {
+                "KeyConditionExpression": "PK = :customer AND begins_with(SK, :results)",
+                "ExpressionAttributeValues": {
+                    ":customer": _customer_pk(customer_id),
+                    ":results": prefix,
+                },
+            }
+            if start_key is not None:
+                arguments["ExclusiveStartKey"] = dict(start_key)
+            try:
+                response = self._table.query(**arguments)
+            except Exception:
+                raise AssessmentReportStoreError("assessment results query failed") from None
+            page_items = response.get("Items")
+            if not isinstance(page_items, list) or not all(
+                isinstance(item, Mapping) for item in page_items
+            ):
+                raise AssessmentReportStoreError("assessment results query returned invalid items")
+            items.extend(page_items)
+            last_key = response.get("LastEvaluatedKey")
+            if last_key is None:
+                return tuple(items)
+            if not isinstance(last_key, Mapping):
+                raise AssessmentReportStoreError("assessment results cursor is invalid")
+            start_key = last_key
+
+
+def _plan_from_item(
+    item: Mapping[str, object], customer_id: str, assessment_id: str
+) -> tuple[int, int | None]:
     if item.get("customer_id") != customer_id or item.get("assessment_id") != assessment_id:
         raise AssessmentReportStoreError("assessment plan scope is invalid")
     value = item.get("planned_evaluations")
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AssessmentReportStoreError("assessment plan is invalid")
-    return value
+    completed = item.get("completed_evaluations")
+    if completed is None:
+        return value, None
+    if isinstance(completed, bool) or not isinstance(completed, int) or not 0 <= completed <= value:
+        raise AssessmentReportStoreError("assessment completed counter is invalid")
+    return value, completed
 
 
 def _result_from_item(
@@ -343,7 +471,13 @@ def _result_sk_prefix(assessment_id: str) -> str:
     return f"ASSESSMENT#{assessment_id}#RESULT#"
 
 
-def _encode_cursor(value: object, customer_id: str, assessment_id: str) -> str | None:
+def _finding_sk_prefix(assessment_id: str) -> str:
+    return f"ASSESSMENT#{assessment_id}#FINDING#"
+
+
+def _encode_cursor(
+    value: object, customer_id: str, assessment_id: str, prefix: str | None = None
+) -> str | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -352,7 +486,7 @@ def _encode_cursor(value: object, customer_id: str, assessment_id: str) -> str |
     if (
         pk != _customer_pk(customer_id)
         or not isinstance(sk, str)
-        or not sk.startswith(_result_sk_prefix(assessment_id))
+        or not sk.startswith(prefix or _result_sk_prefix(assessment_id))
     ):
         raise AssessmentReportStoreError("assessment result page cursor is outside scope")
     raw = json.dumps({"PK": pk, "SK": sk}, separators=(",", ":")).encode()
@@ -360,7 +494,7 @@ def _encode_cursor(value: object, customer_id: str, assessment_id: str) -> str |
 
 
 def _decode_cursor(
-    cursor: str | None, customer_id: str, assessment_id: str
+    cursor: str | None, customer_id: str, assessment_id: str, prefix: str | None = None
 ) -> dict[str, str] | None:
     if cursor is None:
         return None
@@ -377,7 +511,7 @@ def _decode_cursor(
     if (
         pk != _customer_pk(customer_id)
         or not isinstance(sk, str)
-        or not sk.startswith(_result_sk_prefix(assessment_id))
+        or not sk.startswith(prefix or _result_sk_prefix(assessment_id))
     ):
         raise ValueError("cursor is outside assessment scope")
     return {"PK": pk, "SK": sk}

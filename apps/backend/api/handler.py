@@ -11,10 +11,12 @@ from apps.backend.api.jobs import (
     AssessmentRequest,
     JobApiService,
 )
+from apps.backend.api.policy_approval import PolicyApprovalApiService
+from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediations import RemediationApiService
 from apps.backend.auth import InvalidIdentityClaims, Principal
 from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
-from packages.contracts import ApiErrorResponse
+from packages.contracts import ApiErrorResponse, PolicySourceUploadRequest
 
 
 class JobHttpHandler:
@@ -26,6 +28,9 @@ class JobHttpHandler:
         assessment_reports: AssessmentReportApiService | None = None,
         remediations: RemediationApiService | None = None,
         deployments: DeploymentApiService | None = None,
+        policy_sources: PolicySourceApiService | None = None,
+        policy_approvals: PolicyApprovalApiService | None = None,
+        policy_reader: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
@@ -41,6 +46,15 @@ class JobHttpHandler:
         if deployments is not None and not isinstance(deployments, DeploymentApiService):
             raise TypeError("deployments must be a DeploymentApiService or None")
         self._deployments = deployments
+        if policy_sources is not None and not isinstance(policy_sources, PolicySourceApiService):
+            raise TypeError("policy_sources must be a PolicySourceApiService or None")
+        if policy_approvals is not None and not isinstance(
+            policy_approvals, PolicyApprovalApiService
+        ):
+            raise TypeError("policy_approvals must be a PolicyApprovalApiService or None")
+        self._policy_sources = policy_sources
+        self._policy_approvals = policy_approvals
+        self._policy_reader = policy_reader
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -54,6 +68,55 @@ class JobHttpHandler:
                     raise RequestValidationError("assessment body is invalid") from error
                 response = self._service.create_assessment(principal, request)
                 return _response(202, response.to_dict())
+            if method == "POST" and path == "/policy-sources/uploads":
+                if self._policy_sources is None:
+                    raise JobNotFoundError("policy source route not found")
+                return _response(
+                    201,
+                    self._policy_sources.create_upload_session(
+                        principal, _policy_upload_request(event.get("body"))
+                    ).to_dict(),
+                )
+            policy_path = _policy_source_path(path)
+            if policy_path is not None and self._policy_sources is not None:
+                source_id, source_version, action = policy_path
+                if method == "GET" and action is None:
+                    return _response(
+                        200,
+                        self._policy_sources.get_status(
+                            principal, source_id=source_id, source_version=source_version
+                        ).to_dict(),
+                    )
+                if method == "POST" and action == "process":
+                    if self._policy_reader is None:
+                        raise JobNotFoundError("policy process route not found")
+                    return _response(
+                        202,
+                        self._policy_sources.process_upload(
+                            principal,
+                            source_id=source_id,
+                            source_version=source_version,
+                            reader=self._policy_reader,
+                        ).to_dict(),
+                    )
+                if method == "POST" and action == "approve" and self._policy_approvals is not None:
+                    if event.get("body") not in (None, "", "{}"):
+                        raise RequestValidationError("policy approval body is invalid")
+                    return _response(
+                        200,
+                        self._policy_approvals.approve(
+                            principal, source_id=source_id, source_version=source_version
+                        ).to_dict(),
+                    )
+            if (
+                method == "POST"
+                and path == "/policy-profiles"
+                and self._policy_approvals is not None
+            ):
+                request = _policy_profile_request(event.get("body"))
+                return _response(
+                    201, self._policy_approvals.publish(principal, **request).to_dict()
+                )
             if (
                 method == "POST"
                 and path.startswith("/findings/")
@@ -87,10 +150,16 @@ class JobHttpHandler:
                 assessment_id = path.removeprefix("/assessments/")
                 if not assessment_id or "/" in assessment_id or self._assessment_reports is None:
                     raise JobNotFoundError("assessment not found")
-                limit, cursor = _report_page_request(event.get("queryStringParameters"))
+                limit, cursor, findings_cursor = _report_page_request(
+                    event.get("queryStringParameters")
+                )
                 try:
                     report = self._assessment_reports.get_assessment(
-                        principal, assessment_id, limit=limit, cursor=cursor
+                        principal,
+                        assessment_id,
+                        limit=limit,
+                        cursor=cursor,
+                        findings_cursor=findings_cursor,
                     )
                 except ValueError as error:
                     raise RequestValidationError("assessment report query is invalid") from error
@@ -144,11 +213,55 @@ def _deployment_approval_request(raw_body: object) -> DeploymentApprovalRequest:
     return DeploymentApprovalRequest(commit_sha=body["commit_sha"], plan_hash=body["plan_hash"])
 
 
-def _report_page_request(raw_query: object) -> tuple[int, str | None]:
+def _policy_upload_request(raw_body: object) -> PolicySourceUploadRequest:
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    if set(body) - {"filename", "declared_media_type", "byte_size", "title"} or not {
+        "filename",
+        "declared_media_type",
+        "byte_size",
+    }.issubset(body):
+        raise ValueError("policy upload body fields are invalid")
+    return PolicySourceUploadRequest(
+        filename=body["filename"],
+        declared_media_type=body["declared_media_type"],
+        byte_size=body["byte_size"],
+        title=body.get("title"),
+    )
+
+
+def _policy_source_path(path: str) -> tuple[str, str, str | None] | None:
+    parts = path.split("/")
+    if len(parts) not in {5, 6} or parts[:2] != ["", "policy-sources"] or parts[3] != "versions":
+        return None
+    source_id, source_version = parts[2], parts[4]
+    if (
+        not source_id
+        or not source_version
+        or (len(parts) == 6 and parts[5] not in {"process", "approve"})
+    ):
+        return None
+    return source_id, source_version, parts[5] if len(parts) == 6 else None
+
+
+def _policy_profile_request(raw_body: object) -> dict[str, str]:
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    expected = {"source_id", "source_version", "policy_profile_id", "version"}
+    if set(body) != expected or not all(
+        isinstance(body[name], str) and body[name] for name in expected
+    ):
+        raise ValueError("policy profile body fields are invalid")
+    return {name: body[name] for name in expected}
+
+
+def _report_page_request(raw_query: object) -> tuple[int, str | None, str | None]:
     if raw_query is None:
-        return 50, None
+        return 50, None, None
     query = _mapping(raw_query)
-    if set(query) - {"limit", "cursor"}:
+    if set(query) - {"limit", "cursor", "findings_cursor"}:
         raise RequestValidationError("assessment report query is invalid")
     limit_raw = query.get("limit", "50")
     if not isinstance(limit_raw, str) or not limit_raw.isdigit():
@@ -159,7 +272,12 @@ def _report_page_request(raw_query: object) -> tuple[int, str | None]:
     cursor = query.get("cursor")
     if cursor is not None and (not isinstance(cursor, str) or not cursor):
         raise RequestValidationError("assessment report cursor is invalid")
-    return limit, cursor
+    findings_cursor = query.get("findings_cursor")
+    if findings_cursor is not None and (
+        not isinstance(findings_cursor, str) or not findings_cursor
+    ):
+        raise RequestValidationError("assessment report findings cursor is invalid")
+    return limit, cursor, findings_cursor
 
 
 def _mapping(value: object) -> Mapping[str, object]:

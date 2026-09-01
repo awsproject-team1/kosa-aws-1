@@ -73,8 +73,11 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   `Resource × Rule × Perspective` 계획을 분모로 사용한다. 응답에는
   `planned_evaluations`, `completed_evaluations`, `percentage`가 포함되며,
   `EXECUTION_ERROR`는 완료 수에 포함하지 않는다.
-- 결과 목록은 `limit`(1–100)과 opaque `cursor`로 페이지네이션한다. `coverage`는 페이지와
-  무관하게 전체 Assessment 결과를 기준으로 계산하며, `next_cursor`가 `null`이면 마지막 페이지다.
+- 결과 목록은 `limit`(1–100)과 opaque `cursor`로, Findings는 별도 opaque `findings_cursor`로
+  독립 페이지네이션한다. 응답의 `next_cursor`와 `findings_next_cursor`가 각각 `null`이면 해당
+  목록의 마지막 페이지다. 새 Assessment의 `coverage`는 Result/Finding write와 같은 DynamoDB
+  transaction에서 갱신되는 immutable plan 완료 counter를 읽으므로, 진행 중인 대량 report를
+  전체 재조회하지 않는다; counter 이전 plan은 호환을 위해 기존 scan 계산을 유지한다.
   M1 React 화면은 `assessment_id` query parameter를 사용해 이 endpoint를 호출하고 결과를
   추가 페이지로 표시한다. 이 Coverage는 통제 수 자체가 아닌 **평가 실행률**이다.
   Frontend는 `VITE_API_BASE_URL`(운영 API origin) 또는 개발용 `VITE_API_PROXY_TARGET`을

@@ -32,6 +32,14 @@ class Table:
         return {} if item is None else {"Item": item}
 
 
+class TransactionClient:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def transact_write_items(self, **kwargs: object) -> None:
+        self.requests.append(kwargs)
+
+
 def result(
     *,
     score: float = 90,
@@ -97,3 +105,19 @@ class DynamoDbEvaluationResultStoreTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["status"], "FAIL")
         self.assertEqual(findings[0]["rule_id"], "S3-001")
+
+    def test_transactionally_writes_result_finding_and_completion_counter(self) -> None:
+        table, client = Table(), TransactionClient()
+        DynamoDbEvaluationResultStore(
+            table, table_name="metadata", transaction_client=client
+        ).put_if_absent(
+            customer_id="cust-001",
+            assessment_id="asm-001",
+            results=(result(status=EvaluationStatus.FAIL, score=20),),
+        )
+
+        writes = client.requests[0]["TransactItems"]
+        assert isinstance(writes, list)
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(writes[0]["Put"]["Item"]["PK"], {"S": "CUSTOMER#cust-001"})
+        self.assertEqual(writes[-1]["Update"]["ExpressionAttributeValues"][":one"], {"N": "1"})

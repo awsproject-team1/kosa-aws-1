@@ -22,6 +22,13 @@
 
 ## Completed
 
+- M1 A/C: Assessment Result/Finding immutable write와 같은 DynamoDB transaction의 plan 완료 counter,
+  Results/Findings 독립 cursor, counter 이전 plan 호환 read를 구현했다. 진행 중 대형 report는
+  전체 결과를 재조회하지 않으며 Unit/Contract/Integration/Security 회귀를 통과했다.
+- M1 C: M1 model/prompt/rubric/golden version을 `m1-three-perspective-v1`으로 재고정하고,
+  S3 Rule 6건 × IAC/AWS_ACTUAL/DRIFT 3관점 Golden manifest 및 IAC/DRIFT repeated quality-gate
+  fixture를 추가했다.
+
 - M1 C Initial Assessment 3-관점 산출 완료 (ADR-0016): Worker가 `perspective_runners`로 IaC
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의
   불일치이며 AI 판정이 아니고, score 정합 100 / 이탈 0에 evidence는 두 관점의 합집합이다.
@@ -145,11 +152,6 @@
   `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정 전에는 고객 sandbox 배포나 실제
   GitHub/AWS/Bedrock E2E를 시작하지 않는다. IAC 관점이 `git/blobs`를 읽으므로 GitHub App
   installation token에는 승인 repository의 Contents read 권한이 필요하다.
-- M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
-  DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
-  같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
-- M1 C: Rule 6건 × 3관점으로 확대된 평가 범위에 맞춰 prompt/rubric/golden dataset version을
-  재고정하고 DESIGN 품질 Gate를 재실행 (IAC/DRIFT 관점 Golden Case 추가 필요)
 - M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
   ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
   선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
