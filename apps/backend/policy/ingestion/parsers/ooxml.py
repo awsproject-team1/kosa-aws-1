@@ -54,6 +54,7 @@ MAX_SHEET_ROWS = 50_000
 MAX_COLUMN_INDEX = 1_024
 
 _CELL_REFERENCE = re.compile(r"^(?P<column>[A-Z]+)(?P<row>\d+)$")
+_ROW_REFERENCE = re.compile(r"^\+?[0-9]+$")
 _HEADING_STYLE = re.compile(r"^heading\s*(?P<level>[1-6])$", re.IGNORECASE)
 # OOXML XML parts may use UTF-8 or UTF-16, so block every supported byte representation.
 _DOCTYPE_DECLARATIONS = (
@@ -185,7 +186,7 @@ def _add_sheet_rows(
     grid: dict[int, dict[int, str]] = {}
     inline = False
     for fallback_index, row in enumerate(rows, start=1):
-        row_index = _int_or(row.get("r"), fallback_index)
+        row_index = _row_index(row.get("r"), fallback_index, sheet_slug)
         cells: dict[int, str] = {}
         seen_columns: set[int] = set()
         next_column = 1
@@ -403,11 +404,16 @@ def _column_number(letters: str) -> int:
     return min(number, MAX_COLUMN_INDEX)
 
 
-def _int_or(value: str | None, fallback: int) -> int:
-    try:
-        return int(value) if value is not None else fallback
-    except ValueError:
+def _row_index(reference: str | None, fallback: int, sheet_slug: str) -> int:
+    if reference is None:
         return fallback
+    normalized = reference.strip()
+    if _ROW_REFERENCE.match(normalized) is None or int(normalized) < 1:
+        raise DocumentParseError(
+            IngestionFailureCode.CORRUPTED_DOCUMENT,
+            f"worksheet {sheet_slug!r} contains an invalid row reference {reference!r}",
+        )
+    return int(normalized)
 
 
 __all__ = [

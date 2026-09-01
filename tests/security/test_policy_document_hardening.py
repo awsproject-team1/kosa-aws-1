@@ -83,12 +83,21 @@ class XmlEntityExpansionTest(unittest.TestCase):
             parse_xlsx(workbook)
         self.assertEqual(raised.exception.failure_code, IngestionFailureCode.XML_DTD_NOT_ALLOWED)
 
-    def test_rejects_a_utf16_encoded_dtd(self) -> None:
-        payload = build_docx_part(entity_bomb_document(4).encode("utf-16"))
+    def test_rejects_utf16le_and_utf16be_dtds(self) -> None:
+        encodings_and_boms = (
+            ("utf-16-le", b"\xff\xfe"),
+            ("utf-16-be", b"\xfe\xff"),
+        )
+        for encoding, bom in encodings_and_boms:
+            with self.subTest(encoding=encoding):
+                document = bom + entity_bomb_document(4).encode(encoding)
 
-        with self.assertRaises(DocumentParseError) as raised:
-            parse_docx(payload)
-        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.XML_DTD_NOT_ALLOWED)
+                with self.assertRaises(DocumentParseError) as raised:
+                    parse_docx(build_docx_part(document))
+                self.assertEqual(
+                    raised.exception.failure_code,
+                    IngestionFailureCode.XML_DTD_NOT_ALLOWED,
+                )
 
     def test_a_comment_before_the_dtd_cannot_hide_it(self) -> None:
         document = entity_bomb_document(4).replace(
@@ -222,6 +231,26 @@ class AmbiguousWorksheetCoordinateTest(unittest.TestCase):
 
         self.assertEqual([unit.locator for unit in document.units], ["sheet/security/row/1"])
         self.assertEqual(document.units[0].text_sha256, text_sha256("no explicit reference"))
+
+    def test_refuses_an_invalid_explicit_row_reference(self) -> None:
+        for reference in ("invalid", "0", "-1", "1_0"):
+            with self.subTest(reference=reference):
+                row = f'<row r="{reference}"><c t="inlineStr"><is><t>policy</t></is></c></row>'
+
+                with self.assertRaises(DocumentParseError) as raised:
+                    parse_xlsx(build_xlsx(sheets=[("Security", row)]))
+                self.assertEqual(
+                    raised.exception.failure_code,
+                    IngestionFailureCode.CORRUPTED_DOCUMENT,
+                )
+
+    def test_refuses_an_invalid_explicit_cell_reference(self) -> None:
+        cell = '<c r="invalid" t="inlineStr"><is><t>policy</t></is></c>'
+        workbook = build_xlsx(sheets=[("Security", sheet_row(1, cell))])
+
+        with self.assertRaises(DocumentParseError) as raised:
+            parse_xlsx(workbook)
+        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.CORRUPTED_DOCUMENT)
 
 
 class InferredDelimiterNeedsReviewTest(unittest.TestCase):
