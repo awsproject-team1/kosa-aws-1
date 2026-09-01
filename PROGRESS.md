@@ -13,9 +13,19 @@
   승인 판정, Profile publication 거부 규칙) 구현 완료. Rule Registry와 `policies-local/`은
   여전히 개발 seed이며, 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C),
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
+- M2 착수: B의 Remediation 조치 판정 경계(허용 범위·예외·Manual Review)와 D의 결정적 Patch
+  생성 경계(PR #21)가 각각 올라와 있고, 둘을 잇는 호출부(A의 Remediation API)가 다음 조각이다
 
 ## Completed
 
+- M2 B Remediation 허용 범위·예외·Manual Review 정책 경계 (ADR-0017): Finding 하나를
+  `TERRAFORM_PATCH`/`ACTUAL_SYNC`/`MANUAL_REVIEW`/`SUPPRESSED` 중 하나로 판정하는 순수 함수와
+  Contract 추가. 허용 범위는 Rule version 단위로 `fixtures/rules/remediation.json`에 커밋하고,
+  등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 떨어진다. 고객 예외는
+  `(customer_id, rule_id, rule_version)`에 묶이고 반드시 만료되며 Rule 새 version으로 승계되지
+  않는다. `AWS_ACTUAL`/`DRIFT` Finding은 같은 `Resource × Rule`의 IaC 판정이 `PASS`일 때만
+  `ACTUAL_SYNC`가 되고, `OUT_OF_SCOPE`/`EXECUTION_ERROR`를 안전으로 읽지 않는다
+  (예외 등록·저장 API는 A, Patch 생성 연결은 D)
 - M1 C Initial Assessment 3-관점 산출 완료 (ADR-0016): Worker가 `perspective_runners`로 IaC
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의
   불일치이며 AI 판정이 아니고, score 정합 100 / 이탈 0에 evidence는 두 관점의 합집합이다.
@@ -139,6 +149,15 @@
   `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정 전에는 고객 sandbox 배포나 실제
   GitHub/AWS/Bedrock E2E를 시작하지 않는다. IAC 관점이 `git/blobs`를 읽으므로 GitHub App
   installation token에는 승인 repository의 Contents read 권한이 필요하다.
+- M2 A: Remediation API가 `RemediationPolicy.decide()`를 Patch 생성 **앞에서** 호출하고,
+  `MANUAL_REVIEW`/`SUPPRESSED` 결정은 Job을 만들지 않고 사유와 함께 보고한다. 고객 예외의
+  등록·승인·저장(만료 포함)과 감사 record도 A 경계다
+- M2 D: `FixturePatchGenerator` 호출부를 `RemediationDecision`이 `TERRAFORM_PATCH`인
+  Finding으로 제한하고, `ACTUAL_SYNC` 결정은 Patch 없이 현재 commit을 배포 대상으로 넘긴다
+- M2 A/C/D: ADR-0017·ADR-0018에 따라 `RemediationDecision`을 단일 판정 정본으로
+  연결한다. A는 판정 호출·저장·Job 분기, C는 중복 `RemediationStrategy` 판정
+  제거, D는 `TERRAFORM_PATCH` 결정의 Patch 생성 강제와 `ACTUAL_SYNC` 실행을
+  구현한다
 - M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
   DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
   같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
@@ -205,7 +224,7 @@
 **Exit criteria:** 선택된 Finding에서 최소 Terraform Patch, Branch/Commit/PR, CI 및 Deployment Readiness Validation/plan까지 이어진다.
 
 - [ ] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log
-- [ ] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공
+- [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [ ] **C — AI Evaluation:** Finding 근거 기반 Remediation Context와 Deployment Readiness 평가
 - [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test

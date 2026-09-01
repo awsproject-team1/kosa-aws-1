@@ -15,17 +15,21 @@ from pathlib import Path
 
 from apps.backend.policy.catalog import InMemoryPolicyCatalog
 from apps.backend.policy.context import PolicyCatalog, PolicyContext, PolicyNotFoundError
+from apps.backend.policy.remediation import RemediationPolicy
 from apps.backend.policy.serialization import (
     control_from_dict,
     profile_from_dict,
+    remediation_scope_from_dict,
     rule_from_dict,
     source_from_dict,
 )
 from packages.contracts import PolicyControl, PolicyProfile, PolicyRule, PolicySource
+from packages.contracts.remediation_policy import RemediationRuleScope
 
 SOURCES_FILE = "sources.json"
 CONTROLS_FILE = "controls.json"
 PROFILES_FILE = "profiles.json"
+REMEDIATION_FILE = "remediation.json"
 RULE_FILE_PATTERN = "rules.*.json"
 
 
@@ -136,6 +140,7 @@ class PolicyRegistry:
     profiles: tuple[PolicyProfile, ...]
     catalog: InMemoryPolicyCatalog
     controls: ControlMapping
+    remediation: RemediationPolicy
 
     def get_source(self, source_id: str, version: str) -> PolicySource | None:
         """Return one exact Source version. Reference는 항상 version까지 고정한다."""
@@ -163,6 +168,10 @@ def load_rule_registry(directory: Path) -> PolicyRegistry:
             control_from_dict(entry) for entry in _read_list(directory / CONTROLS_FILE)
         )
         rules = tuple(rule_from_dict(entry) for path in rule_files for entry in _read_list(path))
+        scopes = tuple(
+            remediation_scope_from_dict(entry)
+            for entry in _read_optional_list(directory / REMEDIATION_FILE)
+        )
 
     _require_unique_sources(sources)
     _require_known_sources(rules, controls, sources)
@@ -170,9 +179,16 @@ def load_rule_registry(directory: Path) -> PolicyRegistry:
         # InMemoryPolicyCatalog가 중복 Rule과 Profile→Rule 참조 무결성을 강제한다.
         catalog = InMemoryPolicyCatalog(profiles=profiles, rules=rules)
         mapping = ControlMapping(controls)
+        remediation = RemediationPolicy(scopes)
     _require_known_control_rules(controls, catalog)
+    _require_known_remediation_rules(scopes, catalog)
     return PolicyRegistry(
-        sources=sources, rules=rules, profiles=profiles, catalog=catalog, controls=mapping
+        sources=sources,
+        rules=rules,
+        profiles=profiles,
+        catalog=catalog,
+        controls=mapping,
+        remediation=remediation,
     )
 
 
@@ -197,6 +213,17 @@ def _read_list(path: Path) -> list[object]:
     if not isinstance(data, list):
         raise PolicyRegistryError(f"registry file must contain a list: {path}")
     return data
+
+
+def _read_optional_list(path: Path) -> list[object]:
+    """Read a registry file that a directory may legitimately not have yet.
+
+    remediation 허용 범위가 없는 Registry는 유효하다. 그 경우 자동 조치가 열리는 것이 아니라
+    모든 Rule이 `MANUAL_REVIEW`로 남는다 (`RemediationPolicy`).
+    """
+    if not path.exists():
+        return []
+    return _read_list(path)
 
 
 def _require_unique_sources(sources: Iterable[PolicySource]) -> None:
@@ -248,3 +275,19 @@ def _require_known_control_rules(
                     f"control {control.control_id!r} references an unavailable rule "
                     f"{reference.rule_id!r} version {reference.version!r}"
                 )
+
+
+def _require_known_remediation_rules(
+    scopes: Iterable[RemediationRuleScope], catalog: InMemoryPolicyCatalog
+) -> None:
+    """허용 범위는 Registry에 실제로 존재하는 Rule version에만 붙는다.
+
+    rule_id나 version 오타를 통과시키면, 의도한 Rule은 등록되지 않은 채 조용히
+    `MANUAL_REVIEW`로 떨어지고 아무도 그 사실을 모른다.
+    """
+    for scope in scopes:
+        if catalog.get_rule(scope.rule_id, scope.version) is None:
+            raise PolicyRegistryError(
+                f"remediation scope references an unavailable rule "
+                f"{scope.rule_id!r} version {scope.version!r}"
+            )
