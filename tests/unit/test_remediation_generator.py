@@ -66,6 +66,31 @@ class FixturePatchGeneratorTest(unittest.TestCase):
         other = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="def456"))
         self.assertNotEqual(base.artifact.content_sha256, other.artifact.content_sha256)
 
+    def test_different_commit_yields_different_artifact_id(self) -> None:
+        # [P2] immutable artifact identity: 같은 repository/finding이라도 commit이 다르면
+        # 내용이 다르므로 artifact_id도 달라져야 한다. 같은 ID가 다른 내용을 가리키면 안 된다.
+        base = generator().generate(finding_id="finding-001", snapshot=snapshot())
+        other = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="def456"))
+        self.assertNotEqual(base.artifact.artifact_id, other.artifact.artifact_id)
+
+    def test_artifact_id_includes_commit_sha(self) -> None:
+        # artifact_id가 실제로 commit_sha를 담는지 명시적으로 고정한다.
+        patch = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="abc123"))
+        self.assertIn("abc123", patch.artifact.artifact_id)
+
+    def test_input_path_order_does_not_change_patch(self) -> None:
+        # [P3] changed_paths 순서는 집합 의미만 가진다. 입력 순서만 다른 두 계획은
+        # 같은 changed_paths(정렬)와 같은 digest로 정규화되어야 한다.
+        forward = FixturePatchGenerator({"finding-001": ("a.tf", "b.tf")})
+        reverse = FixturePatchGenerator({"finding-001": ("b.tf", "a.tf")})
+        first = forward.generate(finding_id="finding-001", snapshot=snapshot())
+        second = reverse.generate(finding_id="finding-001", snapshot=snapshot())
+        # 반환되는 changed_paths가 정렬되어 동일하고,
+        self.assertEqual(first.changed_paths, ("a.tf", "b.tf"))
+        self.assertEqual(second.changed_paths, ("a.tf", "b.tf"))
+        # digest도 동일하다(직렬화 결과와 hash의 일관성).
+        self.assertEqual(first.artifact.content_sha256, second.artifact.content_sha256)
+
     def test_rejects_unknown_finding(self) -> None:
         with self.assertRaises(ValueError):
             generator().generate(finding_id="finding-999", snapshot=snapshot())

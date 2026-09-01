@@ -43,7 +43,10 @@ class FixturePatchGenerator:
                 raise ValueError("plan finding_id must be a non-empty string")
             if not isinstance(paths, tuple) or not paths:
                 raise ValueError("plan paths must be a non-empty tuple")
-            normalized[finding_id] = paths
+            # changed_paths의 순서는 "어떤 파일이 바뀌는가"라는 집합 의미만 가지며 순서 자체는
+            # 무의미하다. 여기서 한 번 정렬해 두면 반환되는 patch.changed_paths와 digest 계산이
+            # 항상 같은 순서를 보므로, 입력 순서만 다른 계획이 같은 patch로 정규화된다.
+            normalized[finding_id] = tuple(sorted(paths))
         self._plans = normalized
 
     def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch:
@@ -63,7 +66,7 @@ class FixturePatchGenerator:
             raise ValueError(f"no remediation plan is registered for {finding_id!r}") from None
 
         # patch 내용 digest는 (finding_id, snapshot commit, 변경 경로)로부터 결정적으로
-        # 만든다. 같은 입력 → 같은 artifact_id·digest이므로 재실행이 동일한 patch를 낸다.
+        # 만든다. 같은 입력 → 같은 digest이므로 재실행이 동일한 patch를 낸다.
         digest = _content_digest(
             finding_id=finding_id,
             commit_sha=snapshot.commit_sha,
@@ -73,7 +76,13 @@ class FixturePatchGenerator:
             finding_id=finding_id,
             base_commit_sha=snapshot.commit_sha,
             artifact=ArtifactReference(
-                artifact_id=f"remediation-patch:{snapshot.repository_id}:{finding_id}",
+                # artifact_id는 immutable artifact의 identity다. 같은 repository/finding이라도
+                # commit이 다르면 내용(digest)이 달라지므로, commit_sha를 identity에 포함해
+                # "같은 ID = 같은 내용" 불변식을 지킨다. commit을 빼면 서로 다른 내용이 같은
+                # ID를 가리켜 저장 계층에서 충돌·오조회가 생긴다.
+                artifact_id=(
+                    f"remediation-patch:{snapshot.repository_id}:{finding_id}:{snapshot.commit_sha}"
+                ),
                 artifact_type=ArtifactType.REMEDIATION_PATCH,
                 content_sha256=digest,
                 customer_id=snapshot.customer_id,
