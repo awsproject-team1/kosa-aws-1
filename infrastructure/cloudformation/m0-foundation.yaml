@@ -369,12 +369,15 @@ Resources:
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
-        - PolicyName: M1ReadOnlyAssessmentInputs
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement: !If
-              - M1LiveAssessmentEnabled
-              - - Effect: Allow
+        # Do not create an empty IAM policy in fixture mode: IAM rejects an empty
+        # Statement array before the foundation can be deployed.
+        - !If
+          - M1LiveAssessmentEnabled
+          - PolicyName: M1ReadOnlyAssessmentInputs
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
                   Action: secretsmanager:GetSecretValue
                   Resource: !Ref M1AssessmentSecretArns
                 - Effect: Allow
@@ -383,7 +386,7 @@ Resources:
                 - Effect: Allow
                   Action: bedrock:InvokeModel
                   Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
-              - []
+          - !Ref AWS::NoValue
 
   UserPool:
     Type: AWS::Cognito::UserPool

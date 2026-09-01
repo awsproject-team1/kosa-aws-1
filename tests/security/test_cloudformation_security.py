@@ -188,7 +188,12 @@ class CloudFormationSecurityTest(unittest.TestCase):
         statements = [
             statement
             for policy in policies
-            for statement in _policy_statements(policy["PolicyDocument"]["Statement"])
+            for policy_document in [
+                policy["PolicyDocument"]
+                if isinstance(policy, dict)
+                else policy[1]["PolicyDocument"]
+            ]
+            for statement in _policy_statements(policy_document["Statement"])
         ]
         flattened_actions = [
             action
@@ -206,6 +211,18 @@ class CloudFormationSecurityTest(unittest.TestCase):
             )
         )
         self.assertFalse(self._contains_artifact_bucket_reference(role_properties))
+
+    def test_fixture_mode_omits_the_m1_input_policy_instead_of_creating_an_empty_policy(
+        self,
+    ) -> None:
+        role_properties = _properties(self.resources["WorkflowRuntimeRole"])
+        policies = role_properties["Policies"]
+        live_policy_condition = policies[1]
+        self.assertEqual(live_policy_condition[0], "M1LiveAssessmentEnabled")
+        self.assertEqual(live_policy_condition[1]["PolicyName"], "M1ReadOnlyAssessmentInputs")
+        self.assertEqual(live_policy_condition[2], "AWS::NoValue")
+        statements = live_policy_condition[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 3)
 
     @staticmethod
     def _contains_artifact_bucket_reference(value: object) -> bool:
