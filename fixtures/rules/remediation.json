@@ -1,0 +1,42 @@
+[
+  {
+    "rule_id": "S3-PUBLIC-001",
+    "version": "2026-08-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "S3-ACL-001",
+    "version": "2026-08-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "S3-POLICY-001",
+    "version": "2026-08-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "S3-ENCRYPT-001",
+    "version": "2026-08-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "S3-TLS-001",
+    "version": "2026-08-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "S3-LOGGING-001",
+    "version": "2026-08-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "EC2-EBS-ENCRYPT-001",
+    "version": "2026-08-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "EC2-SNAPSHOT-PUBLIC-001",
+    "version": "2026-08-31",
+    "eligibility": "AUTOMATIC"
+  }
+]

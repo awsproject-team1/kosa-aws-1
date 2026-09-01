@@ -17,6 +17,7 @@ from packages.contracts import (
     RuleSeverity,
     SourceReference,
 )
+from packages.contracts.remediation_policy import RemediationEligibility, RemediationRuleScope
 
 
 def source_from_dict(data: object) -> PolicySource:
@@ -86,6 +87,15 @@ def control_from_dict(data: object) -> PolicyControl:
             rule_reference_from_dict(reference)
             for reference in _require_sequence(fields["rule_references"])
         ),
+    )
+
+
+def remediation_scope_from_dict(data: object) -> RemediationRuleScope:
+    fields = _require_mapping(data, "remediation scope")
+    return RemediationRuleScope(
+        rule_id=fields["rule_id"],
+        version=fields["version"],
+        eligibility=RemediationEligibility(fields["eligibility"]),
     )
 
 

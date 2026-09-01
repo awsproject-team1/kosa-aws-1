@@ -299,6 +299,37 @@ IaC가 이미 안전하고 Actual만 drift된 경우에는 Patch 없이 해당 I
 Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Repository에만 branch/commit/PR을
 생성하고, Terraform Apply는 이 일치 검증 뒤 GitHub Actions OIDC 경로에서만 가능하다.
 
+## M2 remediation scope boundary
+
+`packages/contracts/remediation_policy.py`는 B가 D와 A에게 주는 조치 판정 경계다 (ADR-0017).
+평가가 끝난 Finding 하나가 **자동 조치 대상인지, 예외로 덮였는지, 사람이 봐야 하는지**를
+값으로 돌려준다. 이 경계는 아무것도 영속화하지 않고 GitHub·AWS·Terraform을 건드리지 않는다.
+
+- `RemediationAction`: `TERRAFORM_PATCH`, `ACTUAL_SYNC`, `MANUAL_REVIEW`, `SUPPRESSED`
+- `RemediationEligibility`: Rule version 단위 `AUTOMATIC` / `MANUAL_ONLY`. **Patch 합성**에
+  대한 판단이다. 정본은 `fixtures/rules/remediation.json`이며 Registry가 함께 로드한다
+- `ManualReviewCode`: 자동 조치를 거부한 사유. 자유 문장이 아니다
+- `RemediationException`: `(customer_id, rule_id, rule_version)`과 선택적 `resource_id`에
+  묶이는 고객 승인 면제. 사유는 열거값이고 `approved_at`/`expires_at`은 offset을 포함한
+  ISO-8601이어야 한다
+- `RemediationTarget`: 대상 Resource의 Terraform 관리 여부와 같은 `Resource × Rule`의 IaC 판정
+- `RemediationDecision`: Finding·Rule version·관점과 판정. `MANUAL_REVIEW`만
+  `manual_review_code`를, `SUPPRESSED`만 `exception_id`를 가진다
+
+`RemediationPolicy.decide()`의 판정 순서가 정책이다. 유효한 예외 → 평가되지 못한 Finding →
+허용 범위 등록 여부 → Terraform 관리 여부 → 관점별 조치 유형 → Patch일 때만 `MANUAL_ONLY` 확인.
+
+- 허용 범위에 **등록되지 않은** Rule은 어떤 자동 조치도 받지 못한다. 판단의 부재는
+  `MANUAL_ONLY`라는 판단과 다르다
+- `MANUAL_ONLY`는 `TERRAFORM_PATCH`만 막는다. `ACTUAL_SYNC`는 새 변경을 합성하지 않고 사람이
+  쓴 commit을 배포 대상으로 삼으므로, 적용의 파괴성은 Deployment Readiness의 refresh된 Plan과
+  Human Approval이 판단한다 (ADR-0007)
+- `AWS_ACTUAL`/`DRIFT` Finding은 같은 `Resource × Rule`의 IaC 판정이 `PASS`일 때만
+  `ACTUAL_SYNC`가 된다. `OUT_OF_SCOPE`나 `EXECUTION_ERROR`는 안전으로 읽지 않는다
+
+예외는 Registry에 커밋하지 않는다. 고객 데이터이므로 A가 고객 partition에 저장하고 판정 시점에
+넘긴다. 허용 범위는 Rule과 함께 커밋되고, 예외는 고객이 등록하고 만료된다 — 수명이 다르다.
+
 ## Contract change review
 
 Contract 변경 PR은 변경 작성자와 해당 Contract의 Producer 및 Consumer Owner가 검토한다. Contract가 확정됐지만 구현체가 없는 경우 `Mockable` 상태로 Fixture/Mock을 사용해 병렬 개발할 수 있다.
