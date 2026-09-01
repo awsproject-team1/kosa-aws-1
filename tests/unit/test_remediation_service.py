@@ -155,6 +155,20 @@ class RemediationServiceTest(unittest.TestCase):
             RemediationService(gen).generate(context=context(), decision=other)
         self.assertFalse(gen.called)
 
+    def test_rejects_decision_with_matching_id_but_other_identity(self) -> None:
+        forged = RemediationDecision(
+            finding_id="finding-001",
+            resource_id="bucket-other",
+            rule_id="rule-001",
+            rule_version="v1",
+            perspective=EvaluationPerspective.IAC,
+            action=RemediationAction.TERRAFORM_PATCH,
+        )
+        gen = Generator(patch())
+        with self.assertRaises(RemediationContractError):
+            RemediationService(gen).generate(context=context(), decision=forged)
+        self.assertFalse(gen.called)
+
 
 if __name__ == "__main__":
     unittest.main()

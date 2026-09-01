@@ -41,6 +41,7 @@ class Targets:
             terraform_managed=True,
             iac_status=EvaluationStatus.PASS,
             iac_perspective=EvaluationPerspective.IAC,
+            iac_commit_sha="commit",
         )
 
 
@@ -116,6 +117,8 @@ def context(*, customer_id="cust", finding_id="finding-001"):
         score=0,
         rationale="test",
         evidence_references=("aws:bucket",),
+        assessed_commit_sha="commit",
+        evaluated_at="2026-09-01T07:00:00+00:00",
     )
     snapshot = IaCSnapshot(
         customer_id=customer_id,
@@ -250,6 +253,38 @@ class RemediationApiServiceTest(unittest.TestCase):
         maker.decide = mismatched
         with self.assertRaisesRegex(RepositoryError, "outside"):
             service.create_remediation(principal(), "finding-001")
+        self.assertEqual(repository.workflow_calls, [])
+
+    def test_legacy_or_future_finding_provenance_is_rejected_before_policy_or_write(self):
+        service, repository, _, maker = service_for(RemediationAction.TERRAFORM_PATCH)
+        original = service._contexts.get_context
+
+        def future(*, customer_id, finding_id):
+            value = original(customer_id=customer_id, finding_id=finding_id)
+            finding = value.finding
+            return RemediationContext(
+                finding=Finding(
+                    finding_id=finding.finding_id,
+                    resource_id=finding.resource_id,
+                    rule_id=finding.rule_id,
+                    rule_version=finding.rule_version,
+                    perspective=finding.perspective,
+                    status=finding.status,
+                    severity=finding.severity,
+                    score=finding.score,
+                    rationale=finding.rationale,
+                    evidence_references=finding.evidence_references,
+                    assessed_commit_sha="commit",
+                    evaluated_at="2026-09-01T09:00:00+00:00",
+                ),
+                snapshot=value.snapshot,
+                evidence_references=value.evidence_references,
+            )
+
+        service._contexts.get_context = future
+        with self.assertRaisesRegex(RepositoryError, "after decision"):
+            service.create_remediation(principal(), "finding-001")
+        self.assertEqual(maker.calls, [])
         self.assertEqual(repository.workflow_calls, [])
 
 

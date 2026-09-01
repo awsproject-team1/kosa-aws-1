@@ -2,6 +2,8 @@
 
 ## Current
 
+- PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
+  identity 검증을 통합했고, 후속 PR 검토 대기
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.
@@ -33,8 +35,11 @@
   Contract 추가. 허용 범위는 Rule version 단위로 `fixtures/rules/remediation.json`에 커밋하고,
   등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 떨어진다. 고객 예외는
   `(customer_id, rule_id, rule_version)`에 묶이고 반드시 만료되며 Rule 새 version으로 승계되지
-  않는다. `AWS_ACTUAL`/`DRIFT` Finding은 같은 `Resource × Rule`의 IaC 판정이 `PASS`일 때만
-  `ACTUAL_SYNC`가 되고, `OUT_OF_SCOPE`/`EXECUTION_ERROR`를 안전으로 읽지 않는다
+  않는다. 억제 여부는 두 시각으로 갈린다 — 승인은 Finding 평가 시점보다 앞서야 하고 만료는
+  판정 시점 기준이므로, 늦게 들어온 조치 요청에서 나중에 승인된 예외가 옛 Finding을 소급
+  억제하지 못한다. `AWS_ACTUAL`/`DRIFT` Finding은 같은 `Resource × Rule`의 IaC 판정이 `PASS`일
+  때만 `ACTUAL_SYNC`가 되고, 그 판정이 조치 대상 commit에서 나온 것이어야 하며
+  (`iac_commit_sha`), `OUT_OF_SCOPE`/`EXECUTION_ERROR`를 안전으로 읽지 않는다
   (예외 등록·저장 API는 A, Patch 생성 연결은 D)
 - M1 C Initial Assessment 3-관점 산출 완료 (ADR-0016): Worker가 `perspective_runners`로 IaC
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의

@@ -157,6 +157,7 @@ class DynamoM1WorkRepository:
             # primary evaluated perspective rather than the only one.
             perspective=EvaluationPerspective.AWS_ACTUAL,
             model_profile_id="assessment-nova-lite-m0-v1",
+            assessed_commit_sha=target.commit_sha,
         )
         self._work[(job_id, expected_revision)] = work
         return work

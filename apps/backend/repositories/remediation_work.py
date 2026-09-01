@@ -105,6 +105,8 @@ def _context(value: Mapping[str, object]) -> RemediationContext:
         evidence_references=_strings(
             finding_value.get("evidence_references"), "finding evidence_references"
         ),
+        assessed_commit_sha=finding_value.get("assessed_commit_sha"),
+        evaluated_at=finding_value.get("evaluated_at"),
     )
     snapshot = IaCSnapshot(
         customer_id=_string(snapshot_value.get("customer_id"), "snapshot customer_id"),

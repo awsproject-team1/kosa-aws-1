@@ -52,8 +52,8 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
 | Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata; report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
-| Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment and evidence references |
-| Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result and severity |
+| Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
+| Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
 | Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context, source Finding, optional Job/result reference |
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
