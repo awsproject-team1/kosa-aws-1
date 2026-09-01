@@ -39,6 +39,12 @@ from packages.contracts.policy import (
     RuleSeverity,
     SourceReference,
 )
+from packages.contracts.policy_approval import (
+    ApprovalRejectionCode,
+    PolicySourceApproval,
+    RuleCandidate,
+    RuleLifecycle,
+)
 from packages.contracts.policy_ingestion import (
     APPROVABLE_STATUSES,
     FORMAT_MEDIA_TYPES,
@@ -58,6 +64,7 @@ __all__ = [
     "ApiError",
     "ApiErrorResponse",
     "APPROVABLE_STATUSES",
+    "ApprovalRejectionCode",
     "ArtifactReference",
     "ArtifactType",
     "AssessmentCoverage",
@@ -87,10 +94,13 @@ __all__ = [
     "PolicyRule",
     "PolicyRuleReference",
     "PolicySource",
+    "PolicySourceApproval",
     "PolicySourceFormat",
     "PolicySourceKind",
     "PolicySourceUploadRequest",
     "RemediationPatch",
+    "RuleCandidate",
+    "RuleLifecycle",
     "RuleSeverity",
     "SCORE_ANCHORS",
     "ScoringMode",

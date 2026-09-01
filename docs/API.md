@@ -27,9 +27,10 @@
 
 ## Planned customer policy ingestion endpoints
 
-아래 기능은 아직 구현되지 않았다. 사용자 업로드 정책을 지원하기 전에 A가 API/Storage를, B가
-정규화·승인 Contract를, C가 AI 추출 품질 Gate를 함께 확정해야 한다. 상세 workflow와 인수 조건은
-`docs/POLICY_INGESTION.md`를 따른다.
+아래 endpoint는 아직 노출되지 않았다. B의 정규화·승인·게시 Contract와 판정은
+`apps/backend/policy/ingestion/`에 구현됐고(`normalize_upload`, `approve_source`,
+`publish_profile`), A의 API/Storage 배선과 C의 AI 추출 품질 Gate가 남아 있다. 상세 workflow와
+인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
 
 | Method | Planned path | Purpose |
 | --- | --- | --- |
@@ -47,6 +48,11 @@
 확정하고, Profile 게시가 그 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
 참조하거나 승인된 것과 다른 Source version을 가리키는 Profile을 거부한다. 두 단계를 하나의
 operation으로 합치더라도 이 거부 조건과 audit record 기록은 동일하게 적용한다.
+
+`/approve`는 `approve_source()`를, Profile 게시는 `publish_profile()`을 호출한다. 두 함수는
+아무것도 영속화하지 않는 순수 판정이므로, A가 DynamoDB 조건부 write 앞에서 호출하고 거부
+시에는 write를 시도하지 않는다. 거부 사유는 `ApprovalRejectionCode` 열거값이며 응답의 오류
+코드로 그대로 쓸 수 있다 — 자유 문장이 아니라서 정책 원문이 응답이나 로그로 새지 않는다.
 
 경로와 wire shape는 구현 PR의 Producer/Consumer Contract Review에서 최종 확정한다. Client는
 `customer_id`, S3 bucket/key, checksum 판정, parser/status를 직접 지정할 수 없다. 업로드 성공은

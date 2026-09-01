@@ -20,10 +20,14 @@ from ingestion_fixtures import build_xlsx, inline_cell, sheet_row  # noqa: E402
 
 from apps.backend.policy.ingestion import (  # noqa: E402
     MAX_DOCUMENT_BYTES,
+    ApprovalRejectedError,
     DocumentFormatError,
     UploadedPolicyOriginal,
+    approve_source,
     detect_format,
     normalize_upload,
+    publish_profile,
+    source_reference_for,
 )
 from apps.backend.policy.ingestion.formats import (  # noqa: E402
     MAX_ARCHIVE_ENTRIES,
@@ -31,9 +35,13 @@ from apps.backend.policy.ingestion.formats import (  # noqa: E402
 )
 from packages.contracts import (  # noqa: E402
     FORMAT_MEDIA_TYPES,
+    AssessmentPhase,
     IngestionFailureCode,
     IngestionStatus,
+    PolicyRule,
     PolicySourceFormat,
+    RuleCandidate,
+    RuleSeverity,
 )
 
 # 원문에만 있어야 하는 표지 문장. 이 문자열이 Contract나 오류 어디에 나타나면 유출이다.
@@ -148,6 +156,52 @@ class NoPolicyTextLeakTest(unittest.TestCase):
             self.assertEqual(error.failure_code, IngestionFailureCode.ENCODING_NOT_SUPPORTED)
         else:  # pragma: no cover - the encoding must be rejected
             self.fail("a non-UTF-8 document must be rejected")
+
+
+class ApprovalDoesNotLeakPolicyTextTest(unittest.TestCase):
+    """승인·게시 거부 경로도 원문을 인용하지 않는다 (Task 2의 규율 계승)."""
+
+    def _document(self):
+        payload = "\n".join(("# 정책", "", SECRET_SENTENCE, "")).encode()
+        return normalize_upload(_original(payload, "text/markdown", "policy.md"), payload).document
+
+    def _candidate(self, document, locator: str) -> RuleCandidate:
+        return RuleCandidate(
+            rule=PolicyRule(
+                rule_id="S3-SECRET-100",
+                version="2026-09-01",
+                title="Rule under review",
+                severity=RuleSeverity.HIGH,
+                applicable_phases=(AssessmentPhase.INITIAL,),
+                resource_types=("AWS::S3::Bucket",),
+                source_references=(source_reference_for(document, locator),),
+            )
+        )
+
+    def test_the_approval_record_carries_identifiers_and_hashes_only(self) -> None:
+        document = self._document()
+        candidate = self._candidate(document, "heading/정책/item/1")
+
+        approval, _ = approve_source(
+            document, [candidate], approved_by="policy-owner", approved_at="2026-09-01T00:00:00Z"
+        )
+        serialized = json.dumps(approval.to_dict(), ensure_ascii=False)
+
+        self.assertNotIn(SECRET_SENTENCE, serialized)
+        self.assertNotIn("do-not-leak", serialized)
+
+    def test_a_publication_refusal_message_does_not_quote_the_document(self) -> None:
+        document = self._document()
+        candidate = self._candidate(document, "heading/정책/item/1")
+
+        with self.assertRaises(ApprovalRejectedError) as raised:
+            publish_profile(
+                policy_profile_id="profile-customer-baseline",
+                version="1",
+                candidates=[candidate.approved()],
+                approvals=[],
+            )
+        self.assertNotIn(SECRET_SENTENCE, str(raised.exception))
 
 
 if __name__ == "__main__":
