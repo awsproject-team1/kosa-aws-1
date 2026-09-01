@@ -1,6 +1,7 @@
 """DynamoDB adapter for customer-scoped, revision-checked Job persistence."""
 
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -15,7 +16,16 @@ from apps.backend.repositories.ports import (
     RevisionConflictError,
     StoredDataError,
 )
-from packages.contracts import ApiError, JobCurrentStep, JobStatus, WorkflowCommand, WorkflowTask
+from packages.contracts import (
+    ApiError,
+    JobCurrentStep,
+    JobStatus,
+    RemediationAction,
+    RemediationDecision,
+    WorkflowCommand,
+    WorkflowTask,
+)
+from packages.contracts.remediation import RemediationContext
 
 
 class DynamoTable(Protocol):
@@ -155,6 +165,131 @@ class DynamoDbAssessmentWorkflowRepository(DynamoDbJobRepository):
                 raise DuplicateJobError("assessment workflow already exists") from None
             raise RepositoryError("assessment workflow create failed") from None
 
+    def record_remediation_decision(
+        self,
+        *,
+        context: RemediationContext,
+        decision: RemediationDecision,
+        remediation_id: str,
+        requested_by: str,
+        decided_at: datetime,
+    ) -> None:
+        """Persist a normal MANUAL_REVIEW/SUPPRESSED result without Job or Outbox."""
+        _require_remediation_inputs(
+            context=context,
+            decision=decision,
+            remediation_id=remediation_id,
+            decided_at=decided_at,
+        )
+        _require_non_empty_string(requested_by, "requested_by")
+        if decision.is_actionable:
+            raise ValueError("actionable decisions require a remediation workflow")
+        customer_id = context.snapshot.customer_id
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    _transactional_put(
+                        self._table_name,
+                        _item_from_remediation(
+                            context=context,
+                            decision=decision,
+                            remediation_id=remediation_id,
+                            job_id=None,
+                            decided_at=decided_at,
+                        ),
+                    ),
+                    _transactional_put(
+                        self._table_name,
+                        _item_from_remediation_audit(
+                            customer_id=customer_id,
+                            remediation_id=remediation_id,
+                            decision=decision,
+                            requested_by=requested_by,
+                            decided_at=decided_at,
+                        ),
+                    ),
+                ]
+            )
+        except Exception as error:
+            if _provider_error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                raise DuplicateJobError("remediation decision already exists") from None
+            raise RepositoryError("remediation decision create failed") from None
+
+    def create_remediation_workflow(
+        self,
+        *,
+        context: RemediationContext,
+        decision: RemediationDecision,
+        job: Job,
+        remediation_id: str,
+        outbox: WorkflowOutboxEntry,
+        decided_at: datetime,
+    ) -> None:
+        """Atomically persist C context, B decision, A Job, audit, and pending task."""
+        _require_remediation_inputs(
+            context=context,
+            decision=decision,
+            remediation_id=remediation_id,
+            decided_at=decided_at,
+        )
+        _require_job(job)
+        if not decision.is_actionable:
+            raise ValueError("non-actionable decisions must not create a Job or Outbox")
+        if not isinstance(outbox, WorkflowOutboxEntry):
+            raise TypeError("outbox must be a WorkflowOutboxEntry")
+        if (
+            job.customer_id != context.snapshot.customer_id
+            or job.remediation_id != remediation_id
+            or outbox.customer_id != job.customer_id
+            or outbox.job_id != job.job_id
+            or outbox.task.expected_revision != job.revision
+        ):
+            raise ValueError("remediation workflow scope or identifiers are inconsistent")
+        expected_command = (
+            WorkflowCommand.GENERATE_REMEDIATION
+            if decision.action is RemediationAction.TERRAFORM_PATCH
+            else WorkflowCommand.SYNC_ACTUAL_STATE
+        )
+        if outbox.task.command is not expected_command:
+            raise ValueError("outbox command does not match remediation decision")
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    _transactional_put(
+                        self._table_name,
+                        _item_from_remediation(
+                            context=context,
+                            decision=decision,
+                            remediation_id=remediation_id,
+                            job_id=job.job_id,
+                            decided_at=decided_at,
+                        ),
+                    ),
+                    _transactional_put(self._table_name, _item_from_job(job)),
+                    _transactional_put(self._table_name, _item_from_outbox(outbox)),
+                    _transactional_put(
+                        self._table_name,
+                        _item_from_remediation_audit(
+                            customer_id=job.customer_id,
+                            remediation_id=remediation_id,
+                            decision=decision,
+                            requested_by=job.requested_by,
+                            decided_at=decided_at,
+                        ),
+                    ),
+                ]
+            )
+        except Exception as error:
+            if _provider_error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                raise DuplicateJobError("remediation workflow already exists") from None
+            raise RepositoryError("remediation workflow create failed") from None
+
     def list_pending_outbox(self, *, limit: int) -> tuple[WorkflowOutboxEntry, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("limit must be a positive integer")
@@ -202,6 +337,94 @@ class DynamoDbAssessmentWorkflowRepository(DynamoDbJobRepository):
             )
         except Exception:
             raise RepositoryError("outbox update failed") from None
+
+
+def _require_remediation_inputs(
+    *,
+    context: RemediationContext,
+    decision: RemediationDecision,
+    remediation_id: str,
+    decided_at: datetime,
+) -> None:
+    if not isinstance(context, RemediationContext):
+        raise TypeError("context must be a RemediationContext")
+    if not isinstance(decision, RemediationDecision):
+        raise TypeError("decision must be a RemediationDecision")
+    _require_non_empty_string(remediation_id, "remediation_id")
+    if not isinstance(decided_at, datetime):
+        raise TypeError("decided_at must be a datetime")
+    if decided_at.tzinfo is None or decided_at.utcoffset() is None:
+        raise ValueError("decided_at must be offset-aware")
+    finding = context.finding
+    if (
+        decision.finding_id,
+        decision.resource_id,
+        decision.rule_id,
+        decision.rule_version,
+        decision.perspective,
+    ) != (
+        finding.finding_id,
+        finding.resource_id,
+        finding.rule_id,
+        finding.rule_version,
+        finding.perspective,
+    ):
+        raise ValueError("remediation decision is outside context identity")
+
+
+def _item_from_remediation(
+    *,
+    context: RemediationContext,
+    decision: RemediationDecision,
+    remediation_id: str,
+    job_id: str | None,
+    decided_at: datetime,
+) -> dict[str, object]:
+    customer_id = context.snapshot.customer_id
+    item: dict[str, object] = {
+        "PK": _customer_pk(customer_id),
+        "SK": f"REMEDIATION#{remediation_id}",
+        "entity_type": "REMEDIATION",
+        "customer_id": customer_id,
+        "remediation_id": remediation_id,
+        "finding_id": context.finding.finding_id,
+        "context": context.to_dict(),
+        "decision": decision.to_dict(),
+        "status": "QUEUED" if job_id is not None else "DECIDED_NO_ACTION",
+        "decided_at": decided_at.isoformat(),
+        "version": 1,
+    }
+    if job_id is not None:
+        item["job_id"] = job_id
+    return item
+
+
+def _item_from_remediation_audit(
+    *,
+    customer_id: str,
+    remediation_id: str,
+    decision: RemediationDecision,
+    requested_by: str,
+    decided_at: datetime,
+) -> dict[str, object]:
+    occurred_at = decided_at.isoformat()
+    return {
+        "PK": _customer_pk(customer_id),
+        "SK": f"AUDIT#{occurred_at}#REMEDIATION#{remediation_id}",
+        "entity_type": "AUDIT_EVENT",
+        "customer_id": customer_id,
+        "event_type": "REMEDIATION_DECIDED",
+        "remediation_id": remediation_id,
+        "finding_id": decision.finding_id,
+        "action": decision.action.value,
+        "manual_review_code": (
+            None if decision.manual_review_code is None else decision.manual_review_code.value
+        ),
+        "exception_id": decision.exception_id,
+        "requested_by": requested_by,
+        "occurred_at": occurred_at,
+        "version": 1,
+    }
 
 
 def _item_from_job(job: Job) -> dict[str, object]:

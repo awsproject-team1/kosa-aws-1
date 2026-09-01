@@ -17,7 +17,7 @@ from apps.backend.jobs.lifecycle import (
 )
 from apps.backend.jobs.models import Job
 from apps.backend.jobs.outbox import OutboxDispatcher, OutboxStatus, WorkflowOutboxEntry
-from apps.backend.jobs.sqs import SqsWorkflowDispatcher
+from apps.backend.jobs.sqs import SqsRemediationWorkflowDispatcher, SqsWorkflowDispatcher
 
 __all__ = [
     "AssessmentScopeDenied",
@@ -28,6 +28,7 @@ __all__ = [
     "OutboxStatus",
     "RequestValidationError",
     "StaleJobRevision",
+    "SqsRemediationWorkflowDispatcher",
     "SqsWorkflowDispatcher",
     "authorize_job_read",
     "create_job",

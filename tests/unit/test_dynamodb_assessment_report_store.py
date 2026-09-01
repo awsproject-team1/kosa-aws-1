@@ -14,6 +14,7 @@ from packages.contracts import EvaluationPerspective, EvaluationResult, Evaluati
 class Table:
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict[str, object]] = {}
+        self.query_calls: list[dict[str, object]] = []
 
     def put_item(self, **kwargs: object) -> None:
         item = kwargs["Item"]
@@ -21,6 +22,7 @@ class Table:
         self.items[(item["PK"], item["SK"])] = item
 
     def query(self, **kwargs: object) -> dict[str, object]:
+        self.query_calls.append(kwargs)
         values = kwargs["ExpressionAttributeValues"]
         assert isinstance(values, dict)
         prefix = values.get(":assessment", values.get(":results"))
@@ -169,3 +171,49 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
         report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
 
         self.assertIsNone(report.readiness_score)
+
+    def test_pages_findings_with_an_independent_cursor(self) -> None:
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(
+            AssessmentEvaluationPlan(
+                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
+            )
+        )
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001",
+            assessment_id="asm-001",
+            results=(
+                result(status=EvaluationStatus.FAIL, score=0),
+                result(resource_id="bucket-002", status=EvaluationStatus.FAIL, score=0),
+            ),
+        )
+
+        first = store.get_report_page(customer_id="cust-001", assessment_id="asm-001", limit=1)
+        second = store.get_report_page(
+            customer_id="cust-001",
+            assessment_id="asm-001",
+            limit=1,
+            findings_cursor=first.findings_next_cursor,
+        )
+
+        self.assertEqual(len(first.findings), 1)
+        self.assertIsNotNone(first.findings_next_cursor)
+        self.assertEqual(len(second.findings), 1)
+        self.assertIsNone(second.findings_next_cursor)
+
+    def test_incomplete_counter_avoids_full_result_scan_for_a_page(self) -> None:
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(
+            AssessmentEvaluationPlan(
+                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=3
+            )
+        )
+        table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001#PLAN")]["completed_evaluations"] = 1
+
+        page = store.get_report_page(customer_id="cust-001", assessment_id="asm-001", limit=1)
+
+        self.assertEqual(page.coverage.completed_evaluations, 1)
+        self.assertIsNone(page.readiness_score)
+        self.assertEqual(len(table.query_calls), 2)  # one results page + one findings page

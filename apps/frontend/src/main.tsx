@@ -5,7 +5,7 @@ import "./styles.css";
 type Result = { resource_id: string; rule_id: string; perspective: string; status: string; score: number; severity: string; rationale: string };
 type Finding = { finding_id: string; resource_id: string; rule_id: string; perspective: string; status: string; severity: string; score: number; rationale: string };
 type ReadinessScore = { score: number; evaluated_evaluations: number };
-type Report = { assessment_id: string; results: Result[]; findings: Finding[]; readiness_score: ReadinessScore | null; next_cursor: string | null; coverage: { planned_evaluations: number; completed_evaluations: number; percentage: number } };
+type Report = { assessment_id: string; results: Result[]; findings: Finding[]; readiness_score: ReadinessScore | null; next_cursor: string | null; findings_next_cursor: string | null; coverage: { planned_evaluations: number; completed_evaluations: number; percentage: number } };
 
 const verifierKey = "governance.oauth.pkce.verifier";
 const stateKey = "governance.oauth.state";
@@ -69,6 +69,7 @@ function StartAssessment({ accessToken }: { accessToken: string }) {
 function AssessmentReport({ assessmentId }: { assessmentId: string }) {
   const [report, setReport] = useState<Report | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   useEffect(() => { exchangeCallback().then(token => { if (token) setAccessToken(token); }).catch((reason: Error) => setError(reason.message)); }, []);
@@ -77,20 +78,24 @@ function AssessmentReport({ assessmentId }: { assessmentId: string }) {
     if (!accessToken || !assessmentId) return;
     const params = new URLSearchParams({ limit: "25" });
     if (cursor) params.set("cursor", cursor);
+    if (findingsCursor) params.set("findings_cursor", findingsCursor);
     const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
     fetch(`${baseUrl}/assessments/${encodeURIComponent(assessmentId)}?${params}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
       .then(async response => response.ok ? response.json() as Promise<Report> : Promise.reject(new Error("Assessment 결과를 불러오지 못했습니다.")))
-      .then(next => setReport(previous => previous && cursor ? { ...next, results: [...previous.results, ...next.results] } : next))
+      .then(next => setReport(previous => previous && (cursor || findingsCursor) ? { ...next, results: uniqueResults([...previous.results, ...next.results]), findings: uniqueFindings([...previous.findings, ...next.findings]) } : next))
       .catch((reason: Error) => setError(reason.message));
-  }, [accessToken, assessmentId, cursor]);
+  }, [accessToken, assessmentId, cursor, findingsCursor]);
   if (!accessToken) return <main><h1>Initial Assessment</h1><p>고객 Cognito 계정으로 로그인해 Assessment 결과를 확인하세요.</p><button onClick={() => void startLogin().catch((reason: Error) => setError(reason.message))}>Cognito로 로그인</button></main>;
   if (!assessmentId) return <StartAssessment accessToken={accessToken} />;
   if (error) return <p role="alert">{error}</p>;
   if (!report) return <p>Assessment 결과를 불러오는 중…</p>;
-  return <main><h1>Initial Assessment</h1><section><strong>평가 실행률 {report.coverage.percentage}%</strong><span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span><strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong></section><h2>Findings ({report.findings.length})</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Severity</th><th>Score</th></tr></thead><tbody>{report.findings.map(finding => <tr key={finding.finding_id}><td>{finding.resource_id}</td><td>{finding.rule_id}</td><td>{finding.perspective}</td><td>{finding.status}</td><td>{finding.severity}</td><td>{finding.score}</td></tr>)}</tbody></table><h2>Evaluation results</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td></tr>)}</tbody></table>{report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}</main>;
+  return <main><h1>Initial Assessment</h1><section><strong>평가 실행률 {report.coverage.percentage}%</strong><span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span><strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong></section><h2>Findings ({report.findings.length})</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Severity</th><th>Score</th></tr></thead><tbody>{report.findings.map(finding => <tr key={finding.finding_id}><td>{finding.resource_id}</td><td>{finding.rule_id}</td><td>{finding.perspective}</td><td>{finding.status}</td><td>{finding.severity}</td><td>{finding.score}</td></tr>)}</tbody></table>{report.findings_next_cursor && <button onClick={() => setFindingsCursor(report.findings_next_cursor)}>Findings 더 보기</button>}<h2>Evaluation results</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td></tr>)}</tbody></table>{report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}</main>;
 }
+
+function uniqueResults(values: Result[]) { return [...new Map(values.map(value => [`${value.resource_id}:${value.rule_id}:${value.perspective}`, value])).values()]; }
+function uniqueFindings(values: Finding[]) { return [...new Map(values.map(value => [value.finding_id, value])).values()]; }
 
 const assessmentId = new URLSearchParams(location.search).get("assessment_id") ?? "";
 createRoot(document.getElementById("root")!).render(<StrictMode><AssessmentReport assessmentId={assessmentId} /></StrictMode>);
