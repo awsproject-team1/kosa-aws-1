@@ -28,6 +28,11 @@
 - M1 C: M1 model/prompt/rubric/golden version을 `m1-three-perspective-v1`으로 재고정하고,
   S3 Rule 6건 × IAC/AWS_ACTUAL/DRIFT 3관점 Golden manifest 및 IAC/DRIFT repeated quality-gate
   fixture를 추가했다.
+- M1 A/C: customer-scoped Policy Source upload/finalize/normalized Artifact/status boundary,
+  Admin-only approval/Profile API service 및 immutable approval/profile-audit DynamoDB transaction,
+  injected HTTP routes를 구현했다. upload → normalize → approve → Profile → Assessment Context와
+  cross-tenant access denial integration test를 통과했다. customer sandbox/API Lambda runtime 조립과
+  external Bedrock candidate producer는 별도 배포·실제 연동 범위로 남긴다.
 
 - M1 C Initial Assessment 3-관점 산출 완료 (ADR-0016): Worker가 `perspective_runners`로 IaC
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의
@@ -152,14 +157,6 @@
   `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정 전에는 고객 sandbox 배포나 실제
   GitHub/AWS/Bedrock E2E를 시작하지 않는다. IAC 관점이 `git/blobs`를 읽으므로 GitHub App
   installation token에는 승인 repository의 Contents read 권한이 필요하다.
-- M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
-  ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
-  선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
-- M1 A: 승인·Profile 게시 API 배선. `approve_source()`/`publish_profile()`을 DynamoDB 조건부
-  write 앞에서 호출하고, 거부 시 write를 시도하지 않는다. 승인 record와 audit record는
-  finalization tuple에 조건부로 묶는다
-- M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
-  고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
 - M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
   로그인·Assessment 시작·결과 조회 E2E를 실행한다.
 - M1 A/D: 고객 sandbox의 Metadata Table에 `scripts/publish_policy_catalog.py`로 승인 Registry를
