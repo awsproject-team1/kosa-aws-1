@@ -25,6 +25,7 @@ from apps.backend.policy.registry import (
     PolicyRegistryError,
     load_rule_registry,
 )
+from apps.backend.policy.remediation import RemediationPolicy, RemediationPolicyError
 
 __all__ = [
     "ApprovalRejectedError",
@@ -42,6 +43,8 @@ __all__ = [
     "PolicyNotFoundError",
     "PolicyRegistry",
     "PolicyRegistryError",
+    "RemediationPolicy",
+    "RemediationPolicyError",
     "UploadedPolicyOriginal",
     "approve_source",
     "load_m0_fixture_catalog",

@@ -2,12 +2,6 @@
 
 ## Current
 
-- M2 A/C mockable boundary 완료: M1 Finding/IaC/Actual에서 deterministic remediation context와
-  refreshed-plan readiness verdict를 만들고, customer-scoped Remediation Job/Outbox, Admin-only
-  exact plan approval, immutable DynamoDB approval/audit transaction, HTTP service boundary를
-  구현했다. B/D의 policy·Patch/Plan live adapter와 CloudFormation runtime wiring은 해당 역할의
-  병합 시 같은 port로 연결한다.
-
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.
@@ -19,21 +13,19 @@
   승인 판정, Profile publication 거부 규칙) 구현 완료. Rule Registry와 `policies-local/`은
   여전히 개발 seed이며, 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C),
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
+- M2 착수: B의 Remediation 조치 판정 경계(허용 범위·예외·Manual Review)와 D의 결정적 Patch
+  생성 경계(PR #21)가 각각 올라와 있고, 둘을 잇는 호출부(A의 Remediation API)가 다음 조각이다
 
 ## Completed
 
-- M1 A/C: Assessment Result/Finding immutable write와 같은 DynamoDB transaction의 plan 완료 counter,
-  Results/Findings 독립 cursor, counter 이전 plan 호환 read를 구현했다. 진행 중 대형 report는
-  전체 결과를 재조회하지 않으며 Unit/Contract/Integration/Security 회귀를 통과했다.
-- M1 C: M1 model/prompt/rubric/golden version을 `m1-three-perspective-v1`으로 재고정하고,
-  S3 Rule 6건 × IAC/AWS_ACTUAL/DRIFT 3관점 Golden manifest 및 IAC/DRIFT repeated quality-gate
-  fixture를 추가했다.
-- M1 A/C: customer-scoped Policy Source upload/finalize/normalized Artifact/status boundary,
-  Admin-only approval/Profile API service 및 immutable approval/profile-audit DynamoDB transaction,
-  injected HTTP routes를 구현했다. upload → normalize → approve → Profile → Assessment Context와
-  cross-tenant access denial integration test를 통과했다. customer sandbox/API Lambda runtime 조립과
-  external Bedrock candidate producer는 별도 배포·실제 연동 범위로 남긴다.
-
+- M2 B Remediation 허용 범위·예외·Manual Review 정책 경계 (ADR-0017): Finding 하나를
+  `TERRAFORM_PATCH`/`ACTUAL_SYNC`/`MANUAL_REVIEW`/`SUPPRESSED` 중 하나로 판정하는 순수 함수와
+  Contract 추가. 허용 범위는 Rule version 단위로 `fixtures/rules/remediation.json`에 커밋하고,
+  등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 떨어진다. 고객 예외는
+  `(customer_id, rule_id, rule_version)`에 묶이고 반드시 만료되며 Rule 새 version으로 승계되지
+  않는다. `AWS_ACTUAL`/`DRIFT` Finding은 같은 `Resource × Rule`의 IaC 판정이 `PASS`일 때만
+  `ACTUAL_SYNC`가 되고, `OUT_OF_SCOPE`/`EXECUTION_ERROR`를 안전으로 읽지 않는다
+  (예외 등록·저장 API는 A, Patch 생성 연결은 D)
 - M1 C Initial Assessment 3-관점 산출 완료 (ADR-0016): Worker가 `perspective_runners`로 IaC
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의
   불일치이며 AI 판정이 아니고, score 정합 100 / 이탈 0에 evidence는 두 관점의 합집합이다.
@@ -157,6 +149,26 @@
   `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정 전에는 고객 sandbox 배포나 실제
   GitHub/AWS/Bedrock E2E를 시작하지 않는다. IAC 관점이 `git/blobs`를 읽으므로 GitHub App
   installation token에는 승인 repository의 Contents read 권한이 필요하다.
+- M2 A: Remediation API가 `RemediationPolicy.decide()`를 Patch 생성 **앞에서** 호출하고,
+  `MANUAL_REVIEW`/`SUPPRESSED` 결정은 Job을 만들지 않고 사유와 함께 보고한다. 고객 예외의
+  등록·승인·저장(만료 포함)과 감사 record도 A 경계다
+- M2 D: `FixturePatchGenerator` 호출부를 `RemediationDecision`이 `TERRAFORM_PATCH`인
+  Finding으로 제한하고, `ACTUAL_SYNC` 결정은 Patch 없이 현재 commit을 배포 대상으로 넘긴다
+- M2 A/C/D: `RemediationTarget`의 `terraform_managed`와 IaC 판정을 누가 채우는지 확정한다.
+  IaC 관점 결과는 C가, Terraform 관리 여부는 D의 Snapshot이 안다
+- M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
+  DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
+  같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
+- M1 C: Rule 6건 × 3관점으로 확대된 평가 범위에 맞춰 prompt/rubric/golden dataset version을
+  재고정하고 DESIGN 품질 Gate를 재실행 (IAC/DRIFT 관점 Golden Case 추가 필요)
+- M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
+  ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
+  선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
+- M1 A: 승인·Profile 게시 API 배선. `approve_source()`/`publish_profile()`을 DynamoDB 조건부
+  write 앞에서 호출하고, 거부 시 write를 시도하지 않는다. 승인 record와 audit record는
+  finalization tuple에 조건부로 묶는다
+- M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
+  고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
 - M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
   로그인·Assessment 시작·결과 조회 E2E를 실행한다.
 - M1 A/D: 고객 sandbox의 Metadata Table에 `scripts/publish_policy_catalog.py`로 승인 Registry를
@@ -210,7 +222,7 @@
 **Exit criteria:** 선택된 Finding에서 최소 Terraform Patch, Branch/Commit/PR, CI 및 Deployment Readiness Validation/plan까지 이어진다.
 
 - [ ] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log
-- [ ] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공
+- [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [ ] **C — AI Evaluation:** Finding 근거 기반 Remediation Context와 Deployment Readiness 평가
 - [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
