@@ -1,0 +1,12 @@
+{
+  "case_id": "golden-s3-public-iac-001",
+  "phase": "INITIAL",
+  "perspective": "IAC",
+  "rubric_version": "m1-three-perspective-v1",
+  "scoring_mode": "CONTINUOUS",
+  "resource_snapshot_artifact_id": "art-iac-s3-public-001",
+  "expected_status": "FAIL",
+  "expected_score_min": 0,
+  "expected_score_max": 30,
+  "expected_evidence_references": ["github:terraform/s3.tf#aws_s3_bucket_public_access_block.logs"]
+}

@@ -1,18 +1,18 @@
 """생성된 Terraform Patch를 승인된 판정·IaC Snapshot 하나에 묶어 제약한다.
 
 ADR-0018: 조치 허가 판정(`RemediationPolicy.decide()`)은 A의 Remediation API가 앞에서
-내리고, 그 결과인 `RemediationDecision`을 D가 소비한다. `RemediationService.generate()`는
-판정을 **인자로 요구**하고, `TERRAFORM_PATCH`가 아닌 판정으로 호출되면 거부한다. 이렇게
-"판정 없이는 patch를 만들 수 없다"를 타입 수준에서 강제하므로, A를 우회하는 경로(재시도,
-배치, worker 직접 호출)도 게이트를 벗어날 수 없다. D는 `RemediationPolicy`를 import하지
-않고 판정 **값**에만 의존하므로 B 구현과 분리된 채로 남는다.
+내리고, C의 `RemediationWorker`가 그 판정과 `RemediationContext`를 재조회해 이 service를
+호출한다. `RemediationService.generate()`는 `decision.action`이 `TERRAFORM_PATCH`가 아니면
+거부하여, 정책 게이트를 우회한 patch 생성을 타입 수준에서 막는다. generator(D 소유 port
+구현체)는 이미 게이트를 통과한 `RemediationContext`만 받으므로 판정을 다시 알 필요가 없다.
+D는 `RemediationPolicy`를 import하지 않고 판정 **값**에만 의존해 B 구현과 분리된 채 남는다.
 """
 
 from typing import Protocol
 
 from packages.contracts import (
-    IaCSnapshot,
     RemediationAction,
+    RemediationContext,
     RemediationDecision,
     RemediationPatch,
 )
@@ -22,10 +22,12 @@ class RemediationContractError(ValueError):
     """생성된 patch가 판정·snapshot 경계에 묶이지 않았을 때 발생한다."""
 
 
+class RemediationNotAutomatableError(ValueError):
+    """정책 context가 사람 검토를 요구하여 patch 생성에 진입해서는 안 될 때 발생한다."""
+
+
 class PatchGenerator(Protocol):
-    def generate(
-        self, *, decision: RemediationDecision, snapshot: IaCSnapshot
-    ) -> RemediationPatch: ...
+    def generate(self, *, context: RemediationContext) -> RemediationPatch: ...
 
 
 class RemediationService:
@@ -36,24 +38,22 @@ class RemediationService:
             raise TypeError("generator is required")
         self._generator = generator
 
-    def generate(self, *, decision: RemediationDecision, snapshot: IaCSnapshot) -> RemediationPatch:
-        # 판정 게이트(ADR-0018 D3): patch 생성은 TERRAFORM_PATCH 판정에서만 허용된다.
-        # MANUAL_REVIEW/SUPPRESSED/ACTUAL_SYNC 판정은 고객에게 보여줄 정상 "값"이지만,
-        # 그 판정을 들고 generate()까지 온 것은 orchestrator의 버그이므로 예외로 거부한다.
+    def generate(
+        self, *, context: RemediationContext, decision: RemediationDecision
+    ) -> RemediationPatch:
+        if not isinstance(context, RemediationContext):
+            raise TypeError("context must be a RemediationContext")
         if not isinstance(decision, RemediationDecision):
             raise TypeError("decision must be a RemediationDecision")
+        finding_id = context.finding.finding_id
+        snapshot = context.snapshot
+        # 판정과 context가 같은 finding을 가리키는지, 그리고 patch 생성이 허가됐는지(게이트)
+        # 확인한다. TERRAFORM_PATCH가 아닌 판정으로 여기까지 온 것은 orchestrator의 버그다.
+        if decision.finding_id != finding_id:
+            raise RemediationContractError("remediation decision is outside context")
         if decision.action is not RemediationAction.TERRAFORM_PATCH:
-            raise RemediationContractError(
-                f"generate called with a non-patch decision: {decision.action}"
-            )
-        if not isinstance(snapshot, IaCSnapshot):
-            raise TypeError("snapshot must be an IaCSnapshot")
-
-        # finding_id는 판정에서 꺼낸다. 별도 인자로 받으면 "판정은 finding-A, 대상은
-        # finding-B"인 어긋난 호출이 다시 타입을 통과하게 된다(ADR-0018 D3).
-        finding_id = decision.finding_id
-
-        patch = self._generator.generate(decision=decision, snapshot=snapshot)
+            raise RemediationContractError("remediation decision does not permit a Terraform patch")
+        patch = self._generator.generate(context=context)
         if not isinstance(patch, RemediationPatch):
             raise RemediationContractError("generator must return a RemediationPatch")
         if patch.finding_id != finding_id:

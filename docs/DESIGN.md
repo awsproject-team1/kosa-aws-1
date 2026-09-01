@@ -57,9 +57,10 @@ Customer Workload (EC2 / RDS / ALB / S3)
 - Frontend: React SPA. UI는 권한별 노출만 제어하고 Authorization은 Backend가 강제한다.
 - Backend: Auth/User, Job/Assessment, Policy/Rule, GitHub/Remediation, Approval/Deployment Lambda로 분리한다.
 - Workflow: LangGraph Parent는 자연어 Orchestration과 Policy Q&A를 맡고, 아래에
-  `ASSESSMENT`, `REMEDIATION`, `DEPLOYMENT` subgraph를 둔다. 명시적 UI/API 요청은
-  대응 Subgraph로 직접 진입하고, 자연어 요청만 Parent Orchestrator Agent를 거쳐
-  의도·후보 scope에 맞는 Subgraph로 라우팅한다.
+  `ASSESSMENT`, `REMEDIATION`, `DEPLOYMENT` subgraph를 둔다. C가 Assessment/Remediation Agent와
+  Worker orchestration을 소유하고, D는 injected GitHub/Terraform 실행 port와 Deployment Worker를
+  소유한다. 명시적 UI/API 요청은 대응 Subgraph로 직접 진입하고, 자연어 요청만 Parent
+  Orchestrator Agent를 거쳐 의도·후보 scope에 맞는 Subgraph로 라우팅한다.
 - Storage: DynamoDB에는 상태와 메타데이터, S3에는 대형 Artifact를 저장한다.
 - Policy ingestion: 고객 정책 원본은 immutable S3 Artifact로 보존하고 비동기 검증·형식별 Parser가
   공통 Policy Document로 정규화한다. 원본 업로드만으로 Assessment에 활성화하지 않으며, 사람이
@@ -96,6 +97,12 @@ commit을 동기화 대상으로 삼는다. Deployment Readiness는 refresh된 T
 Patch 또는 동기화 대상이 현재 Actual에 적용 가능한지 검증한다. Human Approval 뒤 Apply가
 Actual을 변경하며, Post-Deploy Verification이 Actual Compliance와 Drift 해소를 확인한다.
 Terraform 관리 밖이거나 안전한 매핑이 없는 리소스는 `MANUAL_REVIEW`로 남긴다.
+
+Remediation action의 정본은 B의 `RemediationDecision` 하나다. A는 customer-scoped target과
+만료되는 예외를 읽어 판정하고 context/decision/Job/Outbox/audit를 저장한다. C Remediation Worker는
+revision-bound authoritative work를 다시 읽어 `TERRAFORM_PATCH`에는 injected Patch port,
+`ACTUAL_SYNC`에는 injected Sync port 하나만 호출한다. `MANUAL_REVIEW`와 `SUPPRESSED`는 Job을 만들지
+않는다. D의 `RUN_DEPLOYMENT`는 이 단계와 분리된 Deployment Worker 명령이다.
 
 Assessment, Remediation, Deployment API는 검증·Job 저장 후 대응 Queue에 최소
 `WorkflowTask(job_id, expected_revision, command)`만 전송하고 `202 + job_id`를 반환한다.
@@ -152,10 +159,10 @@ Golden Case 확장 또는 위 품질 입력 변경 시 같은 절차로 재평�
 
 | Role | Primary responsibility | Main areas |
 | --- | --- | --- |
-| **A — Platform/Backend** | 플랫폼 기반과 사용자·Job·상태 관리 | Cognito, API Gateway, 기능별 Lambda, Job/State, 공통 Storage, Frontend Skeleton |
-| **B — Policy/Governance Boundary** | AI가 평가할 수 있는 정책·통제 Boundary 제공 | 지원 문서 형식 정책, 정규화 Schema/locator, Policy Source lifecycle, Rule Registry/Validation, Policy Profile, Control/Resource Mapping, Source Reference, Policy Context |
-| **C — AI Evaluation** | Resource × Rule 평가와 AI 품질 관리 | Assessment Graph, AI Evaluator, Applicable Rule Selection, Evidence 판단, Severity, Score, Source Score/Risk, Assessment UI |
-| **D — Remediation/GitHub/Deployment** | Finding을 승인된 IaC 변경과 배포 검증으로 연결 | GitHub Integration Tool, AWS Resource Tool 연결, Terraform Remediation, PR/Plan/Approval/Apply/Post-Deploy |
+| **A — Platform/Backend** | 플랫폼 기반, 사용자, API와 durable workflow state | Cognito, API Gateway, 기능별 Lambda, Remediation policy 호출, Job/Outbox/Queue/revision, Exception/Approval/Audit, 공통 Storage, Frontend Skeleton |
+| **B — Policy/Governance Boundary** | AI 평가와 remediation 허용 범위의 정책 Boundary 제공 | 지원 문서 형식, Policy Source lifecycle, Rule Registry/Profile/Context, Remediation eligibility/exception/manual-review 판정 |
+| **C — AI Evaluation & Agent Orchestration** | Assessment/Remediation Agent와 평가 품질·evidence orchestration | Assessment Graph/Worker, Remediation Context/Worker, AI Evaluator, Evidence/Severity/Score, Deployment Readiness, Assessment UI |
+| **D — Integration & Deployment Execution** | 결정적 외부 실행 adapter와 Deployment Worker | GitHub/AWS Tool, injected Patch/Sync port, Branch/Commit/PR, Terraform Plan/Apply, Deployment Worker, Post-Deploy read |
 | **Shared** | 여러 영역의 호환성과 릴리스 품질 유지 | Contracts, Integration Test, C4/ADR, E2E |
 
 - 역할 경계를 넘는 API·Schema 변경은 해당 Contract의 Producer와 Consumer Owner가 검토한다.

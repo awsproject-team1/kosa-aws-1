@@ -21,7 +21,8 @@
 | `POST` | `/assessments` | Assessment Job 생성 |
 | `GET` | `/jobs/{jobId}` | Job 상태와 결과 조회 |
 | `GET` | `/assessments/{assessmentId}` | Assessment 및 Coverage 조회 |
-| `POST` | `/findings/{findingId}/remediations` | Terraform Remediation 생성 |
+| `POST` | `/findings/{findingId}/remediations` | B policy 판정 후 Remediation 시작 또는 non-action decision 보고 |
+| `POST` | `/remediation-exceptions` | Admin이 만료 필수 고객 예외를 승인·등록 |
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 
@@ -73,8 +74,11 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   `Resource × Rule × Perspective` 계획을 분모로 사용한다. 응답에는
   `planned_evaluations`, `completed_evaluations`, `percentage`가 포함되며,
   `EXECUTION_ERROR`는 완료 수에 포함하지 않는다.
-- 결과 목록은 `limit`(1–100)과 opaque `cursor`로 페이지네이션한다. `coverage`는 페이지와
-  무관하게 전체 Assessment 결과를 기준으로 계산하며, `next_cursor`가 `null`이면 마지막 페이지다.
+- 결과 목록은 `limit`(1–100)과 opaque `cursor`로, Findings는 별도 opaque `findings_cursor`로
+  독립 페이지네이션한다. 응답의 `next_cursor`와 `findings_next_cursor`가 각각 `null`이면 해당
+  목록의 마지막 페이지다. 새 Assessment의 `coverage`는 Result/Finding write와 같은 DynamoDB
+  transaction에서 갱신되는 immutable plan 완료 counter를 읽으므로, 진행 중인 대량 report를
+  전체 재조회하지 않는다; counter 이전 plan은 호환을 위해 기존 scan 계산을 유지한다.
   M1 React 화면은 `assessment_id` query parameter를 사용해 이 endpoint를 호출하고 결과를
   추가 페이지로 표시한다. 이 Coverage는 통제 수 자체가 아닌 **평가 실행률**이다.
   Frontend는 `VITE_API_BASE_URL`(운영 API origin) 또는 개발용 `VITE_API_PROXY_TARGET`을
@@ -114,6 +118,30 @@ base-table read 뒤 Job owner/administrator authorization을 적용한다. GSI1�
 요청의 Parent는 30초 안에 Policy Q&A 응답 또는 실행 제안만 반환한다. Job을 만들거나
 실행을 시작하는 것은 사용자 확인 뒤의 Backend API뿐이다. GitHub Actions의 Plan/Apply 완료는
 OIDC EventBridge Event를 통해 Deployment Worker를 재개하며, Client callback은 사용하지 않는다.
+
+## M2 A/C remediation API
+
+`POST /findings/{findingId}/remediations`는 body를 받지 않는다. Backend가 JWT customer scope에서
+C `RemediationContext`, A `RemediationTarget`, 고객 예외를 읽고 B
+`RemediationPolicy.decide()`를 호출한다. Client는 Finding, action, customer, Job lifecycle,
+revision을 지정할 수 없다.
+
+응답은 `RemediationStartResponse`다.
+
+- `TERRAFORM_PATCH`/`ACTUAL_SYNC`: `202`, `{decision, job}`. A가 decision/context/Job/Outbox/audit를
+  원자 저장하고 C Remediation Queue로 dispatch한다.
+- `MANUAL_REVIEW`/`SUPPRESSED`: `200`, `{decision, "job": null}`. decision/audit만 저장하고
+  Job/Outbox는 만들지 않는다.
+
+`POST /remediation-exceptions`는 Admin 전용이다. body allow-list는 `rule_id`, `rule_version`,
+선택적 `resource_id`, enum `reason`, 필수 `expires_at`, 선택적 `ticket_reference`다. Backend가
+`customer_id`, `exception_id`, `approved_by`, `approved_at`을 발급하고 immutable exception과 audit를
+같이 기록한다. 자유 문장 reason이나 만료 없는 예외는 허용하지 않는다.
+
+`POST /deployments/{deploymentId}/approve`도 injected service가 있을 때 handler에 노출되며 exact
+`commit_sha`/`plan_hash` binding과 Admin RBAC를 강제한다. D live Patch/Sync/GitHub/Terraform
+adapter와 customer Lambda runtime composition은 아직 연결 대상이다. 현재 A/C API·repository·Worker
+경계는 mock/fixture로 통합 가능하지만 외부 실행이 live라고 주장하지 않는다.
 
 ## Error envelope
 

@@ -1,8 +1,9 @@
 # Customer Policy Ingestion
 
 > Status: Partially implemented — 형식 allow-list, 정규화 Schema, 5개 형식 Parser, 승인 판정과
-> Profile publication 거부 규칙은 `apps/backend/policy/ingestion/`에 구현됐다 (B).
-> 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C)은 미구현이다.
+> Profile publication 거부 규칙은 `apps/backend/policy/ingestion/`에 구현됐다 (B). A의 injected
+> upload-session/finalize/normalization/status storage boundary는 구현됐지만 public Lambda route,
+> 비동기 dispatcher, 후보 추출·approval/profile DynamoDB 배선은 아직 남아 있다.
 >
 > Delivery gate: this boundary must be implemented and integration-tested before the service claims
 > that a customer can evaluate against an uploaded internal policy. 현재 `policies-local/`과

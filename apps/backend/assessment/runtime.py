@@ -225,14 +225,17 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         rubric_version=_string(profile_data.get("rubric_version")),
         golden_dataset_version=_string(profile_data.get("golden_dataset_version")),
     )
-    table = boto3.resource("dynamodb").Table(_string(os.environ.get("METADATA_TABLE_NAME")))
+    table_name = _string(os.environ.get("METADATA_TABLE_NAME"))
+    table = boto3.resource("dynamodb").Table(table_name)
     registry = load_rule_registry(_rules_path())
     worker = AssessmentWorker(
         work_repository=DynamoFixtureWorkRepository(table, snapshot),
         context_resolver=PolicyContextResolver(registry.catalog),
         runner=AssessmentRunner(SyntheticS3Evaluator(snapshot)),
         model_profiles=InMemoryModelProfileRegistry((profile,)),
-        result_store=DynamoDbEvaluationResultStore(table),
+        result_store=DynamoDbEvaluationResultStore(
+            table, table_name=table_name, transaction_client=boto3.client("dynamodb")
+        ),
         plan_store=DynamoDbAssessmentReportStore(table),
     )
     for task in _tasks(event):
@@ -245,7 +248,8 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
     except ImportError as error:  # pragma: no cover
         raise RuntimeError("AWS Lambda boto3 runtime is required") from error
     configuration = M1RuntimeConfiguration.from_json(raw_configuration)
-    table = boto3.resource("dynamodb").Table(_string(os.environ.get("METADATA_TABLE_NAME")))
+    table_name = _string(os.environ.get("METADATA_TABLE_NAME"))
+    table = boto3.resource("dynamodb").Table(table_name)
     profile = _model_profile()
     for task in _tasks(event):
         work_repository = DynamoM1WorkRepository(table, configuration)
@@ -319,7 +323,9 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
             },
             derive_drift=True,
             model_profiles=InMemoryModelProfileRegistry((profile,)),
-            result_store=DynamoDbEvaluationResultStore(table),
+            result_store=DynamoDbEvaluationResultStore(
+                table, table_name=table_name, transaction_client=boto3.client("dynamodb")
+            ),
             plan_store=DynamoDbAssessmentReportStore(table),
         )
         worker.handle(task)
@@ -350,7 +356,10 @@ def _tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
 
 
 def _model_profile() -> ModelProfile:
-    profile_data = _fixture("assessment_model_profile.json")
+    # The live M1 worker must not silently keep M0's one-perspective rubric.
+    # M1's model/prompt/rubric is rebaselined against its IAC/Actual/Drift
+    # Golden set; synthetic M0 remains explicitly fixture-backed above.
+    profile_data = _m1_fixture("assessment_model_profile.json")
     return ModelProfile(
         model_profile_id=_string(profile_data.get("model_profile_id")),
         role=ModelProfileRole(_string(profile_data.get("role"))),
@@ -374,6 +383,10 @@ def _secret_string(client: object, secret_id: str) -> str:
 
 def _fixture(name: str) -> dict[str, object]:
     return json.loads(_fixture_path(name).read_text())
+
+
+def _m1_fixture(name: str) -> dict[str, object]:
+    return json.loads((Path(__file__).parents[3] / "fixtures" / "m1" / name).read_text())
 
 
 def _fixture_path(name: str) -> Path:

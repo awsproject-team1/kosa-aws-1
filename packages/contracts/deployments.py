@@ -146,6 +146,8 @@ class TerraformPlan:
             raise TypeError("artifact must be an ArtifactReference")
         if self.artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN:
             raise ValueError("artifact must be a TERRAFORM_PLAN")
+        if self.plan_hash != self.artifact.content_sha256:
+            raise ValueError("plan_hash must match the Terraform plan artifact digest")
 
     def to_dict(self) -> dict[str, object]:
         return {

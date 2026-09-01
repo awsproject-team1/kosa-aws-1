@@ -43,6 +43,7 @@ class JobContractTest(unittest.TestCase):
                 "GENERATE_FINDINGS",
                 "GENERATE_REPORT",
                 "GENERATE_REMEDIATION",
+                "SYNC_ACTUAL_STATE",
                 "CREATE_PR",
                 "CI_VALIDATION",
                 "AWS_DISCOVERY",

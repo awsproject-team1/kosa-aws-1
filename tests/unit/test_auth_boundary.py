@@ -32,12 +32,14 @@ class AuthBoundaryTest(unittest.TestCase):
         self.assertIsNone(authorize(principal, Action.START_ASSESSMENT))
         self.assertIsNone(authorize(principal, Action.READ_JOB))
 
-    def test_admin_inherits_current_user_actions(self) -> None:
+    def test_admin_inherits_current_user_actions_and_can_approve_deployments(self) -> None:
         principal = Principal.from_verified_claims(access_claims("Admin"))
 
         self.assertEqual(principal.roles, frozenset({Role.ADMIN}))
         self.assertIsNone(authorize(principal, Action.START_ASSESSMENT))
         self.assertIsNone(authorize(principal, Action.READ_JOB))
+        self.assertIsNone(authorize(principal, Action.APPROVE_DEPLOYMENT))
+        self.assertIsNone(authorize(principal, Action.MANAGE_REMEDIATION_EXCEPTIONS))
 
     def test_unknown_cognito_groups_are_ignored_when_a_product_role_remains(self) -> None:
         principal = Principal.from_verified_claims(access_claims("ExternalGroup", "User"))
@@ -54,7 +56,15 @@ class AuthBoundaryTest(unittest.TestCase):
     def test_action_vocabulary_is_limited_to_the_approved_api_slice(self) -> None:
         self.assertEqual(
             {action.value for action in Action},
-            {"START_ASSESSMENT", "READ_JOB"},
+            {
+                "START_ASSESSMENT",
+                "START_REMEDIATION",
+                "READ_JOB",
+                "APPROVE_DEPLOYMENT",
+                "MANAGE_REMEDIATION_EXCEPTIONS",
+                "MANAGE_POLICY_SOURCES",
+                "PUBLISH_POLICY_PROFILE",
+            },
         )
 
 

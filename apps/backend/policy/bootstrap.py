@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from apps.backend.policy.registry import PolicyRegistry
+from packages.contracts import RuleLifecycle
 
 
 class PolicyCatalogBootstrapError(RuntimeError):
@@ -62,7 +63,15 @@ class DynamoDbPolicyCatalogBootstrap:
             ).get("Item")
         except Exception:
             raise PolicyCatalogBootstrapError("policy catalog read after conflict failed") from None
-        return isinstance(existing, Mapping) and dict(existing) == expected
+        if not isinstance(existing, Mapping):
+            return False
+        actual = dict(existing)
+        # Published registry items predate the persisted lifecycle field.  Treat
+        # that one legacy shape as the approved publication it represents, while
+        # still failing closed for every other content difference or lifecycle.
+        if "lifecycle" not in actual and expected.get("lifecycle") == RuleLifecycle.APPROVED.value:
+            actual["lifecycle"] = RuleLifecycle.APPROVED.value
+        return actual == expected
 
 
 def _items_for_registry(
@@ -87,6 +96,7 @@ def _items_for_registry(
                 "SK": f"RULE#{rule.rule_id}#VERSION#{rule.version}",
                 "entity_type": "POLICY_RULE",
                 "customer_id": customer_id,
+                "lifecycle": RuleLifecycle.APPROVED.value,
                 **rule.to_dict(),
             }
         )

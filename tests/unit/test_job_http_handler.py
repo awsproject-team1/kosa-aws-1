@@ -6,6 +6,7 @@ import unittest
 from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import JobApiService
+from apps.backend.api.policy_sources import PolicySourceApiService, PolicySourceUploadSession
 from apps.backend.assessment import AssessmentReport
 from apps.backend.jobs import OutboxDispatcher
 from packages.contracts import AssessmentCoverage
@@ -53,7 +54,13 @@ class Reports:
         return "job-001"
 
     def get_report_page(
-        self, *, customer_id: str, assessment_id: str, limit: int, cursor: str | None
+        self,
+        *,
+        customer_id: str,
+        assessment_id: str,
+        limit: int,
+        cursor: str | None,
+        findings_cursor: str | None = None,
     ):
         return AssessmentReport(
             assessment_id=assessment_id,
@@ -61,6 +68,13 @@ class Reports:
             findings=(),
             coverage=AssessmentCoverage(planned_evaluations=1, completed_evaluations=0),
             readiness_score=None,
+        )
+
+
+class PolicyUploads:
+    def create_upload_session(self, **kwargs):
+        return PolicySourceUploadSession(
+            source_id="source-1", source_version="v1", upload_url="https://example.invalid/upload"
         )
 
 
@@ -161,3 +175,31 @@ class JobHttpHandlerTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(json.loads(response["body"])["coverage"]["percentage"], 0)
+
+    def test_admin_can_create_a_server_scoped_policy_upload_session(self) -> None:
+        service = JobApiService(
+            repository=self.repository,
+            assessment_scope=ApprovedScope(),
+            outbox_dispatcher=OutboxDispatcher(repository=self.repository, dispatcher=Dispatcher()),
+            job_id_factory=lambda: "job-002",
+            assessment_id_factory=lambda: "asm-002",
+        )
+        handler = JobHttpHandler(
+            service,
+            policy_sources=PolicySourceApiService(
+                repository=PolicyUploads(),
+                source_id_factory=lambda: "source-1",
+                source_version_factory=lambda: "v1",
+            ),
+        )
+        request = event(
+            "POST",
+            "/policy-sources/uploads",
+            '{"filename":"policy.md","declared_media_type":"text/markdown","byte_size":12}',
+        )
+        request["requestContext"]["authorizer"]["jwt"]["claims"]["cognito:groups"] = ["Admin"]
+
+        response = handler.handle(request)
+
+        self.assertEqual(response["statusCode"], 201)
+        self.assertEqual(json.loads(response["body"])["source_id"], "source-1")

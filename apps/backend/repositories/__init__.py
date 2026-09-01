@@ -1,9 +1,11 @@
 """AWS-independent persistence ports and injected AWS adapters."""
 
+from apps.backend.repositories.deployment import DynamoDbDeploymentApprovalRepository
 from apps.backend.repositories.dynamodb import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbJobRepository,
 )
+from apps.backend.repositories.policy_approval import DynamoDbPolicyApprovalRepository
 from apps.backend.repositories.ports import (
     ArtifactCollisionError,
     ArtifactIntegrityError,
@@ -19,6 +21,8 @@ from apps.backend.repositories.ports import (
     RevisionConflictError,
     StoredDataError,
 )
+from apps.backend.repositories.remediation import DynamoDbRemediationExceptionRepository
+from apps.backend.repositories.remediation_work import DynamoDbRemediationWorkRepository
 from apps.backend.repositories.s3 import S3ArtifactStore
 
 __all__ = [
@@ -31,6 +35,10 @@ __all__ = [
     "AssessmentWorkflowRepository",
     "DuplicateJobError",
     "DynamoDbAssessmentWorkflowRepository",
+    "DynamoDbDeploymentApprovalRepository",
+    "DynamoDbPolicyApprovalRepository",
+    "DynamoDbRemediationExceptionRepository",
+    "DynamoDbRemediationWorkRepository",
     "DynamoDbJobRepository",
     "InvalidJobMutationError",
     "JobRepository",
