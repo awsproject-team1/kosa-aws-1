@@ -2,6 +2,8 @@
 
 ## Current
 
+- Frontend local smoke test: restore the documented Vite development-server entrypoint for the
+  Cognito/API integration check.
 - Customer sandbox OIDC diagnosis: the deployment workflow logs selected non-secret OIDC
   claim identifiers before role assumption; bootstrap uses the confirmed immutable owner/repository
   IDs, and its deployment role permits fixed-Version ID artifact revalidation. The foundation now
