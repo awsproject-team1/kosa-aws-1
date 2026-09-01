@@ -56,15 +56,19 @@ class Table:
 
 
 def result(
-    *, resource_id: str = "bucket-001", status: EvaluationStatus = EvaluationStatus.PASS
+    *,
+    resource_id: str = "bucket-001",
+    status: EvaluationStatus = EvaluationStatus.PASS,
+    score: float = 100,
+    severity: str = "HIGH",
 ) -> EvaluationResult:
     return EvaluationResult(
         resource_id=resource_id,
         rule_id="S3-001",
         perspective=EvaluationPerspective.IAC,
         status=status,
-        severity="HIGH",
-        score=100,
+        severity=severity,
+        score=score,
         rationale="Fixture result.",
         evidence_references=("fixture:evidence",),
         rule_version="v1",
@@ -124,3 +128,44 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
         self.assertEqual(first.coverage.percentage, 100)
         self.assertEqual(len(second.results), 1)
         self.assertIsNone(second.next_cursor)
+
+    def test_report_exposes_derived_findings_and_weighted_readiness_when_complete(self) -> None:
+        table = Table()
+        report_store = DynamoDbAssessmentReportStore(table)
+        report_store.put_plan_if_absent(
+            AssessmentEvaluationPlan(
+                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
+            )
+        )
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001",
+            assessment_id="asm-001",
+            results=(
+                result(status=EvaluationStatus.FAIL, score=20, severity="HIGH"),
+                result(resource_id="bucket-002", score=100, severity="LOW"),
+            ),
+        )
+
+        report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(len(report.findings), 1)
+        self.assertEqual(report.findings[0].status, EvaluationStatus.FAIL)
+        self.assertIsNotNone(report.readiness_score)
+        assert report.readiness_score is not None
+        self.assertEqual(report.readiness_score.score, 36)
+
+    def test_readiness_score_is_unavailable_until_the_full_plan_is_covered(self) -> None:
+        table = Table()
+        report_store = DynamoDbAssessmentReportStore(table)
+        report_store.put_plan_if_absent(
+            AssessmentEvaluationPlan(
+                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
+            )
+        )
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001", assessment_id="asm-001", results=(result(),)
+        )
+
+        report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertIsNone(report.readiness_score)

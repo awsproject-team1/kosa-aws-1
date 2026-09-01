@@ -87,10 +87,10 @@ class GitHubToolTest(unittest.TestCase):
         with self.assertRaises(GitHubSnapshotNotFoundError):
             tool.read_iac_snapshot(snapshot_request(commit_sha="c" * 40))
 
-    def test_tool_only_exposes_a_read_operation(self) -> None:
+    def test_tool_only_exposes_read_operations(self) -> None:
         # Freeze the read-only boundary: no write/PR surface on the port.
         public_methods = {name for name in dir(MockGitHubTool) if not name.startswith("_")}
-        self.assertEqual(public_methods, {"read_iac_snapshot"})
+        self.assertEqual(public_methods, {"read_iac_snapshot", "read_iac_document"})
 
     def test_mock_tool_satisfies_the_github_tool_protocol(self) -> None:
         self.assertIsInstance(build_tool(), GitHubTool)

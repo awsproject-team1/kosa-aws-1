@@ -130,3 +130,83 @@ class EvaluationResult:
             "model_profile_id": self.model_profile_id,
             "scoring_mode": self.scoring_mode.value,
         }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Finding:
+    """An actionable, immutable projection of one assessment evaluation."""
+
+    finding_id: str
+    resource_id: str
+    rule_id: str
+    rule_version: str
+    perspective: EvaluationPerspective
+    status: EvaluationStatus
+    severity: str
+    score: float
+    rationale: str
+    evidence_references: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for name in (
+            "finding_id",
+            "resource_id",
+            "rule_id",
+            "rule_version",
+            "severity",
+            "rationale",
+        ):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.perspective, EvaluationPerspective):
+            raise TypeError("perspective must be an EvaluationPerspective")
+        if self.status not in {
+            EvaluationStatus.FAIL,
+            EvaluationStatus.MANUAL_REVIEW,
+            EvaluationStatus.INSUFFICIENT_EVIDENCE,
+        }:
+            raise ValueError("finding status must require follow-up")
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
+            raise TypeError("score must be a number")
+        if not 0 <= self.score <= 100:
+            raise ValueError("score must be between 0 and 100")
+        if not isinstance(self.evidence_references, tuple):
+            raise TypeError("evidence_references must be a tuple")
+        for reference in self.evidence_references:
+            require_non_empty_string(reference, "evidence_references item")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "finding_id": self.finding_id,
+            "resource_id": self.resource_id,
+            "rule_id": self.rule_id,
+            "rule_version": self.rule_version,
+            "perspective": self.perspective.value,
+            "status": self.status.value,
+            "severity": self.severity,
+            "score": self.score,
+            "rationale": self.rationale,
+            "evidence_references": list(self.evidence_references),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReadinessScore:
+    """Deterministic Assessment-level score over completed applicable results."""
+
+    score: float
+    evaluated_evaluations: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
+            raise TypeError("score must be a number")
+        if not 0 <= self.score <= 100:
+            raise ValueError("score must be between 0 and 100")
+        if isinstance(self.evaluated_evaluations, bool) or not isinstance(
+            self.evaluated_evaluations, int
+        ):
+            raise TypeError("evaluated_evaluations must be an integer")
+        if self.evaluated_evaluations <= 0:
+            raise ValueError("evaluated_evaluations must be greater than zero")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"score": self.score, "evaluated_evaluations": self.evaluated_evaluations}

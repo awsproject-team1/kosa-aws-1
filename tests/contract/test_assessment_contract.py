@@ -8,6 +8,8 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    Finding,
+    ReadinessScore,
     ScoringMode,
 )
 
@@ -92,6 +94,27 @@ class AssessmentContractTest(unittest.TestCase):
                 rubric_version="v1",
                 model_profile_id="assessment-nova-lite-m0-v1",
             )
+
+    def test_finding_keeps_the_actionable_evaluation_identity(self) -> None:
+        finding = Finding(
+            finding_id="finding-001",
+            resource_id="s3_bucket_logs",
+            rule_id="S3-PUBLIC-001",
+            rule_version="2026-08-01",
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            status=EvaluationStatus.FAIL,
+            severity="HIGH",
+            score=27.5,
+            rationale="Public access is allowed.",
+            evidence_references=("aws:s3:public-access-block",),
+        )
+
+        self.assertEqual(finding.to_dict()["finding_id"], "finding-001")
+
+    def test_readiness_score_is_a_bounded_report_projection(self) -> None:
+        score = ReadinessScore(score=73.25, evaluated_evaluations=4)
+
+        self.assertEqual(score.to_dict(), {"score": 73.25, "evaluated_evaluations": 4})
 
 
 if __name__ == "__main__":

@@ -54,12 +54,69 @@ class IaCSnapshotRequest:
         }
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IaCDocument:
+    """하나의 불변 commit에 대한 read-only Terraform 본문.
+
+    ``IaCSnapshot``은 Artifact reference(무엇을 읽었는지)만 담기 때문에 IAC 관점
+    평가에는 부족하다. C가 IaC 준수 여부를 판정하려면 그 commit의 Terraform 본문이
+    필요하다. 이 값은 read 결과이며 어떤 write 표면도 포함하지 않는다.
+    """
+
+    customer_id: str
+    repository_id: str
+    commit_sha: str
+    files: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        for name in ("customer_id", "repository_id", "commit_sha"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        if not isinstance(self.files, tuple) or not self.files:
+            raise ValueError("files must be a non-empty tuple")
+        paths: set[str] = set()
+        for entry in self.files:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise TypeError("files must contain (path, content) pairs")
+            path, content = entry
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("file path must be a non-empty string")
+            if not isinstance(content, str):
+                raise TypeError("file content must be a string")
+            if path in paths:
+                raise ValueError(f"duplicate IaC file path {path!r}")
+            paths.add(path)
+
+    @property
+    def evidence_references(self) -> tuple[str, ...]:
+        """평가기가 인용할 수 있는 `terraform:` namespace locator."""
+        return tuple(f"terraform:{path}" for path, _ in self.files)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "customer_id": self.customer_id,
+            "repository_id": self.repository_id,
+            "commit_sha": self.commit_sha,
+            "files": [{"path": path, "content": content} for path, content in self.files],
+        }
+
+
 @runtime_checkable
 class GitHubTool(Protocol):
     """Customer IaC 상태를 조회하는 데 필요한 read-only 작업."""
 
     def read_iac_snapshot(self, request: IaCSnapshotRequest) -> IaCSnapshot:
         """tool scope 안에 있는 요청에 대한 IaC snapshot을 반환한다."""
+        ...
+
+
+@runtime_checkable
+class IaCDocumentReader(Protocol):
+    """IAC 관점 평가를 위해 Terraform 본문까지 읽는 선택적 read-only 확장."""
+
+    def read_iac_document(self, request: IaCSnapshotRequest) -> IaCDocument:
+        """tool scope 안에 있는 요청에 대한 Terraform 본문을 반환한다."""
         ...
 
 

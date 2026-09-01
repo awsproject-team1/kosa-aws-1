@@ -1,12 +1,14 @@
 # M0 foundation 승인 배포 및 sandbox 감사 검증 runbook
 
-이 runbook은 병합된 M0 foundation을 고객 sandbox에 배포하기 전에 승인 자료를 준비하고,
+이 runbook은 고객이 먼저 M1 bootstrap stack을 실행한 뒤, 병합된 M0 foundation을 고객 sandbox에 배포하기 전에 승인 자료를 준비하고,
 ArtifactBucket CloudTrail data-event 감사를 검증하는 운영 절차다. 고객 이름, AWS account ID,
 role ARN, scope JSON, credentials, artifact 내용, object key를 저장소나 PR에 기록하지 않는다.
 
 ## Boundary
 
 - 이 문서는 GitHub Actions의 `Deploy M0 Foundation` 수동 workflow를 위한 준비 절차다.
+  OIDC deployment role과 versioned Lambda-code bucket은 고객 관리자가
+  `infrastructure/cloudformation/m1-customer-bootstrap.yaml`로 먼저 만든다.
   로컬 개발자·Agent 세션에서 `aws cloudformation deploy`, artifact upload, CloudTrail 조회 또는
   object Get/Put을 실행하지 않는다.
 - 실제 변경은 보호된 GitHub Environment의 required reviewer 승인 뒤 customer-approved OIDC role로
@@ -57,9 +59,11 @@ either value manually.
 | `stack_name` | Customer-approved sandbox stack name. It must not identify a production workload. |
 | `project_name` | Same constraints as `ProjectName`: 2–31 lowercase letters, digits, or hyphens; starts with a letter; ends with a letter or digit; avoids reserved S3 prefixes. |
 | `environment` | Protected artifact-preparation GitHub Environment and the CloudFormation `Environment` value; it must satisfy the template's 2–8 lowercase-character constraint. |
+| `stack_environment` | CloudFormation `Environment` value. It is separate from the longer protected GitHub Environment name and must satisfy the template's 2–8 lowercase-character constraint. |
 | `artifact_approval_environment` | A distinct protected GitHub Environment whose reviewers approve the generated commit/key/hash/Version ID before deployment. It must not equal `environment`. |
 | `aws_region` | Customer-approved deployment region. M0 design currently targets `us-east-1` unless an approved exception exists. |
 | `role_to_assume` | Customer-approved OIDC deployment role ARN. Do not enter an Agent, user, or workload runtime role. |
+| `cloudformation_execution_role_arn` | `FoundationExecutionRoleArn` output from the customer bootstrap. GitHub Actions may pass only this role to CloudFormation. |
 | `lambda_code_s3_bucket` | Versioning-enabled customer-owned deployment-artifact bucket. The workflow checks versioning before upload. |
 | `assessment_scope_json` | Approved fail-closed selector JSON. Do not paste sensitive policy or artifact data into the workflow input. |
 

@@ -10,4 +10,4 @@ MVP는 고객 AWS Account의 `us-east-1`에 Customer-Deployed 형태로 배포�
 
 ## Consequences
 
-설치는 CloudFormation Packaging으로 제공하고, 고객별 IAM·데이터·감사 경계를 강제한다. Private VPC 연결, 다중 리전, 네트워크 격리는 확장 요구가 확인될 때 별도 ADR로 검토한다.
+설치는 CloudFormation Packaging으로 제공하고, 고객별 IAM·데이터·감사 경계를 강제한다. 최초 GitHub Actions OIDC trust는 순환 의존을 피하기 위해 고객 관리자가 제공된 bootstrap stack으로 생성한다. bootstrap은 좁게 제한된 deployment role, versioned Lambda-code bucket, foundation 전용 CloudFormation execution role만 만들며, 이후 repository workflow가 그 role을 통해 foundation을 배포한다. Private VPC 연결, 다중 리전, 네트워크 격리는 확장 요구가 확인될 때 별도 ADR로 검토한다.

@@ -37,10 +37,11 @@ jobs:
           python -m pip install --require-hashes
           --requirement requirements-dev.lock.txt
 
-      - name: Lint M0 foundation template
+      - name: Lint customer deployment templates
         run: >-
           cfn-lint --non-zero-exit-code error
           infrastructure/cloudformation/m0-foundation.yaml
+          infrastructure/cloudformation/m1-customer-bootstrap.yaml
 
       - name: Verify CloudFormation security controls
         run: >-
