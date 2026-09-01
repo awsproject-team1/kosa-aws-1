@@ -49,5 +49,7 @@ class DeploymentApiService:
             plan.commit_sha,
             plan.plan_hash,
         ):
-            raise DeploymentApprovalError("approval request does not match the stored Terraform plan")
+            raise DeploymentApprovalError(
+                "approval request does not match the stored Terraform plan"
+            )
         return self._approvals.approve(principal=principal, plan=plan, readiness=readiness)

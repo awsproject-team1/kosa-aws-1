@@ -98,7 +98,9 @@ class JobHttpHandler:
                             reader=self._policy_reader,
                         )
                     except ValueError as error:
-                        raise RequestValidationError("policy source process request is invalid") from error
+                        raise RequestValidationError(
+                            "policy source process request is invalid"
+                        ) from error
                     return _response(202, response.to_dict())
                 if method == "POST" and action == "approve" and self._policy_approvals is not None:
                     if event.get("body") not in (None, "", "{}"):
@@ -108,7 +110,9 @@ class JobHttpHandler:
                             principal, source_id=source_id, source_version=source_version
                         )
                     except ValueError as error:
-                        raise RequestValidationError("policy approval request is invalid") from error
+                        raise RequestValidationError(
+                            "policy approval request is invalid"
+                        ) from error
                     return _response(200, response.to_dict())
             if (
                 method == "POST"
