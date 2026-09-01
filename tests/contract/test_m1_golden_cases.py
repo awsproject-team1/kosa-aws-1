@@ -100,3 +100,40 @@ class M1GoldenCaseTest(unittest.TestCase):
             },
         )
         self.assertTrue(all(case["rubric_version"] == "m1-three-perspective-v1" for case in cases))
+
+    def test_all_six_by_three_cases_pass_the_repeated_quality_gate(self) -> None:
+        root = Path(__file__).parents[2] / "fixtures" / "m1"
+        fixture_cases = json.loads((root / "golden_dataset_cases.json").read_text())
+
+        class FixtureEvaluator:
+            def evaluate_case(self, case: GoldenDatasetCase) -> EvaluationResult:
+                raw = next(raw for raw in fixture_cases if raw["case_id"] == case.case_id)
+                return EvaluationResult(
+                    resource_id="bucket-public-001",
+                    rule_id=raw["rule_id"],
+                    perspective=case.perspective,
+                    status=case.expected_status,
+                    severity="HIGH",
+                    score=case.expected_score_min,
+                    rationale="Golden fixture evaluator.",
+                    evidence_references=case.expected_evidence_references,
+                    rule_version="2026-08-31",
+                    rubric_version=case.rubric_version,
+                    model_profile_id="assessment-nova-lite-m1-v2",
+                    scoring_mode=case.scoring_mode,
+                )
+
+        for raw in fixture_cases:
+            case = GoldenDatasetCase(
+                case_id=raw["case_id"],
+                phase=AssessmentPhase(raw["phase"]),
+                perspective=EvaluationPerspective(raw["perspective"]),
+                rubric_version=raw["rubric_version"],
+                scoring_mode=ScoringMode(raw["scoring_mode"]),
+                resource_snapshot_artifact_id=raw["resource_snapshot_artifact_id"],
+                expected_status=EvaluationStatus(raw["expected_status"]),
+                expected_score_min=raw["expected_score_min"],
+                expected_score_max=raw["expected_score_max"],
+                expected_evidence_references=tuple(raw["expected_evidence_references"]),
+            )
+            self.assertTrue(GoldenDatasetRunner(FixtureEvaluator()).evaluate(case).passes_m0_gate)

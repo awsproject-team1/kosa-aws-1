@@ -6,6 +6,7 @@ from io import BytesIO
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.auth import Principal, Role
+from apps.backend.policy import InMemoryPolicyCatalog, PolicyContextResolver
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 from packages.contracts import (
     AssessmentPhase,
@@ -188,6 +189,17 @@ class PolicyIngestionLifecycleTest(unittest.TestCase):
             version="v1",
         )
         self.assertEqual(profile.policy_profile_id, "profile-1")
+        _, candidates = reviews.approvals[("cust-a", "source-1", "v1")]
+        catalog = InMemoryPolicyCatalog(
+            profiles=(profile,),
+            rules=tuple(candidate.rule for candidate in candidates),
+        )
+        context = PolicyContextResolver(catalog).resolve(
+            policy_profile_id="profile-1",
+            resource_type="AWS::S3::Bucket",
+            phase=AssessmentPhase.INITIAL,
+        )
+        self.assertEqual(tuple(rule.rule_id for rule in context.rules), ("RULE-1",))
         with self.assertRaises(KeyError):
             approvals.publish(
                 admin_b,
