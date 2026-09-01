@@ -290,3 +290,144 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
         self.assertIsNotNone(report.readiness_score)
         assert report.readiness_score is not None
         self.assertEqual(report.readiness_score.score, 20)
+
+
+class PerspectiveBedrockClient:
+    """Return one fixed decision per perspective so DRIFT is deterministic."""
+
+    def __init__(self, *, iac_status: str, actual_status: str) -> None:
+        self.decisions = {
+            EvaluationPerspective.IAC.value: (iac_status, "terraform:public-access-block"),
+            EvaluationPerspective.AWS_ACTUAL.value: (actual_status, "aws:s3:public-access-block"),
+        }
+        self.calls: list[dict[str, object]] = []
+
+    def converse(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        messages = kwargs["messages"]
+        assert isinstance(messages, list)
+        request = json.loads(messages[0]["content"][0]["text"])
+        status, evidence = self.decisions[request["perspective"]]
+        return {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "status": status,
+                                    "score": 100 if status == "PASS" else 20,
+                                    "rationale": f"Fixture decision for {request['perspective']}.",
+                                    "evidence_references": [evidence],
+                                }
+                            )
+                        }
+                    ]
+                }
+            }
+        }
+
+
+class InitialAssessmentPerspectiveIntegrationTest(unittest.TestCase):
+    """M1 exit criteria: one Assessment yields IAC, AWS_ACTUAL, DRIFT, Findings, Readiness."""
+
+    def run_assessment(
+        self, *, iac_status: str, actual_status: str
+    ) -> tuple[object, tuple[EvaluationResult, ...]]:
+        repository, queue = WorkflowRepository(), Queue()
+        service = JobApiService(
+            repository=repository,
+            assessment_scope=ApprovedScope(),
+            outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=queue),
+            job_id_factory=lambda: "job-001",
+            assessment_id_factory=lambda: "asm-001",
+        )
+        service.create_assessment(
+            Principal(
+                subject="user-001",
+                client_id="client-001",
+                customer_id="cust-001",
+                roles=frozenset({Role.USER}),
+            ),
+            AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-mvp-baseline"),
+        )
+        registry = load_rule_registry(RULE_REGISTRY_PATH)
+        snapshot = json.loads(SNAPSHOT_PATH.read_text())
+        client = PerspectiveBedrockClient(iac_status=iac_status, actual_status=actual_status)
+        table = Table()
+        report_store = DynamoDbAssessmentReportStore(table)
+        outcomes = AssessmentWorker(
+            work_repository=WorkRepository(snapshot),
+            context_resolver=PolicyContextResolver(registry.catalog),
+            perspective_runners={
+                perspective: AssessmentRunner(
+                    BedrockStructuredEvaluator(
+                        client=client,
+                        perspective=perspective,
+                        resource_document=snapshot,
+                        evidence_references=(evidence,),
+                    )
+                )
+                for perspective, evidence in (
+                    (EvaluationPerspective.IAC, "terraform:public-access-block"),
+                    (EvaluationPerspective.AWS_ACTUAL, "aws:s3:public-access-block"),
+                )
+            },
+            derive_drift=True,
+            model_profiles=InMemoryModelProfileRegistry((MODEL_PROFILE,)),
+            result_store=DynamoDbEvaluationResultStore(table),
+            plan_store=report_store,
+        ).handle(queue.tasks[0])
+        return (
+            report_store.get_report(customer_id="cust-001", assessment_id="asm-001"),
+            outcomes,
+        )
+
+    def test_drifted_resource_reports_all_three_perspectives_with_full_coverage(self) -> None:
+        report, outcomes = self.run_assessment(iac_status="PASS", actual_status="FAIL")
+
+        # 6 approved S3 rules × (IAC, AWS_ACTUAL, DRIFT)
+        self.assertEqual(len(outcomes), 18)
+        self.assertEqual(report.coverage.planned_evaluations, 18)
+        self.assertEqual(report.coverage.percentage, 100)
+        self.assertEqual(
+            {result.perspective for result in report.results},
+            {
+                EvaluationPerspective.IAC,
+                EvaluationPerspective.AWS_ACTUAL,
+                EvaluationPerspective.DRIFT,
+            },
+        )
+
+    def test_findings_cover_the_failing_actual_and_the_derived_drift(self) -> None:
+        report, _ = self.run_assessment(iac_status="PASS", actual_status="FAIL")
+
+        perspectives = sorted(finding.perspective.value for finding in report.findings)
+        self.assertEqual(perspectives, ["AWS_ACTUAL"] * 6 + ["DRIFT"] * 6)
+        self.assertTrue(
+            all(
+                finding.evidence_references
+                == ("terraform:public-access-block", "aws:s3:public-access-block")
+                for finding in report.findings
+                if finding.perspective is EvaluationPerspective.DRIFT
+            )
+        )
+
+    def test_readiness_excludes_drift_alignment_from_the_representative_score(self) -> None:
+        report, _ = self.run_assessment(iac_status="PASS", actual_status="FAIL")
+
+        assert report.readiness_score is not None
+        # Only the 12 IAC/AWS_ACTUAL results score: severity-weighted mean of 100 and 20.
+        self.assertEqual(report.readiness_score.evaluated_evaluations, 12)
+        self.assertEqual(report.readiness_score.score, 60)
+
+    def test_aligned_resource_reports_no_drift_finding(self) -> None:
+        report, _ = self.run_assessment(iac_status="FAIL", actual_status="FAIL")
+
+        self.assertEqual(
+            {finding.perspective for finding in report.findings},
+            {EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL},
+        )
+        self.assertEqual(report.coverage.percentage, 100)
+        assert report.readiness_score is not None
+        self.assertEqual(report.readiness_score.score, 20)

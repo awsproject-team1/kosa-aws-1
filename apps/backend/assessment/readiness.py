@@ -1,6 +1,7 @@
 """Deterministic, severity-weighted Initial Assessment readiness calculation."""
 
 from packages.contracts import (
+    EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     ReadinessScore,
@@ -17,6 +18,12 @@ def calculate_readiness_score(
 
     Evaluation scores are weighted by the policy Rule severity. OUT_OF_SCOPE has
     no readiness meaning and EXECUTION_ERROR prevents publication via Coverage.
+
+    `DRIFT` results are excluded from the score. Drift states whether the IaC and
+    the AWS Actual perspective agree, not how well the resource satisfies the rule;
+    folding its binary alignment value into the representative compliance score
+    would raise readiness for a resource that is consistently non-compliant. Drift
+    still reaches the user as its own results and Findings.
     """
     if not isinstance(results, tuple):
         raise TypeError("results must be a tuple")
@@ -33,7 +40,10 @@ def calculate_readiness_score(
     if len(completed) != planned_evaluations:
         return None
     scoring_results = tuple(
-        result for result in results if result.status not in _NON_SCORING_STATUSES
+        result
+        for result in results
+        if result.status not in _NON_SCORING_STATUSES
+        and result.perspective is not EvaluationPerspective.DRIFT
     )
     if not scoring_results:
         return None

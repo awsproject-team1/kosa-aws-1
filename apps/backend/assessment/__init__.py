@@ -3,6 +3,7 @@
 from apps.backend.assessment.bedrock import BedrockEvaluationError, BedrockStructuredEvaluator
 from apps.backend.assessment.bedrock_runtime import BedrockConverseClientFactory
 from apps.backend.assessment.coverage import AssessmentCoverage, calculate_coverage
+from apps.backend.assessment.drift import DriftDerivationError, derive_drift_results
 from apps.backend.assessment.findings import (
     DynamoDbFindingStore,
     FindingStoreError,
@@ -58,6 +59,8 @@ __all__ = [
     "BedrockStructuredEvaluator",
     "calculate_coverage",
     "calculate_readiness_score",
+    "derive_drift_results",
+    "DriftDerivationError",
     "DynamoDbEvaluationResultStore",
     "DynamoDbAssessmentReportStore",
     "DynamoDbFindingStore",

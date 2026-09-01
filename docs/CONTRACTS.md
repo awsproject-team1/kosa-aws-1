@@ -79,11 +79,37 @@ immutable `Finding`으로 투영한다. Finding ID는 `resource_id`, `rule_id`, 
 `perspective`에서 결정적으로 만들며, 원 Evaluation Result의 status, severity, score, rationale,
 evidence를 보존한다. `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
 
-`ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`는 점수
-계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`, `MEDIUM=2`, `HIGH=4`,
-`CRITICAL=8`로 가중 평균하여 소수 둘째 자리로 반올림한다. `EXECUTION_ERROR` 또는 미완료
-평가가 있으면 Readiness Score는 `null`이며 Coverage가 그 이유를 표시한다. 이 산식은 AI가
-아닌 C의 결정적 report projection이다.
+`ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`와
+`DRIFT` 관점은 점수 계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`,
+`MEDIUM=2`, `HIGH=4`, `CRITICAL=8`로 가중 평균하여 소수 둘째 자리로 반올림한다.
+`EXECUTION_ERROR` 또는 미완료 평가가 있으면 Readiness Score는 `null`이며 Coverage가 그
+이유를 표시한다. 이 산식은 AI가 아닌 C의 결정적 report projection이다.
+
+## M1 DRIFT derivation boundary
+
+`DRIFT`는 AI 판정이 아니라 같은 Resource × Rule에 대한 `IAC`와 `AWS_ACTUAL` 결과의 기계적
+비교다(ADR-0011). 두 결과가 같은 severity, 같은 Model Profile, 같은 rubric version에서
+나왔을 때만 비교하며, 그렇지 않으면 비교하지 않고 실패한다.
+
+| IAC | AWS_ACTUAL | DRIFT |
+| --- | --- | --- |
+| `PASS` | `PASS` | `PASS` (정합) |
+| `FAIL` | `FAIL` | `PASS` (정합; 준수 문제는 두 관점의 Finding이 담는다) |
+| `PASS` | `FAIL` | `FAIL` (Actual이 안전한 IaC에서 이탈) |
+| `FAIL` | `PASS` | `FAIL` (IaC가 안전한 Actual과 불일치) |
+| `MANUAL_REVIEW` 또는 `INSUFFICIENT_EVIDENCE` 포함 | | `MANUAL_REVIEW` |
+| 한쪽 결과 없음 | | `MANUAL_REVIEW` |
+| `EXECUTION_ERROR` 포함 | | `EXECUTION_ERROR` (Coverage 분모에 남고 완료로 세지 않는다) |
+| 양쪽 `OUT_OF_SCOPE` | | `OUT_OF_SCOPE` |
+
+`DRIFT` 결과의 score는 정합 100, 이탈 0이며, evidence는 두 관점 근거의 합집합이므로 Drift
+Finding이 IaC와 Actual 양쪽으로 추적된다. `DRIFT`는 AI나 Runtime에 어떤 write 권한도 주지
+않으며 Remediation 입력 근거로만 쓰인다.
+
+IAC 관점 평가에는 Artifact reference인 `IaCSnapshot`만으로는 부족하므로, D의 read-only
+GitHub 경계가 승인 commit의 Terraform 본문(`IaCDocument`)을 함께 read한다. 본문 read는
+`SnapshotReadRequest.include_iac_document`로 호출자가 명시할 때만 수행하고, tool이 본문
+read를 지원하지 않으면 관점을 조용히 빼지 않고 실패한다.
 
 ## Async Worker boundary
 

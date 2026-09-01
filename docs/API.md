@@ -86,6 +86,13 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   결정적으로 만든 actionable projection이다. `readiness_score`는 전체 평가 계획이 완료되기
   전에는 `null`이고, 완료 후에는 `{score, evaluated_evaluations}`를 반환한다. 점수는 severity
   가중 평가 score이며 Coverage와 혼동하지 않는다.
+- Initial Assessment 한 건은 같은 Resource × Rule에 대해 `IAC`, `AWS_ACTUAL`, `DRIFT` 결과를
+  모두 반환한다. `IAC`와 `AWS_ACTUAL`은 각각 승인 commit의 Terraform 본문과 read-only AWS
+  Actual을 근거로 AI가 판정하고, `DRIFT`는 그 두 판정의 불일치를 Code가 결정적으로 계산한다.
+  따라서 Coverage 분모는 `Resource × Rule × Perspective`이며 세 관점을 모두 포함한다.
+  `DRIFT` 결과는 `readiness_score` 계산에서 제외한다 — 정합 여부는 준수 수준이 아니므로,
+  IaC와 Actual이 똑같이 위험한 리소스의 대표 점수를 올려서는 안 된다. Drift는 자체 결과와
+  Finding으로 사용자에게 전달된다.
 - IaC 변경이 필요한 Remediation 결과는 `IaCSnapshot`과 `RemediationPatch` Artifact
   reference를 반환한다. IaC가 이미 안전한 Actual Drift 동기화는 Patch 없이 IaC Snapshot의
   commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.

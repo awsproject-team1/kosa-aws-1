@@ -73,7 +73,8 @@ function AssessmentReport({ assessmentId }: { assessmentId: string }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   useEffect(() => { exchangeCallback().then(token => { if (token) setAccessToken(token); }).catch((reason: Error) => setError(reason.message)); }, []);
   useEffect(() => {
-    if (!accessToken) return;
+    // Without an assessment_id there is nothing to read yet; the start form owns that step.
+    if (!accessToken || !assessmentId) return;
     const params = new URLSearchParams({ limit: "25" });
     if (cursor) params.set("cursor", cursor);
     const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -85,8 +86,8 @@ function AssessmentReport({ assessmentId }: { assessmentId: string }) {
       .catch((reason: Error) => setError(reason.message));
   }, [accessToken, assessmentId, cursor]);
   if (!accessToken) return <main><h1>Initial Assessment</h1><p>고객 Cognito 계정으로 로그인해 Assessment 결과를 확인하세요.</p><button onClick={() => void startLogin().catch((reason: Error) => setError(reason.message))}>Cognito로 로그인</button></main>;
-  if (error) return <p role="alert">{error}</p>;
   if (!assessmentId) return <StartAssessment accessToken={accessToken} />;
+  if (error) return <p role="alert">{error}</p>;
   if (!report) return <p>Assessment 결과를 불러오는 중…</p>;
   return <main><h1>Initial Assessment</h1><section><strong>평가 실행률 {report.coverage.percentage}%</strong><span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span><strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong></section><h2>Findings ({report.findings.length})</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Severity</th><th>Score</th></tr></thead><tbody>{report.findings.map(finding => <tr key={finding.finding_id}><td>{finding.resource_id}</td><td>{finding.rule_id}</td><td>{finding.perspective}</td><td>{finding.status}</td><td>{finding.severity}</td><td>{finding.score}</td></tr>)}</tbody></table><h2>Evaluation results</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td></tr>)}</tbody></table>{report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}</main>;
 }

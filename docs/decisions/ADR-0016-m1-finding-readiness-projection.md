@@ -20,6 +20,18 @@ Coverage. It uses the evaluator's 0–100 score weighted by severity
 score. Readiness remains unavailable for incomplete coverage or execution errors.
 Coverage remains a separate mechanical execution-rate indicator.
 
+`DRIFT` results are excluded from Readiness. Drift states whether the IaC and the
+AWS Actual perspective agree, which is not a degree of compliance; including its
+binary alignment value would raise the representative score for a resource whose
+IaC and Actual are consistently unsafe. Drift still reaches the user as its own
+results and Findings, and it is what M2 remediation reads to decide between
+patching the IaC and syncing the current commit.
+
+Because Coverage counts `Resource × Rule × Perspective`, an Assessment that
+evaluates more than one perspective must not let the first task decide the
+immutable denominator. `AssessmentResourceWork.planned_evaluations` carries the
+server-computed total when it cannot be derived from a single resolved Rule set.
+
 ## Consequences
 
 M2 receives stable customer-scoped Finding IDs without reinterpreting raw AI

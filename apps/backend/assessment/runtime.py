@@ -20,6 +20,7 @@ from apps.backend.assessment import (
     AssessmentRunner,
     AssessmentWorker,
     BedrockConverseClientFactory,
+    BedrockStructuredEvaluator,
     DynamoDbAssessmentReportStore,
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
@@ -97,10 +98,19 @@ class DynamoM1WorkRepository:
         self._table = table
         self._configuration = configuration
         self._targets: dict[tuple[str, int], object] = {}
+        self._work: dict[tuple[str, int], AssessmentResourceWork] = {}
 
     def get_resource_work(
         self, *, job_id: str, expected_revision: int
     ) -> AssessmentResourceWork | None:
+        """Reload once per task; the resolved work is authoritative for that revision.
+
+        The handler resolves the runtime target before building the Worker, so the
+        Worker's own reload must not repeat the Job query and Assessment read.
+        """
+        cached = self._work.get((job_id, expected_revision))
+        if cached is not None:
+            return cached
         response = self._table.query(
             IndexName="GSI1",
             KeyConditionExpression="GSI1PK = :job_id",
@@ -134,7 +144,7 @@ class DynamoM1WorkRepository:
             policy_profile_id=profile_id,
         )
         self._targets[(job_id, expected_revision)] = target
-        return AssessmentResourceWork(
+        work = AssessmentResourceWork(
             customer_id=customer_id,
             assessment_id=assessment_id,
             job_id=job_id,
@@ -143,9 +153,13 @@ class DynamoM1WorkRepository:
             phase=AssessmentPhase.INITIAL,
             resource_id=target.s3_bucket_id,
             resource_type="AWS::S3::Bucket",
+            # The live Worker runs the full perspective set, so this declares the
+            # primary evaluated perspective rather than the only one.
             perspective=EvaluationPerspective.AWS_ACTUAL,
             model_profile_id="assessment-nova-lite-m0-v1",
         )
+        self._work[(job_id, expected_revision)] = work
+        return work
 
     def target_for(self, *, job_id: str, expected_revision: int) -> object:
         work = self.get_resource_work(job_id=job_id, expected_revision=expected_revision)
@@ -261,7 +275,7 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
             ),
         )
         # Read both approved inputs before evaluation.  The collector exposes no mutation path.
-        AssessmentInputCollector(github_tool=github, aws_tool=aws).collect(
+        bundle = AssessmentInputCollector(github_tool=github, aws_tool=aws).collect(
             SnapshotReadRequest(
                 customer_id=target.customer_id,
                 repository_id=target.repository_id,
@@ -274,21 +288,36 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                         resource_id=target.s3_bucket_id,
                     ),
                 ),
+                include_iac_document=True,
             )
         )
+        if bundle.iac_document is None:  # pragma: no cover - the request demands the body.
+            raise RuntimeError("approved IaC body is required for the IAC perspective")
+        bedrock = BedrockConverseClientFactory(boto3).for_assessment(profile)
         worker = AssessmentWorker(
             work_repository=work_repository,
             context_resolver=PolicyContextResolver(load_rule_registry(_rules_path()).catalog),
-            runner=AssessmentRunner(
-                S3ActualBedrockEvaluator(
-                    evidence_loader=S3ActualEvidenceLoader(
-                        tool=aws,
-                        customer_id=target.customer_id,
-                        aws_account_id=target.aws_account_id,
-                    ),
-                    client=BedrockConverseClientFactory(boto3).for_assessment(profile),
-                )
-            ),
+            perspective_runners={
+                EvaluationPerspective.IAC: AssessmentRunner(
+                    BedrockStructuredEvaluator(
+                        client=bedrock,
+                        perspective=EvaluationPerspective.IAC,
+                        resource_document=bundle.iac_document.to_dict(),
+                        evidence_references=bundle.iac_document.evidence_references,
+                    )
+                ),
+                EvaluationPerspective.AWS_ACTUAL: AssessmentRunner(
+                    S3ActualBedrockEvaluator(
+                        evidence_loader=S3ActualEvidenceLoader(
+                            tool=aws,
+                            customer_id=target.customer_id,
+                            aws_account_id=target.aws_account_id,
+                        ),
+                        client=bedrock,
+                    )
+                ),
+            },
+            derive_drift=True,
             model_profiles=InMemoryModelProfileRegistry((profile,)),
             result_store=DynamoDbEvaluationResultStore(table),
             plan_store=DynamoDbAssessmentReportStore(table),

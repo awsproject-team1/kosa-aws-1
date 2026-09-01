@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from base64 import b64decode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -13,11 +14,15 @@ from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
     GitHubTool,
     GitHubToolError,
+    IaCDocument,
     IaCSnapshotRequest,
     require_repository_scope,
     require_snapshot_request,
 )
 from packages.contracts import ArtifactReference, ArtifactType, IaCSnapshot
+
+# One Initial Assessment reads a Terraform root module, not an entire monorepo.
+_MAX_DOCUMENT_BYTES = 1_000_000
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -75,12 +80,55 @@ class GitHubRestSnapshotTool(GitHubTool):
             ),
         )
 
-    def _read_revision(self, commit_sha: str) -> GitHubRepositoryRevision:
-        headers = {
+    def read_iac_document(self, request: IaCSnapshotRequest) -> IaCDocument:
+        """Read the Terraform body at the approved commit so IAC can be evaluated.
+
+        Only the blobs already listed by the immutable tree read are fetched, and the
+        combined body is capped so one repository cannot exhaust the Worker.
+        """
+        request = require_snapshot_request(request)
+        require_repository_scope(
+            request, customer_id=self._customer_id, repository_id=self._repository_id
+        )
+        revision = self._read_revision(request.commit_sha)
+        headers = self._headers()
+        total = 0
+        files: list[tuple[str, str]] = []
+        for path, blob_sha in revision.terraform_blobs:
+            content = self._read_blob(blob_sha, headers)
+            total += len(content.encode("utf-8"))
+            if total > _MAX_DOCUMENT_BYTES:
+                raise GitHubToolError("Terraform body exceeds the approved read limit")
+            files.append((path, content))
+        return IaCDocument(
+            customer_id=request.customer_id,
+            repository_id=request.repository_id,
+            commit_sha=revision.commit_sha,
+            files=tuple(files),
+        )
+
+    def _read_blob(self, blob_sha: str, headers: Mapping[str, str]) -> str:
+        payload = self._request(
+            f"https://api.github.com/repos/{self._repository_full_name}/git/blobs/{blob_sha}",
+            headers,
+        )
+        if payload.get("encoding") != "base64":
+            raise GitHubToolError("GitHub blob encoding is unsupported")
+        try:
+            raw = b64decode(_required_string(payload.get("content"), "GitHub blob content"))
+            return raw.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            raise GitHubToolError("GitHub blob content is invalid") from None
+
+    def _headers(self) -> dict[str, str]:
+        return {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {_token(self._token_provider())}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+    def _read_revision(self, commit_sha: str) -> GitHubRepositoryRevision:
+        headers = self._headers()
         encoded_repo = self._repository_full_name
         try:
             commit = self._request(
