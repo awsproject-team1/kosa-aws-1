@@ -84,9 +84,7 @@ def decision(
     *, action: RemediationAction = RemediationAction.TERRAFORM_PATCH
 ) -> RemediationDecision:
     manual_code = (
-        ManualReviewCode.RULE_NOT_IN_SCOPE
-        if action is RemediationAction.MANUAL_REVIEW
-        else None
+        ManualReviewCode.RULE_NOT_IN_SCOPE if action is RemediationAction.MANUAL_REVIEW else None
     )
     exception_id = "exc-001" if action is RemediationAction.SUPPRESSED else None
     return RemediationDecision(
