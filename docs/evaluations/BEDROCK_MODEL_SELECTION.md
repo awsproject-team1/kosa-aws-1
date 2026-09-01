@@ -11,8 +11,8 @@
 
 | Runtime 역할 | 실측 추천 후보 | 실측 근거 | 요청당 중앙 토큰* | 실측 중앙 지연 | 상태 |
 | --- | --- | --- | ---: | ---: | --- |
-| Parent (Policy Q&A 포함) | **Gemma 3 4B IT** (`google.gemma-3-4b-it`) | 기존 routing+Q&A 4 Case, 20/20 유효, 결정 일치율 100% | 164 | 666 ms | 추천 후보, 승인 Profile 전환 대기 |
-| Assessment | **Nova Micro** (`amazon.nova-micro-v1:0`) | S3 FAIL Case 5/5, 결정 일치율 100%, score 편차 0 | 450 | 881 ms | 추천 후보, Golden 재검증·승인 전환 대기 |
+| Parent (Policy Q&A 포함) | **Gemma 3 4B IT** (`google.gemma-3-4b-it`) | 기존 routing+Q&A 4 Case, 20/20 유효, 유효 출력 내 최소 Case 결정 일치율 100% | 164 | 666 ms | 추천 후보, 승인 Profile 전환 대기 |
+| Assessment | **Nova Micro** (`amazon.nova-micro-v1:0`) | S3 FAIL Case 5/5, 유효 출력 내 최소 Case 결정 일치율 100%, score 편차 0 | 450 | 881 ms | 추천 후보, Golden 재검증·승인 전환 대기 |
 | Remediation | **Devstral 2 123B** (`mistral.devstral-2-123b`) | legacy composite 전체 Gate 5/5 | 664 | 5,563 ms | 추천 후보, 승인 Profile 전환 대기 |
 | Deployment | **Nova Lite** (`amazon.nova-lite-v1:0`) | composite의 Deployment boundary 6개 항목 5/5 | 726 | 1,749 ms | 추천 후보, 승인 Profile 전환 대기 |
 
@@ -45,9 +45,9 @@
 
 아래 표는 측정 당시 benchmark shape의 historical aggregate입니다. 최신 `EvaluationResult`가
 요구하는 authoritative `perspective`와 `model_profile_id` 호환은 현재 `bench/runner.py`에
-반영되어 모델 응답이 아니라 benchmark expected/runtime metadata로 재구성됩니다.
+반영되어 모델 응답이 아니라 benchmark expected/runtime metadata로 재구성됩니다. 결정 일치율은 유효 출력만 분모로 계산하며, invalid 실행은 별도 유효율에 반영됩니다.
 
-| 기존 benchmark capability | 실측 1위 | 유효 실행 | 결정 일치율 | 중앙 토큰 | 중앙 지연 | 최신 설계에서의 의미 |
+| 기존 benchmark capability | 실측 1위 | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | 중앙 토큰 | 중앙 지연 | 최신 설계에서의 의미 |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | Parent routing | Gemma 3 4B IT | 15/15 | 100% | 164 | 659 ms | Parent의 routing 일부 |
 | Policy Q&A | Voxtral Mini 3B 2507 | 5/5 | 100% | 210 | 610 ms | Parent 내부 Q&A capability |
@@ -73,7 +73,7 @@
 
 45개 모델 × 4 Case × 5회인 기존 **900회 호출 결과**를 다시 호출하지 않고 결합했습니다.
 
-| 모델 | 유효 실행 | 최소 Case 결정 일치율 | 중앙 지연 | 중앙 토큰 | 판단 |
+| 모델 | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | 중앙 지연 | 중앙 토큰 | 판단 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | **Gemma 3 4B IT** | **20/20** | **100%** | **666 ms** | 164 | 실측 추천 후보 |
 | GLM 4.7 Flash | 20/20 | 100% | 731 ms | 157 | 속도 근접 대안 |
@@ -101,7 +101,7 @@ Gemma 3 4B는 routing과 Policy Q&A를 합친 네 Case를 모두 5회씩 통과�
 
 **실측 Case:** 네 public-access 설정이 모두 비활성화된 S3 bucket을 `S3-PUBLIC-001`로 평가했습니다. 기대 결과는 `FAIL`, `severity=HIGH`, score 0–30, 두 evidence reference와 정확한 rule/rubric/scoring version입니다. 이 historical aggregate는 측정 당시 benchmark shape의 결과이며, 최신 authoritative `perspective`와 `model_profile_id`는 현재 runner가 expected/runtime metadata에서 재구성합니다.
 
-| 모델 | Contract/의미 검증 | 유효 실행 | 결정 일치율 | Score 편차 | 중앙 지연 | 중앙 토큰 |
+| 모델 | Contract/의미 검증 | 유효 실행 | 유효 출력 내 최소 Case 결정 일치율 | Score 편차 | 중앙 지연 | 중앙 토큰 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | **Nova Micro** | 통과 | **5/5** | **100%** | **0** | **881 ms** | 450 |
 | Qwen3-Coder-30B-A3B | 통과 | 5/5 | 100% | 0 | 921 ms | 449 |
@@ -187,7 +187,7 @@ Devstral만 허용 경로, 정확한 네 줄 변경, 실제 patch 적용 결과�
 | 판단·라우팅 정확도 | Parent-local Q&A 또는 올바른 Workflow 제안 | Parent |
 | 근거 인용 정확도 | 승인된 rule ID/version과 evidence reference 일치 | Parent Q&A, Assessment |
 | Finding 정확도 | perspective, status, severity, score, Evidence와 버전 일치 | Assessment |
-| 반복 안정성 | Case별 결정 일치율과 Assessment score 편차 | 전체 |
+| 반복 안정성 | 유효 출력 내 Case별 결정 일치율과 Assessment score 편차 | 전체 |
 | Diff 최소성·적용성 | 허용 repository/path만 변경하고 base에 실제 적용 | Remediation |
 | Readiness·승인 경계 | refresh plan, commit/plan binding, Human Approval, OIDC-only Apply | Deployment |
 | 지연 | API 호출부터 응답 수신까지의 시간 | 전체, 특히 Parent |
@@ -196,7 +196,7 @@ Devstral만 허용 경로, 정확한 네 줄 변경, 실제 patch 적용 결과�
 ### 선정 순서
 
 1. 의미 검증 유효율 90% 이상
-2. Case별 결정 일치율 또는 역할별 exact check 통과율 90% 이상
+2. 유효 출력 내 Case별 결정 일치율 또는 역할별 exact check 통과율 90% 이상
 3. Assessment는 반복 score 최대 편차 10 이하
 4. Gate 통과 후보를 유효율과 반복 안정성 순으로 정렬
 5. 앞 기준이 같으면 중앙 지연, 중앙 토큰 순으로 정렬
