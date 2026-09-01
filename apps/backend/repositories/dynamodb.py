@@ -16,6 +16,7 @@ from apps.backend.repositories.ports import (
     StoredDataError,
 )
 from packages.contracts import ApiError, JobCurrentStep, JobStatus, WorkflowCommand, WorkflowTask
+from packages.contracts.remediation import RemediationContext
 
 
 class DynamoTable(Protocol):
@@ -154,6 +155,52 @@ class DynamoDbAssessmentWorkflowRepository(DynamoDbJobRepository):
             }:
                 raise DuplicateJobError("assessment workflow already exists") from None
             raise RepositoryError("assessment workflow create failed") from None
+
+    def create_remediation_workflow(
+        self,
+        *,
+        context: RemediationContext,
+        job: Job,
+        remediation_id: str,
+        outbox: WorkflowOutboxEntry,
+    ) -> None:
+        """Atomically persist the C context, A Job, and its pending D task."""
+        if not isinstance(context, RemediationContext) or not isinstance(job, Job):
+            raise TypeError("context and job are required")
+        if not isinstance(remediation_id, str) or not remediation_id:
+            raise ValueError("remediation_id must be a non-empty string")
+        if not isinstance(outbox, WorkflowOutboxEntry):
+            raise TypeError("outbox must be a WorkflowOutboxEntry")
+        if job.customer_id != context.snapshot.customer_id or outbox.customer_id != job.customer_id:
+            raise ValueError("remediation workflow customer scope is inconsistent")
+        item = {
+            "PK": _customer_pk(job.customer_id),
+            "SK": f"REMEDIATION#{remediation_id}",
+            "entity_type": "REMEDIATION",
+            "customer_id": job.customer_id,
+            "remediation_id": remediation_id,
+            "job_id": job.job_id,
+            "finding_id": context.finding.finding_id,
+            "snapshot": context.snapshot.to_dict(),
+            "strategy": context.strategy.value,
+            "evidence_references": list(context.evidence_references),
+            "status": "QUEUED",
+        }
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    _transactional_put(self._table_name, item),
+                    _transactional_put(self._table_name, _item_from_job(job)),
+                    _transactional_put(self._table_name, _item_from_outbox(outbox)),
+                ]
+            )
+        except Exception as error:
+            if _provider_error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                raise DuplicateJobError("remediation workflow already exists") from None
+            raise RepositoryError("remediation workflow create failed") from None
 
     def list_pending_outbox(self, *, limit: int) -> tuple[WorkflowOutboxEntry, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:

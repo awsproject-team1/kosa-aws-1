@@ -10,16 +10,18 @@ class Action(StrEnum):
 
     START_ASSESSMENT = "START_ASSESSMENT"
     READ_JOB = "READ_JOB"
+    START_REMEDIATION = "START_REMEDIATION"
+    APPROVE_DEPLOYMENT = "APPROVE_DEPLOYMENT"
 
 
 class AuthorizationDenied(PermissionError):
     """Raised when a principal is not allowed to perform an action."""
 
 
-_USER_ACTIONS = frozenset({Action.START_ASSESSMENT, Action.READ_JOB})
+_USER_ACTIONS = frozenset({Action.START_ASSESSMENT, Action.START_REMEDIATION, Action.READ_JOB})
 _ROLE_ACTIONS = {
     Role.USER: _USER_ACTIONS,
-    Role.ADMIN: _USER_ACTIONS,
+    Role.ADMIN: _USER_ACTIONS | frozenset({Action.APPROVE_DEPLOYMENT}),
 }
 
 

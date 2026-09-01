@@ -299,6 +299,29 @@ IaC가 이미 안전하고 Actual만 drift된 경우에는 Patch 없이 해당 I
 Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Repository에만 branch/commit/PR을
 생성하고, Terraform Apply는 이 일치 검증 뒤 GitHub Actions OIDC 경로에서만 가능하다.
 
+## M2 A/C remediation and readiness boundary
+
+`packages/contracts/remediation.py`는 M1 Finding을 D의 Patch/Plan producer와 A의 승인
+경계에 안전하게 연결한다. 이 Contract는 customer workload write 권한이나 Apply 요청을 표현하지
+않는다.
+
+- C는 동일한 Resource/Rule/version의 `IAC`와 `AWS_ACTUAL` immutable 결과를 함께 읽어
+  `RemediationContext`를 만든다. IaC가 `FAIL`이면 `PATCH_IAC`, IaC가 `PASS`이고 Actual만
+  `FAIL`이면 `SYNC_CURRENT_IAC`, 그 외 증거 불충분·안전한 매핑 부재는 `MANUAL_REVIEW`다.
+- D는 raw Terraform Plan을 immutable `TerraformPlan` artifact로 보관하고, C에
+  `PlanReadinessInput`(refresh 여부, destructive change 여부, Finding resource mapping)만
+  전달한다. 원 Plan bytes·secret은 이 Contract에 넣지 않는다.
+- C의 `DeploymentReadiness`는 exact `deployment_id`/`commit_sha`/`plan_hash`에 바인딩된
+  `READY_FOR_APPROVAL`, `BLOCKED`, `MANUAL_REVIEW` verdict다. `READY_FOR_APPROVAL`도 Apply
+  권한이 아니며, A의 Admin 승인과 D의 GitHub Actions OIDC 재검증이 추가로 필요하다.
+- A는 `DeploymentApprovalService`에서 Admin만 승인하게 하고, C verdict와 D Plan의 세 binding이
+  모두 일치할 때만 `DeploymentApproval` 및 audit record를 조건부·원자적으로 기록한다. 실제
+  DynamoDB/API adapter는 A가 이 `DeploymentApprovalRepository` port를 구현할 때 연결한다.
+
+이 새 Contract의 Producer는 C(컨텍스트·verdict)와 D(plan summary)이며 Consumer는 A(approval
+gate)와 D(후속 OIDC apply revalidation)다. B는 Rule/Manual Review 정책을 제공하지만 이
+Contract에 정책 원문을 넣지 않는다.
+
 ## Contract change review
 
 Contract 변경 PR은 변경 작성자와 해당 Contract의 Producer 및 Consumer Owner가 검토한다. Contract가 확정됐지만 구현체가 없는 경우 `Mockable` 상태로 Fixture/Mock을 사용해 병렬 개발할 수 있다.

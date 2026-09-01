@@ -61,6 +61,13 @@ from packages.contracts.policy_ingestion import (
     PolicySourceFormat,
     PolicySourceUploadRequest,
 )
+from packages.contracts.remediation import (
+    DeploymentReadiness,
+    DeploymentReadinessStatus,
+    PlanReadinessInput,
+    RemediationContext,
+    RemediationStrategy,
+)
 
 __all__ = [
     "ApiError",
@@ -74,6 +81,8 @@ __all__ = [
     "AwsResourceOperation",
     "AwsResourceQuery",
     "DeploymentApproval",
+    "DeploymentReadiness",
+    "DeploymentReadinessStatus",
     "DocumentUnitKind",
     "EvaluationPerspective",
     "EvaluationResult",
@@ -101,8 +110,11 @@ __all__ = [
     "PolicySourceFormat",
     "PolicySourceKind",
     "PolicySourceUploadRequest",
+    "PlanReadinessInput",
     "ReadinessScore",
+    "RemediationContext",
     "RemediationPatch",
+    "RemediationStrategy",
     "RuleCandidate",
     "RuleLifecycle",
     "RuleSeverity",

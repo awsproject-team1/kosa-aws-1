@@ -2,6 +2,12 @@
 
 ## Current
 
+- M2 A/C mockable boundary 완료: M1 Finding/IaC/Actual에서 deterministic remediation context와
+  refreshed-plan readiness verdict를 만들고, customer-scoped Remediation Job/Outbox, Admin-only
+  exact plan approval, immutable DynamoDB approval/audit transaction, HTTP service boundary를
+  구현했다. B/D의 policy·Patch/Plan live adapter와 CloudFormation runtime wiring은 해당 역할의
+  병합 시 같은 port로 연결한다.
+
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.

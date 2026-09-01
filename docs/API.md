@@ -115,6 +115,20 @@ base-table read 뒤 Job owner/administrator authorization을 적용한다. GSI1�
 실행을 시작하는 것은 사용자 확인 뒤의 Backend API뿐이다. GitHub Actions의 Plan/Apply 완료는
 OIDC EventBridge Event를 통해 Deployment Worker를 재개하며, Client callback은 사용하지 않는다.
 
+## M2 A/C staged implementation
+
+M2 A/C는 현재 Mockable Contract 단계다. C는 persisted M1 Finding과 immutable IaC/Actual
+결과에서 remediation context를 만들고, D가 생산할 refresh-plan summary를 평가해 exact
+`deployment_id`/`commit_sha`/`plan_hash`에 바인딩된 readiness verdict를 만든다. A의 approval
+service는 Admin principal만 허용하며, verdict가 `READY_FOR_APPROVAL`이고 Plan과 세 binding이
+같을 때만 조건부 audit write를 요청한다.
+
+따라서 표의 `POST /findings/{findingId}/remediations`, `POST /deployments/{deploymentId}/approve`,
+`POST /deployments/{deploymentId}/reject`는 아직 public Lambda route로 노출하지 않는다. B/D의
+Finding policy·Patch/Plan producer와 A의 DynamoDB repository adapter가 병합된 뒤 동일 Contract로
+route를 배선한다. 이 단계 전에는 Client가 Plan/Approval/Audit 식별자나 상태를 만들어 보낼 수
+없다.
+
 ## Error envelope
 
 ```json
