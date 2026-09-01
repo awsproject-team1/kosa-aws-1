@@ -25,6 +25,7 @@ from apps.backend.policy.ingestion import UploadedPolicyOriginal, normalize_uplo
 from apps.backend.policy.ingestion.normalization import (  # noqa: E402
     MAX_UNITS,
     DocumentParseError,
+    text_sha256,
 )
 from apps.backend.policy.ingestion.parsers.ooxml import parse_docx, parse_xlsx  # noqa: E402
 from packages.contracts import (  # noqa: E402
@@ -220,7 +221,7 @@ class AmbiguousWorksheetCoordinateTest(unittest.TestCase):
         document = parse_xlsx(workbook)
 
         self.assertEqual([unit.locator for unit in document.units], ["sheet/security/row/1"])
-        self.assertEqual(document.units[0].text, "no explicit reference")
+        self.assertEqual(document.units[0].text_sha256, text_sha256("no explicit reference"))
 
 
 class InferredDelimiterNeedsReviewTest(unittest.TestCase):
