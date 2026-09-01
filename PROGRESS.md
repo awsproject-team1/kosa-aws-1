@@ -2,6 +2,9 @@
 
 ## Current
 
+- M3/M4 역할 경계 미결정 사항을 ADR-0019(승인 배포 실행 경계), ADR-0020(Post-Deploy Verification과
+  before/after 비교), ADR-0021(Demo·Release readiness gate)로 문서화했고 세 ADR 모두 `Proposed`다.
+  각 항목의 담당·필요 시점·차단 대상은 아래 Blocked에 있다. 합의 전에는 해당 범위를 구현하지 않는다
 - PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
   identity 검증을 통합했고, 후속 PR 검토 대기
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
@@ -159,6 +162,12 @@
 
 ## Next
 
+- **M3 합의 선행:** ADR-0019·ADR-0020을 리뷰해 `Accepted`로 확정한다. 확정 직후 순서는
+  (1) `DeploymentStatus`·`AuditAction`·`FindingResolution`·`AssessmentComparison`·
+  `TERRAFORM_PLAN_BINARY` Contract 추가와 `RemediationSyncTarget` 이관,
+  (2) D 실행 port 시그니처(`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`,
+  `ActualRereadPort`) 고정, (3) A/C가 Mock으로 병렬 구현이다. M2에서 D live adapter 지연으로 A/C가
+  대기한 상황을 반복하지 않으려면 (2)가 구현보다 먼저다
 - **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
   계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
   bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
@@ -197,7 +206,22 @@
 
 ## Blocked
 
-- 없음
+- **M3 착수 전 합의 필요 (ADR-0019 `Proposed`):** `plan_hash`의 대상 바이트 정의, Terraform state
+  bucket/lock table 소유와 state key 분리, apply 대상 commit(default branch merge commit),
+  `deployment_id` 발급과 Deployment 생성 진입점, apply 트리거 주체(A 승인 / D dispatch)와 이중 apply
+  방지, 고객 repository workflow 소유권과 GitHub App 권한, Plan/Apply 완료 Event의 신뢰 경계,
+  `DeploymentStatus` 전이·`/reject` 시맨틱·CI fail-closed. 합의 전에는 D가 live plan/apply 경로를,
+  A가 Deployment 생성·후속 전이를 구현하지 않는다.
+  *Owner:* D + A + Security. *Blocks:* M3 A/C/D/Shared 전체.
+- **M3 착수 전 합의 필요 (ADR-0020 `Proposed`):** Post-Deploy Verification을 새 `assessment_id`로
+  저장하고 Assessment에 `phase`/`source_assessment_id`/`deployment_id`를 추가하는 것, 재평가 범위(원
+  평가 계획 전체 재실행), Model Profile·rubric 동일성 강제, Finding Resolution 5개 값, 점수·Coverage
+  `comparable` 판정, 예외는 평가 게이트가 아니라 표시만, 검증 지연 30초와 총 3회 재조회,
+  Deployment 단계 LLM 미사용. 합의 전에는 C가 재평가 Assessment와 비교 projection을 구현하지 않는다.
+  *Owner:* C + A + B. *Blocks:* M3 B/C, M4 C.
+- **M4 착수 전 합의 필요 (ADR-0021 `Proposed`):** 데모 IaC를 별도 고객 sandbox repository에 두는 것,
+  품질 Gate의 릴리스 차단력, 관측·비용 통과 기준, `dev → main` 필수 첨부물.
+  *Owner:* Shared + D + C + A. *Blocks:* M4 전체와 `dev → main` 통합 PR.
 
 ## Milestones
 
@@ -240,7 +264,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Proposed` — 합의 전에 live plan 경로를 구현하면 A/C의 재검증과 값이 어긋난다)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.
@@ -249,10 +273,21 @@
 
 **Exit criteria:** Human Approval 뒤 승인된 plan만 apply하고, 변경된 AWS Actual을 Post-Deploy Verification으로 재평가해 Finding 및 Readiness Score 변화를 확인한다.
 
+**미결정:** 실행 세부는 ADR-0019(plan_hash·state·merge commit·deployment_id·apply 트리거·workflow
+소유권·완료 Event·상태 기계)와 ADR-0020(검증 Assessment·재평가 범위·Profile 동일성·Finding
+Resolution·비교 가능성·예외 표시·검증 지연)이 `Proposed`로 제안했다. 합의 전에는 아래 항목을
+구현하지 않는다.
+
 - [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
-- [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증
+  *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를
+  얻을 수 없다 — ADR-0019 §4, ADR-0020 §7)*
+- [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(재평가는 원 Assessment의
+  Profile version을 고정 재사용하고, 예외는 평가를 막지 않고 표시만 한다 — ADR-0020 §2, §6)*
 - [ ] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가
-- [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash` 재검증, AWS Actual 재조회
+  *(새 assessment_id + phase 저장, Profile/rubric 동일성, Code 결정적 비교 — ADR-0020 §1, §3, §4, §5)*
+- [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
+  재검증, AWS Actual 재조회 *(plan_hash 대상 정의, state serial, saved plan apply, run 재조회 —
+  ADR-0019 §1, §2, §5, §7)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.
@@ -261,10 +296,16 @@
 
 **Exit criteria:** WordPress/LAMP Demo에서 폐루프 E2E가 재현되고, 품질·운영·문서 기준을 충족해 사람이 `dev → main` 통합 PR을 만들 수 있다.
 
-- [ ] **A — Platform/Backend:** 배포/운영 점검, 오류·성능·비용 관측 검증
+**미결정:** 데모 IaC 위치, 품질 Gate의 릴리스 차단력, 관측·비용 통과 기준, `dev → main` 필수
+첨부물은 ADR-0021이 `Proposed`로 제안했다. 릴리스 체크리스트 초안은 `CONTRIBUTING.md`에 있다.
+
+- [ ] **A — Platform/Backend:** 배포/운영 점검, 오류·성능·비용 관측 검증 *(통과 기준은 값의 존재로
+  정의한다 — ADR-0021 §3)*
 - [ ] **B — Policy/Governance Boundary:** Demo Policy/Rule/근거와 Coverage 설명 검증
-- [ ] **C — AI Evaluation:** Golden Dataset 품질 목표(정확도 90%, Score 편차 ±10점) 확인
-- [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인
+- [ ] **C — AI Evaluation:** Golden Dataset 품질 목표(정확도 90%, Score 편차 ±10점) 확인 *(IAC/DRIFT
+  관점 Golden Case 추가가 선행이며 미달 시 목표를 낮추지 않는다 — ADR-0021 §2)*
+- [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인 *(데모 IaC는 별도
+  고객 sandbox repository — ADR-0021 §1)*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.

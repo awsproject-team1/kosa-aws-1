@@ -401,6 +401,59 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 허용하지만, 다른 writer가 다른 lifecycle이나 내용을 쓰면 계속 fail-closed한다. 따라서 같은
 키에 lifecycle을 별도로 쓰는 두 번째 writer를 만들지 않는다.
 
+## M3 planned contract additions
+
+아래 Contract는 아직 `packages/contracts/`에 없다. 경계는 ADR-0019·ADR-0020이 `Proposed`인 상태이며,
+두 ADR이 `Accepted`가 된 뒤 이 문서와 같은 PR에서 추가한다. 그 전에는 각 역할이 자기 모듈에 같은
+의미의 값을 따로 만들지 않는다 — 같은 개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인
+구조가 재발한다.
+
+| 추가 | 소유 | 의미 |
+| --- | --- | --- |
+| `DeploymentStatus` | A | Deployment 상태 기계의 값과 전이 (ADR-0019 §8) |
+| `AuditAction` | A | 감사 event action 어휘. 현재 문자열 상수로 흩어진 값을 한곳으로 모은다 |
+| `FindingResolution` | C | Finding 해소 여부의 5개 값 (ADR-0020 §4) |
+| `AssessmentComparison` | C | before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
+| `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
+| `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
+
+`DeploymentStatus`의 전이는 다음과 같다.
+
+```text
+PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
+→ APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED
+분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
+```
+
+`AuditAction`은 기존 `REMEDIATION_DECIDED`, `REMEDIATION_EXCEPTION_APPROVED`,
+`DEPLOYMENT_APPROVED`를 이관하고 M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`,
+`APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`,
+`MANUAL_RECONCILIATION_REQUIRED`를 추가한다. 역할마다 다른 문자열을 쓰면 Audit 조회가 역할별
+어휘를 모두 알아야 한다.
+
+`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
+역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
+옮긴다.
+
+### D 실행 port 시그니처 (M3 병렬 개발 전제)
+
+M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
+먼저 고정해야 한다. 아래 세 port는 D가 소유하고 A/C가 주입받아 Fixture/Mock으로 병렬 구현한다
+(`Mockable` 의존성).
+
+| Port | 호출자 | 입력 → 출력 |
+| --- | --- | --- |
+| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state serial + `PlanReadinessInput` |
+| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` → dispatched run reference (idempotent) |
+| `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
+| `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
+
+- 세 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
+- `ApplyDispatchPort`는 같은 approval로 두 번 호출돼도 새 run을 만들지 않아야 한다. 중복 방지의
+  정본은 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
+- `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다. 검증 단계에서
+  write 표면이 생기지 않는다.
+
 ## Contract change review
 
 Contract 변경 PR은 변경 작성자와 해당 Contract의 Producer 및 Consumer Owner가 검토한다. Contract가 확정됐지만 구현체가 없는 경우 `Mockable` 상태로 Fixture/Mock을 사용해 병렬 개발할 수 있다.

@@ -103,6 +103,37 @@ audit 두 항목만 쓰고 Job/Outbox는 만들지 않는다. 고객 예외 등�
 `REMEDIATION_EXCEPTION_APPROVED` audit event를 같은 transaction에 쓰며 ID/customer/approver/time은
 Backend가 발급한다.
 
+## M3 planned deployment and verification storage
+
+아래 저장 경계는 아직 구현되지 않았고 ADR-0019·ADR-0020이 `Proposed`인 상태다. 합의 전에는 각 역할이
+Deployment 상태나 검증 결과를 임의 key/필드로 쓰지 않는다.
+
+| Entity | PK | SK | Purpose |
+| --- | --- | --- | --- |
+| Deployment workflow event | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` | Plan/Apply 완료 Event detail. 같은 `run_id`는 한 번만 기록된다 |
+
+- `DEPLOYMENT#{deployment_id}` item은 `status`(`DeploymentStatus`), 대상 `commit_sha`,
+  `plan_hash`, canonical JSON plan과 saved binary plan의 Artifact reference, plan 시점의 Terraform
+  **state serial**, `remediation_id`, `source_assessment_id`, 그리고 검증 후의
+  `verification_assessment_id`를 보관한다. 상태 전이는 모두 조건부 write이며 현재 status와 revision을
+  조건으로 한다.
+- Plan/Apply 완료 Event는 Queue payload에 값을 싣지 않고 이 event item으로 저장한다. Queue에는 계속
+  `job_id`, `expected_revision`, `command`만 흐른다. Event detail은 신뢰 대상이 아니라 기록이며, D
+  Worker가 `run_id`로 GitHub Actions run을 다시 읽어 대조한 결과만 Deployment 상태로 전이된다.
+  GitHub Actions에는 DynamoDB write 권한을 주지 않는다.
+- Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
+  `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
+  result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
+  충돌한다.
+- 비교 결과(Finding Resolution, 점수·Coverage delta)는 별도 item으로 저장하지 않는다. 두 immutable
+  Assessment에서 읽을 때 계산하는 projection이다. 억제 여부도 저장하지 않고 조회 시 유효한 예외를
+  join해 표시만 한다. 예외는 만료되므로 저장하면 만료 후 과거 결과가 사실과 달라진다.
+- Terraform state는 이 metadata table에 두지 않는다. 고객 bootstrap stack이 만드는 별도 S3 state
+  bucket과 DynamoDB lock table을 사용하고, state key는 `(repository_id, workspace)`로 분리한다.
+- 감사 event의 `action` 값은 `AuditAction` 어휘를 사용한다. M3에서 `DEPLOYMENT_REQUESTED`,
+  `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+  `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가된다.
+
 ## Example items
 
 ```json
@@ -242,3 +273,6 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 | Audit/approval retention, Object Lock, and CloudTrail audit-destination lifecycle policy | A + Security | Before customer deployment | Compliance controls |
 | Per-assessment result volume and pagination threshold | C + A | Assessment implementation | Query/pagination limits |
 | Additional reporting/search index requirements | A/B/C/D | Before UI reporting implementation | GSI additions |
+| Deployment item 필드와 상태 전이, workflow event key (ADR-0019) | A + D | M3 착수 전 | Deployment 상태 저장·조회, apply 재검증 |
+| Terraform state bucket/lock table 소유와 state key 분리 (ADR-0019) | D + Security | M3 착수 전 | plan-apply 재현성, 고객 bootstrap 확장 |
+| 검증 Assessment 필드 확장(`phase`, `source_assessment_id`, `deployment_id`) (ADR-0020) | C + A | M3 착수 전 | Post-Deploy Verification 저장, before/after 비교 |

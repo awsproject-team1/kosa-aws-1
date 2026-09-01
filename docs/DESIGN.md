@@ -104,6 +104,22 @@ revision-bound authoritative work를 다시 읽어 `TERRAFORM_PATCH`에는 injec
 `ACTUAL_SYNC`에는 injected Sync port 하나만 호출한다. `MANUAL_REVIEW`와 `SUPPRESSED`는 Job을 만들지
 않는다. D의 `RUN_DEPLOYMENT`는 이 단계와 분리된 Deployment Worker 명령이다.
 
+M3 승인 배포와 Post-Deploy Verification의 실행 경계는 ADR-0019와 ADR-0020이 `Proposed` 상태로
+정의한다. 합의 전에는 각 역할이 아래 값을 임의로 정하지 않는다. Deployment는 A가 발급한
+`deployment_id`로 시작해 `PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED →
+WAITING_APPROVAL → APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED`를 조건부 write로
+전이하고, `BLOCKED`, `MANUAL_REVIEW`, `REJECTED`, `VERIFICATION_INDETERMINATE`로 분기한다. 하나의
+Deployment는 하나의 Job이며 Job의 write-once `assessment_id`는 검증 Assessment를 가리킨다. 원
+Assessment는 Deployment record가 참조한다. Post-Deploy Verification은 원 Assessment를 덮어쓰지 않고
+`phase`, `source_assessment_id`, `deployment_id`를 가진 새 Assessment로 저장하며, 원 Assessment와 같은
+Policy Profile version·`model_profile_id`·`rubric_version`으로 같은 평가 계획을 다시 평가한다. 변화가
+인프라 개선인지 모델 차이인지 구분할 수 없게 되므로 최신 Profile로 재평가하지 않는다. 재평가는 apply
+완료 확인 후 30초 지연 뒤 시작하고, 기대와 다른 Actual은 총 세 번까지 재조회한 뒤에도 다르면
+`VERIFICATION_FAILED`가 아니라 `VERIFICATION_INDETERMINATE`로 사람에게 보낸다. AWS 전파 지연을 정책
+위반으로 확정하지 않는다. Finding 해소 여부와 점수·Coverage 변화는 AI 판정이 아니라 두 immutable
+Assessment의 결정적 비교이며, planned 평가 집합이나 Profile/rubric이 다르면 delta를 만들지 않고
+비교 불가로 표시한다.
+
 Assessment, Remediation, Deployment API는 검증·Job 저장 후 대응 Queue에 최소
 `WorkflowTask(job_id, expected_revision, command)`만 전송하고 `202 + job_id`를 반환한다.
 Queue는 진행 상태를 보관하지 않는다. Worker는 DynamoDB에서 revision-bound checkpoint를
@@ -138,6 +154,21 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   Environment에서 사람이 commit/key/SHA-256/S3 Version ID를 승인한 뒤, 배포 job이 exact version을
   재검증하고 모든 Lambda에 고정한다.
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.
+- (ADR-0019, `Proposed`) 승인 대상 plan artifact는 `terraform show -json`을 canonical JSON으로
+  정규화한 바이트이며 `plan_hash`는 그 SHA-256이다. binary saved plan은 별도 artifact로 두고 apply는
+  그 saved plan만 적용한다. Apply 직전에는 `plan_hash`와 함께 plan 시점의 Terraform **state serial**도
+  재검증한다. hash 일치는 같은 계획을 보장하지만 같은 state를 보장하지 않는다.
+- (ADR-0019, `Proposed`) Terraform state는 고객 bootstrap stack이 만드는 별도 S3 bucket과 DynamoDB
+  lock table에 두고 state key를 `(repository_id, workspace)`로 분리한다. apply 대상 commit은 default
+  branch의 merge commit이며 PR head commit의 plan은 승인 대상이 아니다.
+- (ADR-0019, `Proposed`) 고객 repository의 plan/apply workflow는 `ci/terraform/` template으로 제공하고
+  고객 관리자가 1회 수동 설치한다. GitHub App은 `contents`/`pull_requests` write만 요청하고
+  `workflows: write`는 요청하지 않는다. App이 workflow를 쓸 수 있으면 승인 경계를 우회한 임의 코드
+  실행 경로가 생긴다.
+- (ADR-0019, `Proposed`) 승인은 apply를 트리거하지 않는다. A는 승인 record와 dispatch outbox만 쓰고 D
+  Deployment Worker가 재검증 뒤 dispatch한다. 이중 apply는 `APPROVED → APPLYING` 조건부 전이로 막는다.
+  Plan/Apply 완료 Event는 신호일 뿐이며 D가 `run_id`로 Actions run을 다시 읽어 대조한다. GitHub
+  Actions에 DynamoDB write 권한을 주지 않는다.
 - M0 Worker는 packaged synthetic fixture만 처리하며 ArtifactBucket 접근 권한을 갖지 않는다.
   고객 artifact 접근은 tenant-scoped runtime identity가 구현·검토된 뒤에만 허용한다
   (ADR-0014).
@@ -154,6 +185,17 @@ Model, Prompt, Rubric, Rule, Policy Document, Context Retrieval 또는 Tool이 �
 2026-08-31 Bedrock 전체 모델 선별 및 역할별 반복 호출에 따른 현재 추천과 재현 방법은
 `docs/evaluations/BEDROCK_MODEL_SELECTION.md`에 기록한다. 모델 배정은 고정 불변값이 아니며
 Golden Case 확장 또는 위 품질 입력 변경 시 같은 절차로 재평가한다.
+
+(ADR-0020, `Proposed`) Deployment Readiness는 결정적 Code이며 모델을 호출하지 않는다. Post-Deploy
+Verification은 Assessment Profile을 재사용하므로 MVP에서 Deployment 역할 Model Profile을 배정하지
+않는다. 벤치마크의 Deployment 후보는 근거 기록으로만 남기고, 결정적 판정 단계를 임의로 LLM화하지
+않는다.
+
+(ADR-0021, `Proposed`) `dev → main` 통합 PR은 Golden Dataset 반복 평가 리포트를 첨부하며 목표
+미달이면 릴리스를 진행하지 않는다. 미달 시 선택지는 rubric/prompt/Golden Case 재고정 또는 ADR-0003
+절차에 따른 Anchor 전환이며, 목표치를 낮추는 판단은 개인이 하지 않는다. 세 관점(`IAC`,
+`AWS_ACTUAL`, `DRIFT`) 중 하나라도 Golden Case가 없어 측정하지 못한 리포트는 Gate 통과 근거로 쓰지
+않는다.
 
 ## Development ownership and repository boundaries
 
@@ -178,3 +220,8 @@ Operational and domain metadata uses DynamoDB while large immutable artifacts us
 ## Decision records
 
 장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery, AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow, Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology, Customer Policy Ingestion을 다룬다.
+
+M3/M4 착수 전 합의가 필요한 세 결정은 `Proposed` 상태로 남아 있다: ADR-0019(승인 배포 실행 경계),
+ADR-0020(Post-Deploy Verification과 before/after 비교), ADR-0021(Demo·Release readiness gate). 세 ADR이
+`Accepted`가 되기 전에 D는 live plan/apply 경로를, A는 Deployment 생성·후속 전이를, C는 재평가
+Assessment와 비교 projection을 구현하지 않는다.

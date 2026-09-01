@@ -30,3 +30,22 @@
 - Task Done은 Review, 필수 CI, `dev` Merge, 필요한 Test·문서 갱신, `PROGRESS.md` 갱신을 모두 만족해야 한다. Milestone Done은 관련 Task와 `dev` 통합 검증 완료, Final Release/Demo Done은 E2E·Release 검증 및 `dev → main` PR Merge까지를 뜻한다.
 - Architecture 변경은 `docs/DESIGN.md`와 필요한 ADR, API 변경은 `docs/API.md`, Schema 변경은 `docs/CONTRACTS.md`를 같은 PR에서 갱신한다.
 - Open Decision은 Decision, Owner, Needed by, Blocks, Proposed options, Final record를 남긴다.
+
+## Release gate (`dev → main`)
+
+아래 목록은 ADR-0021이 `Proposed` 상태로 제안한 릴리스 게이트다. 합의 시 확정 표기로 옮긴다.
+
+- [ ] 데모 폐루프 E2E 실행 기록 (Assessment → Finding → Remediation → PR → plan → 승인 → apply →
+      Post-Deploy Verification)
+- [ ] Golden Dataset 반복 평가 리포트와 목표(정확도·Evidence·일치율 90% 이상, Score 편차 ±10점)
+      대비 결과. 세 관점 중 측정하지 못한 관점이 있으면 통과 근거로 쓰지 않는다
+- [ ] 관측·비용 기록: `EXECUTION_ERROR` 0건, DLQ depth 0, Queue age 최대값, checkpoint 재개 횟수,
+      plan/apply 실패 0건, 승인 없는 apply 0건, 역할별 Bedrock 호출·토큰·p95 지연, 데모 1회 비용
+- [ ] Secret scan과 Python/Frontend/Terraform 검증 결과
+- [ ] 문서 Freshness: `docs/PRD.md`, `docs/DESIGN.md`, `docs/API.md`, `docs/CONTRACTS.md`,
+      `docs/DATABASE.md`, `docs/architecture/`, `docs/decisions/`가 구현과 일치하고 `Proposed` ADR이
+      남아 있지 않음
+- [ ] `PROGRESS.md`의 M0–M3 Exit criteria 충족 상태
+
+품질 목표 미달 시 목표를 낮추지 않는다. rubric/prompt/Golden Case를 재고정해 재실행하거나
+ADR-0003 절차로 Anchor 전환을 결정한다.

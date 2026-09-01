@@ -102,6 +102,9 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.
 - Deployment 승인 요청은 `commit_sha`와 `plan_hash`를 포함한다. Backend는 저장된
   `TerraformPlan`과 정확히 일치할 때만 승인 상태를 기록하며, Apply 직전에 다시 검증한다.
+  `plan_hash`가 어떤 바이트의 digest인지(canonical JSON plan), Terraform state serial을 함께
+  재검증한다는 점, apply 대상 commit이 default branch의 merge commit이라는 점은 ADR-0019에서
+  `Proposed` 상태로 정의됐다. 합의 전에는 이 세 값을 구현에서 임의로 정하지 않는다.
 
 세부 wire shape와 runtime validation은 `packages/contracts/`가 정본이고 M0 예시는
 `fixtures/m0/`에 둔다.
@@ -142,6 +145,46 @@ revision을 지정할 수 없다.
 `commit_sha`/`plan_hash` binding과 Admin RBAC를 강제한다. D live Patch/Sync/GitHub/Terraform
 adapter와 customer Lambda runtime composition은 아직 연결 대상이다. 현재 A/C API·repository·Worker
 경계는 mock/fixture로 통합 가능하지만 외부 실행이 live라고 주장하지 않는다.
+
+## Planned M3 approved-apply and verification endpoints
+
+아래 endpoint는 아직 노출되지 않았고 경계는 **ADR-0019·ADR-0020이 `Proposed`인 상태**다. 두 ADR이
+`Accepted`가 되기 전에는 구현하지 않는다. 현재 노출된 것은 `/deployments/{deploymentId}/approve`
+하나이며, 그것도 injected service가 있을 때만 handler에 배선된다.
+
+| Method | Planned path | Purpose |
+| --- | --- | --- |
+| `POST` | `/remediations/{remediationId}/deployments` | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
+| `GET` | `/deployments/{deploymentId}` | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
+| `GET` | `/deployments/{deploymentId}/verification` | Post-Deploy Verification의 before/after 비교 projection 조회 |
+| `GET` | `/audit-events` | Admin 전용 감사 이력 조회 |
+
+- `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
+  지정하지 않는다. A는 저장된 `RemediationDecision`이 actionable인지, C Worker 결과가 있는지,
+  `TERRAFORM_PATCH`의 대상 commit이 default branch에 merge됐는지, 고객 repository CI가 그 commit에서
+  성공했는지를 확인한 뒤에만 Deployment를 만든다. 하나라도 어긋나면 Deployment를 만들지 않는다
+  (ADR-0019).
+- 승인 화면이 `commit_sha`와 `plan_hash`를 보내려면 먼저 그 값을 읽어야 하므로
+  `GET /deployments/{deploymentId}`가 승인 요청의 선행 호출이다. 응답은 plan 요약과 hash를
+  포함하지만 plan artifact bytes나 공개 S3 URL은 포함하지 않는다.
+- `POST /deployments/{deploymentId}/reject`는 Admin 전용이고 body allow-list는 enum `reason`과
+  선택적 `ticket_reference`다. 자유 문장 사유는 허용하지 않는다. 거절은 Deployment를 terminal
+  `REJECTED`로, Job을 `CANCELLED`로 전이시키고 audit event를 같은 transaction에 쓴다. 같은
+  `plan_hash`의 재승인은 허용하지 않으며 재시도는 새 plan과 새 Deployment로만 한다.
+- 승인은 apply를 트리거하지 않는다. A는 승인 record와 dispatch outbox만 쓰고, D Deployment Worker가
+  승인·`commit_sha`·`plan_hash`·Terraform state serial을 재검증한 뒤 GitHub Actions를 dispatch한다.
+- Plan/Apply 완료는 OIDC EventBridge Event로 Deployment Worker를 재개하며 Client callback은 사용하지
+  않는다. Event 값은 신뢰 대상이 아니라 신호이고, D가 `run_id`로 Actions run을 다시 읽어 workflow,
+  repository, `ref`, conclusion, plan artifact digest를 대조한다.
+- `GET /deployments/{deploymentId}/verification` 응답은 Finding Resolution
+  (`RESOLVED`/`UNRESOLVED`/`REGRESSED`/`INDETERMINATE`/`NO_LONGER_APPLICABLE`)과 점수·Coverage
+  비교를 포함한다. 비교는 두 `readiness_score`가 모두 non-null이고 planned 평가 집합과
+  `model_profile_id`/`rubric_version`이 동일할 때만 delta를 반환하며, 그렇지 않으면
+  `comparable: false`와 이유 코드를 반환한다 (ADR-0020).
+- 검증 결과는 원 Assessment를 덮어쓰지 않는다. Post-Deploy Verification은 `phase`,
+  `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
+
+경로와 wire shape는 구현 PR의 Producer/Consumer Contract Review에서 최종 확정한다.
 
 ## Error envelope
 
