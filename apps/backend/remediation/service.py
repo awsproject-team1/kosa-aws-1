@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from packages.contracts import IaCSnapshot, RemediationPatch
+from packages.contracts import RemediationContext, RemediationPatch
 
 
 class RemediationContractError(ValueError):
@@ -10,7 +10,7 @@ class RemediationContractError(ValueError):
 
 
 class PatchGenerator(Protocol):
-    def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch: ...
+    def generate(self, *, context: RemediationContext) -> RemediationPatch: ...
 
 
 class RemediationService:
@@ -21,12 +21,12 @@ class RemediationService:
             raise TypeError("generator is required")
         self._generator = generator
 
-    def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch:
-        if not isinstance(finding_id, str) or not finding_id.strip():
-            raise ValueError("finding_id must be a non-empty string")
-        if not isinstance(snapshot, IaCSnapshot):
-            raise TypeError("snapshot must be an IaCSnapshot")
-        patch = self._generator.generate(finding_id=finding_id, snapshot=snapshot)
+    def generate(self, *, context: RemediationContext) -> RemediationPatch:
+        if not isinstance(context, RemediationContext):
+            raise TypeError("context must be a RemediationContext")
+        finding_id = context.finding.finding_id
+        snapshot = context.snapshot
+        patch = self._generator.generate(context=context)
         if not isinstance(patch, RemediationPatch):
             raise RemediationContractError("generator must return a RemediationPatch")
         if patch.finding_id != finding_id:

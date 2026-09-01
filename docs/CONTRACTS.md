@@ -208,7 +208,7 @@ zip 한도로는 잡히지 않는다 — 증폭이 압축 해제 이후 Parser �
 
 | 값 | 역할 |
 | --- | --- |
-| `RuleLifecycle` | `CANDIDATE`/`APPROVED`/`REJECTED`/`SUPERSEDED`. `docs/DATABASE.md`의 Rule metadata가 담는 lifecycle |
+| `RuleLifecycle` | `CANDIDATE`/`APPROVED`/`REJECTED`/`SUPERSEDED`. `RuleCandidate`의 승인 상태이며 게시된 Rule item은 `APPROVED`를 기록 |
 | `RuleCandidate` | 승인 전 Rule. frozen이며 `approved()`가 새 값을 만든다 |
 | `PolicySourceApproval` | `(source_id, source_version, artifact_id, s3_version_id, content_sha256)`을 인용하는 immutable 승인 record |
 | `ApprovalRejectionCode` | 승인·게시 거부 사유. 자유 문장이 아니다 |
@@ -321,6 +321,35 @@ Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Reposi
 이 새 Contract의 Producer는 C(컨텍스트·verdict)와 D(plan summary)이며 Consumer는 A(approval
 gate)와 D(후속 OIDC apply revalidation)다. B는 Rule/Manual Review 정책을 제공하지만 이
 Contract에 정책 원문을 넣지 않는다.
+
+### Finding-to-remediation integration handoff
+
+M2의 실제 호출 경계는 다음 순서를 따른다.
+
+```text
+A: POST /findings/{finding_id}/remediations
+  -> customer-scoped Finding read (#16 apps/backend/assessment/findings.py)
+  -> C: Finding + IAC/AWS_ACTUAL 결과를 읽어 context/strategy 결정
+  -> B: 승인된 Rule/Manual Review policy 조회
+  -> immutable RemediationContext 저장
+  -> D: generate(context)로 Patch/Plan 생성
+```
+
+여기서 `finding_id`는 A의 선택자와 customer-scoped 조회 키일 뿐이다. C가 만든
+`RemediationContext`가 Finding 객체, strategy, snapshot, evidence를 보존하는 유일한
+실행 handoff이며, D의 Patch producer는 이 Context를 입력으로 받아야 한다. 따라서
+`decide(Finding)`와 `generate(finding_id)`처럼 객체와 ID가 갈리는 임시 시그니처를
+통합 Contract로 굳히지 않는다. Finding reader, Context builder/persistence port, B policy
+reader, D generator의 Producer/Consumer와 함께 이 경계를 통합 테스트한다.
+
+### Rule item writer invariant
+
+`RULE#{rule_id}#VERSION#{version}`의 customer-catalog writer는
+`apps/backend/policy/bootstrap.py`의 Registry bootstrap 하나로 제한한다. bootstrap은 게시된
+`POLICY_RULE` item에 `lifecycle=APPROVED`를 기록하고, `_matches_existing()`도 그 형태를
+기준으로 비교한다. 기존에 lifecycle 없이 저장된 legacy item은 APPROVED로 정규화해 재실행을
+허용하지만, 다른 writer가 다른 lifecycle이나 내용을 쓰면 계속 fail-closed한다. 따라서 같은
+키에 lifecycle을 별도로 쓰는 두 번째 writer를 만들지 않는다.
 
 ## Contract change review
 

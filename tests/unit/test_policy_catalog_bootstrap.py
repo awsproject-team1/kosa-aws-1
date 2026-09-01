@@ -11,7 +11,7 @@ from apps.backend.policy import (
     PolicyContextResolver,
     load_rule_registry,
 )
-from packages.contracts import AssessmentPhase
+from packages.contracts import AssessmentPhase, RuleLifecycle
 
 REGISTRY = load_rule_registry(Path(__file__).parents[2] / "fixtures" / "rules")
 
@@ -49,6 +49,8 @@ class PolicyCatalogBootstrapTest(unittest.TestCase):
             len(REGISTRY.sources) + len(REGISTRY.rules) + len(REGISTRY.profiles),
         )
         self.assertEqual(bootstrap.publish(REGISTRY), 0)
+        rule_item = table.items[("CUSTOMER#cust-001", "RULE#S3-PUBLIC-001#VERSION#2026-08-31")]
+        self.assertEqual(rule_item["lifecycle"], RuleLifecycle.APPROVED.value)
         catalog = DynamoDbPolicyCatalog(table, customer_id="cust-001")
         resolved = catalog.get_profile("profile-mvp-baseline")
         self.assertIsNotNone(resolved)
@@ -76,3 +78,13 @@ class PolicyCatalogBootstrapTest(unittest.TestCase):
 
         with self.assertRaisesRegex(PolicyCatalogBootstrapError, "different immutable"):
             bootstrap.publish(REGISTRY)
+
+    def test_accepts_legacy_rule_item_without_lifecycle_on_republish(self) -> None:
+        table = Table()
+        bootstrap = DynamoDbPolicyCatalogBootstrap(table, customer_id="cust-001")
+        bootstrap.publish(REGISTRY)
+        for key, item in table.items.items():
+            if key[1].startswith("RULE#"):
+                item.pop("lifecycle", None)
+
+        self.assertEqual(bootstrap.publish(REGISTRY), 0)
