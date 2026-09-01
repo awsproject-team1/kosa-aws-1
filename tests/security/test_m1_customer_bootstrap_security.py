@@ -88,3 +88,18 @@ class CustomerBootstrapSecurityTest(unittest.TestCase):
         )
         self.assertIn("s3:GetObjectVersion", artifact_read["Action"])
         self.assertEqual(artifact_read["Resource"], "${LambdaCodeBucket.Arn}/lambda/m0/*")
+
+    def test_github_role_can_read_scoped_deployment_diagnostics(self) -> None:
+        policies = self.resources["GitHubActionsDeploymentRole"]["Properties"]["Policies"]
+        statements = policies[0]["PolicyDocument"]["Statement"]
+        cloudformation_read = next(
+            statement
+            for statement in statements
+            if "cloudformation:DescribeChangeSet" in statement["Action"]
+        )
+        self.assertIn("cloudformation:DescribeStackEvents", cloudformation_read["Action"])
+        self.assertIn("cloudformation:ListChangeSets", cloudformation_read["Action"])
+        self.assertEqual(
+            cloudformation_read["Resource"],
+            "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*",
+        )
