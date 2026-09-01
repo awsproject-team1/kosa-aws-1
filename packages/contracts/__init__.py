@@ -66,7 +66,7 @@ from packages.contracts.remediation import (
     DeploymentReadinessStatus,
     PlanReadinessInput,
     RemediationContext,
-    RemediationStrategy,
+    RemediationStartResponse,
 )
 from packages.contracts.remediation_policy import (
     ManualReviewCode,
@@ -124,7 +124,7 @@ __all__ = [
     "ReadinessScore",
     "RemediationContext",
     "RemediationPatch",
-    "RemediationStrategy",
+    "RemediationStartResponse",
     "ManualReviewCode",
     "RemediationAction",
     "RemediationDecision",

@@ -21,6 +21,8 @@ from apps.backend.repositories.ports import (
     RevisionConflictError,
     StoredDataError,
 )
+from apps.backend.repositories.remediation import DynamoDbRemediationExceptionRepository
+from apps.backend.repositories.remediation_work import DynamoDbRemediationWorkRepository
 from apps.backend.repositories.s3 import S3ArtifactStore
 
 __all__ = [
@@ -35,6 +37,8 @@ __all__ = [
     "DynamoDbAssessmentWorkflowRepository",
     "DynamoDbDeploymentApprovalRepository",
     "DynamoDbPolicyApprovalRepository",
+    "DynamoDbRemediationExceptionRepository",
+    "DynamoDbRemediationWorkRepository",
     "DynamoDbJobRepository",
     "InvalidJobMutationError",
     "JobRepository",

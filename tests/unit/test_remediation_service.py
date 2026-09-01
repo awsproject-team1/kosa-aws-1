@@ -14,7 +14,6 @@ from packages.contracts import (
     RemediationContext,
     RemediationDecision,
     RemediationPatch,
-    RemediationStrategy,
 )
 
 
@@ -72,7 +71,6 @@ def context() -> RemediationContext:
     return RemediationContext(
         finding=finding,
         snapshot=snapshot(),
-        strategy=RemediationStrategy.PATCH_IAC,
         evidence_references=finding.evidence_references,
     )
 

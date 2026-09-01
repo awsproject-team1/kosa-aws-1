@@ -13,10 +13,20 @@
   승인 판정, Profile publication 거부 규칙) 구현 완료. Rule Registry와 `policies-local/`은
   여전히 개발 seed이며, 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C),
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
-- M2 착수: B의 Remediation 조치 판정 경계(허용 범위·예외·Manual Review)와 D의 결정적 Patch
-  생성 경계(PR #21)가 각각 올라와 있고, 둘을 잇는 호출부(A의 Remediation API)가 다음 조각이다
+- M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
+  Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
+  분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
 
 ## Completed
+
+- M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
+  정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
+  읽어 B policy를 호출하고 actionable decision은 context/Job/Outbox/audit와 원자 저장하며,
+  `MANUAL_REVIEW`/`SUPPRESSED`는 Job 없이 decision/audit만 기록한다. Admin-only expiring exception
+  registration/storage와 tenant isolation을 추가했다. C Worker는 exact revision의 stored work를
+  다시 읽어 command/action/identity를 검증하고 injected D Patch/Sync port 하나만 호출한다.
+  `SYNC_ACTUAL_STATE`는 C queue command이고 D `RUN_DEPLOYMENT`와 분리된다. D live adapter/runtime
+  wiring은 구현하지 않았다.
 
 - M2 B Remediation 허용 범위·예외·Manual Review 정책 경계 (ADR-0017): Finding 하나를
   `TERRAFORM_PATCH`/`ACTUAL_SYNC`/`MANUAL_REVIEW`/`SUPPRESSED` 중 하나로 판정하는 순수 함수와
@@ -149,15 +159,10 @@
   `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정 전에는 고객 sandbox 배포나 실제
   GitHub/AWS/Bedrock E2E를 시작하지 않는다. IAC 관점이 `git/blobs`를 읽으므로 GitHub App
   installation token에는 승인 repository의 Contents read 권한이 필요하다.
-- M2 A: Remediation API가 `RemediationPolicy.decide()`를 Patch 생성 **앞에서** 호출하고,
-  `MANUAL_REVIEW`/`SUPPRESSED` 결정은 Job을 만들지 않고 사유와 함께 보고한다. 고객 예외의
-  등록·승인·저장(만료 포함)과 감사 record도 A 경계다
-- M2 D: `FixturePatchGenerator` 호출부를 `RemediationDecision`이 `TERRAFORM_PATCH`인
-  Finding으로 제한하고, `ACTUAL_SYNC` 결정은 Patch 없이 현재 commit을 배포 대상으로 넘긴다
-- M2 A/C/D: ADR-0017·ADR-0018에 따라 `RemediationDecision`을 단일 판정 정본으로
-  연결한다. A는 판정 호출·저장·Job 분기, C는 중복 `RemediationStrategy` 판정
-  제거, D는 `TERRAFORM_PATCH` 결정의 Patch 생성 강제와 `ACTUAL_SYNC` 실행을
-  구현한다
+- M2 D/Shared: C Worker의 `PatchAction`/`SyncAction` port에 live GitHub branch/commit/PR와
+  Terraform refresh-plan adapter를 연결하고, customer-approved runtime identity로 Remediation
+  Lambda/SQS event source를 배선한다. `RUN_DEPLOYMENT`와 Human Approval/Apply는 D Deployment Worker에
+  남기며 A/B/C mock flow를 변경하지 않는다
 - M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
   DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
   같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
@@ -223,9 +228,9 @@
 
 **Exit criteria:** 선택된 Finding에서 최소 Terraform Patch, Branch/Commit/PR, CI 및 Deployment Readiness Validation/plan까지 이어진다.
 
-- [ ] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log
+- [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
-- [ ] **C — AI Evaluation:** Finding 근거 기반 Remediation Context와 Deployment Readiness 평가
+- [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
 - [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 

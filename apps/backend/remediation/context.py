@@ -1,13 +1,12 @@
-"""Deterministic M2 C remediation-context derivation from M1 evidence."""
+"""Deterministic M2 C remediation-context assembly from M1 evidence."""
 
 from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
-    EvaluationStatus,
     Finding,
     IaCSnapshot,
 )
-from packages.contracts.remediation import RemediationContext, RemediationStrategy
+from packages.contracts.remediation import RemediationContext
 
 
 class RemediationContextError(ValueError):
@@ -21,21 +20,16 @@ def build_remediation_context(
     iac_result: EvaluationResult,
     actual_result: EvaluationResult,
 ) -> RemediationContext:
-    """Derive a D handoff without reinterpreting or inventing M1 evidence."""
+    """Validate one evidence set without making a remediation action decision.
+
+    Action selection belongs exclusively to B's ``RemediationPolicy``. C keeps
+    the evidence and immutable snapshot that the stored decision will consume.
+    """
     if not isinstance(finding, Finding):
         raise TypeError("finding must be a Finding")
     if not isinstance(snapshot, IaCSnapshot):
         raise TypeError("snapshot must be an IaCSnapshot")
     _require_matching_pair(finding, iac_result, actual_result)
-
-    if iac_result.status is EvaluationStatus.FAIL:
-        strategy = RemediationStrategy.PATCH_IAC
-    elif (
-        iac_result.status is EvaluationStatus.PASS and actual_result.status is EvaluationStatus.FAIL
-    ):
-        strategy = RemediationStrategy.SYNC_CURRENT_IAC
-    else:
-        strategy = RemediationStrategy.MANUAL_REVIEW
 
     evidence = tuple(
         dict.fromkeys(
@@ -51,7 +45,6 @@ def build_remediation_context(
     return RemediationContext(
         finding=finding,
         snapshot=snapshot,
-        strategy=strategy,
         evidence_references=evidence,
     )
 

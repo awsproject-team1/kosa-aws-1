@@ -115,9 +115,10 @@ read를 지원하지 않으면 관점을 조용히 빼지 않고 실패한다.
 
 `WorkflowTask`는 Queue에 Artifact 본문이나 고객 scope를 복사하지 않고 `job_id`,
 `expected_revision`, `command`만 전달한다. Worker는 JWT-derived Job 소유 데이터와 저장된
-checkpoint를 DynamoDB에서 다시 읽고, 큰 데이터는 S3 Artifact reference로 복원한다. 역할별
-Queue는 `ASSESS_RESOURCE`, `GENERATE_REMEDIATION`, `RUN_DEPLOYMENT`와 Plan/Apply 완료
-command를 대응 Worker로 전달한다.
+checkpoint를 DynamoDB에서 다시 읽고, 큰 데이터는 S3 Artifact reference로 복원한다. Assessment
+Queue는 `ASSESS_RESOURCE`, C Remediation Queue는 `GENERATE_REMEDIATION`과
+`SYNC_ACTUAL_STATE`, D Deployment Queue는 `RUN_DEPLOYMENT`와 Plan/Apply 완료 command만
+각 대응 Worker로 전달한다. Queue별 dispatcher는 다른 역할의 command를 거부한다.
 
 Assessment Worker는 한 리소스의 허용 Rule 묶음을 하나의 resumable work item으로 처리한다.
 Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task 전송 뒤 종료한다. 일시 오류는
@@ -336,46 +337,46 @@ Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Reposi
 
 ## M2 A/C remediation and readiness boundary
 
-`packages/contracts/remediation.py`는 M1 Finding을 D의 Patch/Plan producer와 A의 승인
-경계에 안전하게 연결한다. 이 Contract는 customer workload write 권한이나 Apply 요청을 표현하지
-않는다.
+`packages/contracts/remediation.py`는 M1 Finding을 A의 정책·Job 경계와 C Remediation Worker,
+D의 Patch/Plan port에 안전하게 연결한다. customer workload write나 Apply 요청은 표현하지 않는다
+(ADR-0018).
 
-- C는 동일한 Resource/Rule/version의 `IAC`와 `AWS_ACTUAL` immutable 결과를 함께 읽어
-  `RemediationContext`를 만든다. IaC가 `FAIL`이면 `PATCH_IAC`, IaC가 `PASS`이고 Actual만
-  `FAIL`이면 `SYNC_CURRENT_IAC`, 그 외 증거 불충분·안전한 매핑 부재는 `MANUAL_REVIEW`다.
-- D는 raw Terraform Plan을 immutable `TerraformPlan` artifact로 보관하고, C에
-  `PlanReadinessInput`(refresh 여부, destructive change 여부, Finding resource mapping)만
-  전달한다. 원 Plan bytes·secret은 이 Contract에 넣지 않는다.
-- C의 `DeploymentReadiness`는 exact `deployment_id`/`commit_sha`/`plan_hash`에 바인딩된
-  `READY_FOR_APPROVAL`, `BLOCKED`, `MANUAL_REVIEW` verdict다. `READY_FOR_APPROVAL`도 Apply
-  권한이 아니며, A의 Admin 승인과 D의 GitHub Actions OIDC 재검증이 추가로 필요하다.
-- A는 `DeploymentApprovalService`에서 Admin만 승인하게 하고, C verdict와 D Plan의 세 binding이
-  모두 일치할 때만 `DeploymentApproval` 및 audit record를 조건부·원자적으로 기록한다. 실제
-  DynamoDB/API adapter는 A가 이 `DeploymentApprovalRepository` port를 구현할 때 연결한다.
-
-이 새 Contract의 Producer는 C(컨텍스트·verdict)와 D(plan summary)이며 Consumer는 A(approval
-gate)와 D(후속 OIDC apply revalidation)다. B는 Rule/Manual Review 정책을 제공하지만 이
-Contract에 정책 원문을 넣지 않는다.
+- `RemediationDecision`은 API, 저장소, Worker가 사용하는 **유일한 action 정본**이다.
+  `RemediationStrategy`는 존재하지 않는다.
+- C의 `RemediationContext`는 authoritative `Finding`, exact `IaCSnapshot`, deduplicated evidence
+  references만 보존한다. IAC/AWS_ACTUAL identity와 evidence를 검증하지만 action은 판정하지 않는다.
+- A는 context/target/customer exception을 읽고 B의 `RemediationPolicy.decide()`를 호출한다.
+  Actionable decision만 revision-zero Job과 최소 Outbox를 만들고 context/decision/audit와 원자 저장한다.
+- `MANUAL_REVIEW`/`SUPPRESSED`는 정상 decision 응답이다. decision/audit만 기록하고 Job/Outbox는 없다.
+- `RemediationStartResponse`는 항상 `decision`을 포함한다. Actionable은 `job`을 포함한 `202`,
+  non-actionable은 `job: null`인 `200`이다.
+- C의 revision-bound `RemediationWorker`는 `job_id + expected_revision`으로 authoritative work를
+  다시 읽는다. `GENERATE_REMEDIATION ↔ TERRAFORM_PATCH`,
+  `SYNC_ACTUAL_STATE ↔ ACTUAL_SYNC`만 허용하고 action에 맞는 injected D port 하나만 호출한다.
+- D는 raw Plan을 immutable `TerraformPlan` artifact로 보관하고 C에 `PlanReadinessInput`만
+  전달한다. C의 `DeploymentReadiness`는 exact `deployment_id`/`commit_sha`/`plan_hash`에
+  바인딩되지만 Apply 권한은 아니다. A Admin 승인과 D OIDC 재검증이 계속 필요하다.
 
 ### Finding-to-remediation integration handoff
 
-M2의 실제 호출 경계는 다음 순서를 따른다.
-
 ```text
 A: POST /findings/{finding_id}/remediations
-  -> customer-scoped Finding read (#16 apps/backend/assessment/findings.py)
-  -> C: Finding + IAC/AWS_ACTUAL 결과를 읽어 context/strategy 결정
-  -> B: 승인된 Rule/Manual Review policy 조회
-  -> immutable RemediationContext 저장
-  -> D: generate(context)로 Patch/Plan 생성
+  -> JWT customer scope에서 C RemediationContext read
+  -> A RemediationTarget + customer RemediationException read
+  -> B RemediationPolicy.decide(finding, customer_id, target, at, exceptions)
+  -> identity 검증
+  -> MANUAL_REVIEW/SUPPRESSED: decision + audit만 저장, 200
+  -> TERRAFORM_PATCH/ACTUAL_SYNC: context + decision + Job + Outbox + audit 원자 저장, 202
+C RemediationWorker:
+  -> job_id + expected_revision으로 authoritative work 재조회
+  -> command/action/context binding 검증
+  -> D PatchAction 또는 SyncAction 하나만 호출
+  -> validated result를 idempotent store에 기록
 ```
 
-여기서 `finding_id`는 A의 선택자와 customer-scoped 조회 키일 뿐이다. C가 만든
-`RemediationContext`가 Finding 객체, strategy, snapshot, evidence를 보존하는 유일한
-실행 handoff이며, D의 Patch producer는 이 Context를 입력으로 받아야 한다. 따라서
-`decide(Finding)`와 `generate(finding_id)`처럼 객체와 ID가 갈리는 임시 시그니처를
-통합 Contract로 굳히지 않는다. Finding reader, Context builder/persistence port, B policy
-reader, D generator의 Producer/Consumer와 함께 이 경계를 통합 테스트한다.
+Queue에는 `job_id`, `expected_revision`, `command`만 들어간다. `RUN_DEPLOYMENT`는 D Deployment
+Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter와 customer runtime 배선은
+이 mockable Contract의 구현 범위 밖이다.
 
 ### Rule item writer invariant
 

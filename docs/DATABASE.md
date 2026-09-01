@@ -54,7 +54,8 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment and evidence references |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result and severity |
-| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Patch, PR, source Finding references |
+| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context, source Finding, optional Job/result reference |
+| Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
 | Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail |
@@ -72,6 +73,7 @@ counter와 materialized score는 이후 storage migration 전에는 Assessment m
 | Base table | `CUSTOMER#{customer_id}` + `JOB#{job_id}` | Get a customer-scoped Job |
 | Base table | `CUSTOMER#{customer_id}` + `ASSESSMENT#{assessment_id}` prefix | Assessment with results/findings |
 | Base table | `CUSTOMER#{customer_id}` + `DEPLOYMENT#{deployment_id}` prefix | Deployment and approval records |
+| Base table | `CUSTOMER#{customer_id}` + `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}` prefix | 고객의 exact Rule version 예외 조회; resource scope는 조회 후 좁힌다 |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
 | Base table | `CUSTOMER#{customer_id}` + `POLICY_INGESTION#{source_id}#VERSION#{version}` | Processing status of one uploaded Policy Source version |
@@ -92,6 +94,14 @@ M0의 `POST /assessments`는 `ASSESSMENT#{assessment_id}`, 연결된 `JOB#{job_i
 API는 커밋 직후 해당 task의 SQS 전송을 즉시 시도하고 성공한 경우에만 `DISPATCHED`로 전이한다.
 SQS 또는 상태 갱신 실패는 `PENDING`으로 남아, Outbox sweeper가 다음 실행에서 at-least-once로
 재시도한다.
+
+M2 Remediation에서 actionable decision은 `REMEDIATION#{remediation_id}`, 연결된 `JOB#{job_id}`,
+`OUTBOX#JOB#{job_id}`, `REMEDIATION_DECIDED` audit event를 하나의 conditional transaction으로
+쓴다. Remediation item의 `decision`은 B `RemediationDecision.to_dict()`, `context`는 C의
+Finding/Snapshot/evidence 값이며 immutable하다. `MANUAL_REVIEW`와 `SUPPRESSED`는 Remediation과
+audit 두 항목만 쓰고 Job/Outbox는 만들지 않는다. 고객 예외 등록도 exact Rule version key와
+`REMEDIATION_EXCEPTION_APPROVED` audit event를 같은 transaction에 쓰며 ID/customer/approver/time은
+Backend가 발급한다.
 
 ## Example items
 
@@ -192,7 +202,9 @@ Ingestion 레코드의 SK prefix는 `POLICY_INGESTION`이다. 별도 ingestion I
 - DynamoDB TTL is asynchronous; application code must treat expired records as unavailable even before physical deletion.
 - Queue payloads contain only `job_id`, `expected_revision`, and an approved command. Workers
   load the authoritative Job and latest checkpoint with a conditional revision check; a stale or
-  duplicate Queue delivery cannot advance a Job.
+  duplicate Queue delivery cannot advance a Job. C Remediation Worker는 GSI1에서 exact Job revision을
+  확인한 뒤 customer partition의 Remediation context/decision을 consistent read하며 queue의 action이나
+  tenant state를 신뢰하지 않는다.
 - Assessment work is split by resource. With three minutes remaining in its 15-minute Lambda
   budget, a Worker conditionally persists its checkpoint and publishes the next Queue task.
 - Retryable AWS, Bedrock, S3, and GitHub failures receive at most three total attempts before

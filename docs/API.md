@@ -21,7 +21,8 @@
 | `POST` | `/assessments` | Assessment Job 생성 |
 | `GET` | `/jobs/{jobId}` | Job 상태와 결과 조회 |
 | `GET` | `/assessments/{assessmentId}` | Assessment 및 Coverage 조회 |
-| `POST` | `/findings/{findingId}/remediations` | Terraform Remediation 생성 |
+| `POST` | `/findings/{findingId}/remediations` | B policy 판정 후 Remediation 시작 또는 non-action decision 보고 |
+| `POST` | `/remediation-exceptions` | Admin이 만료 필수 고객 예외를 승인·등록 |
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 
@@ -118,19 +119,29 @@ base-table read 뒤 Job owner/administrator authorization을 적용한다. GSI1�
 실행을 시작하는 것은 사용자 확인 뒤의 Backend API뿐이다. GitHub Actions의 Plan/Apply 완료는
 OIDC EventBridge Event를 통해 Deployment Worker를 재개하며, Client callback은 사용하지 않는다.
 
-## M2 A/C staged implementation
+## M2 A/C remediation API
 
-M2 A/C는 현재 Mockable Contract 단계다. C는 persisted M1 Finding과 immutable IaC/Actual
-결과에서 remediation context를 만들고, D가 생산할 refresh-plan summary를 평가해 exact
-`deployment_id`/`commit_sha`/`plan_hash`에 바인딩된 readiness verdict를 만든다. A의 approval
-service는 Admin principal만 허용하며, verdict가 `READY_FOR_APPROVAL`이고 Plan과 세 binding이
-같을 때만 조건부 audit write를 요청한다.
+`POST /findings/{findingId}/remediations`는 body를 받지 않는다. Backend가 JWT customer scope에서
+C `RemediationContext`, A `RemediationTarget`, 고객 예외를 읽고 B
+`RemediationPolicy.decide()`를 호출한다. Client는 Finding, action, customer, Job lifecycle,
+revision을 지정할 수 없다.
 
-따라서 표의 `POST /findings/{findingId}/remediations`, `POST /deployments/{deploymentId}/approve`,
-`POST /deployments/{deploymentId}/reject`는 아직 public Lambda route로 노출하지 않는다. B/D의
-Finding policy·Patch/Plan producer와 A의 DynamoDB repository adapter가 병합된 뒤 동일 Contract로
-route를 배선한다. 이 단계 전에는 Client가 Plan/Approval/Audit 식별자나 상태를 만들어 보낼 수
-없다.
+응답은 `RemediationStartResponse`다.
+
+- `TERRAFORM_PATCH`/`ACTUAL_SYNC`: `202`, `{decision, job}`. A가 decision/context/Job/Outbox/audit를
+  원자 저장하고 C Remediation Queue로 dispatch한다.
+- `MANUAL_REVIEW`/`SUPPRESSED`: `200`, `{decision, "job": null}`. decision/audit만 저장하고
+  Job/Outbox는 만들지 않는다.
+
+`POST /remediation-exceptions`는 Admin 전용이다. body allow-list는 `rule_id`, `rule_version`,
+선택적 `resource_id`, enum `reason`, 필수 `expires_at`, 선택적 `ticket_reference`다. Backend가
+`customer_id`, `exception_id`, `approved_by`, `approved_at`을 발급하고 immutable exception과 audit를
+같이 기록한다. 자유 문장 reason이나 만료 없는 예외는 허용하지 않는다.
+
+`POST /deployments/{deploymentId}/approve`도 injected service가 있을 때 handler에 노출되며 exact
+`commit_sha`/`plan_hash` binding과 Admin RBAC를 강제한다. D live Patch/Sync/GitHub/Terraform
+adapter와 customer Lambda runtime composition은 아직 연결 대상이다. 현재 A/C API·repository·Worker
+경계는 mock/fixture로 통합 가능하지만 외부 실행이 live라고 주장하지 않는다.
 
 ## Error envelope
 

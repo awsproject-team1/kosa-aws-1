@@ -1,8 +1,12 @@
-"""M2 C context and readiness behavior uses only immutable M1/D handoffs."""
+"""M2 C context and readiness use immutable evidence without choosing an action."""
 
 import unittest
 
-from apps.backend.remediation import build_remediation_context, evaluate_deployment_readiness
+from apps.backend.remediation import (
+    RemediationContextError,
+    build_remediation_context,
+    evaluate_deployment_readiness,
+)
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
@@ -13,7 +17,6 @@ from packages.contracts import (
     Finding,
     IaCSnapshot,
     PlanReadinessInput,
-    RemediationStrategy,
     TerraformPlan,
 )
 
@@ -28,7 +31,7 @@ def result(*, perspective: EvaluationPerspective, status: EvaluationStatus) -> E
         severity="HIGH",
         score=0 if status is EvaluationStatus.FAIL else 100,
         rationale="fixed test rationale",
-        evidence_references=("aws:s3:bucket-001",),
+        evidence_references=(f"evidence:{perspective.value}",),
         rubric_version="1",
         model_profile_id="assessment-v1",
     )
@@ -46,7 +49,7 @@ def finding() -> Finding:
         severity=source.severity,
         score=source.score,
         rationale=source.rationale,
-        evidence_references=source.evidence_references,
+        evidence_references=("evidence:finding",),
     )
 
 
@@ -61,6 +64,17 @@ def snapshot() -> IaCSnapshot:
             content_sha256="snapshot-hash",
             customer_id="cust-001",
             repository_id="repo-001",
+        ),
+    )
+
+
+def context():
+    return build_remediation_context(
+        finding=finding(),
+        snapshot=snapshot(),
+        iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
+        actual_result=result(
+            perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
         ),
     )
 
@@ -86,54 +100,46 @@ def plan_input(*, destructive: bool = False, refreshed: bool = True) -> PlanRead
 
 
 class RemediationContextTest(unittest.TestCase):
-    def test_iac_failure_requires_a_patch(self) -> None:
-        context = build_remediation_context(
-            finding=finding(),
-            snapshot=snapshot(),
-            iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
-            actual_result=result(
-                perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
-            ),
-        )
-        self.assertIs(context.strategy, RemediationStrategy.PATCH_IAC)
+    def test_context_preserves_combined_evidence_without_strategy(self) -> None:
+        value = context()
 
-    def test_safe_iac_and_unsafe_actual_syncs_current_commit(self) -> None:
-        context = build_remediation_context(
-            finding=finding(),
-            snapshot=snapshot(),
-            iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.PASS),
-            actual_result=result(
-                perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
-            ),
+        self.assertFalse(hasattr(value, "strategy"))
+        self.assertEqual(
+            value.evidence_references,
+            ("evidence:finding", "evidence:IAC", "evidence:AWS_ACTUAL"),
         )
-        self.assertIs(context.strategy, RemediationStrategy.SYNC_CURRENT_IAC)
-        readiness = evaluate_deployment_readiness(context=context, plan_input=plan_input())
+        self.assertNotIn("strategy", value.to_dict())
+
+    def test_context_rejects_evaluation_for_another_rule(self) -> None:
+        mismatched = result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL)
+        object.__setattr__(mismatched, "rule_id", "other-rule")
+        with self.assertRaisesRegex(RemediationContextError, "outside"):
+            build_remediation_context(
+                finding=finding(),
+                snapshot=snapshot(),
+                iac_result=mismatched,
+                actual_result=result(
+                    perspective=EvaluationPerspective.AWS_ACTUAL,
+                    status=EvaluationStatus.FAIL,
+                ),
+            )
+
+    def test_safe_refreshed_plan_is_ready_for_approval(self) -> None:
+        readiness = evaluate_deployment_readiness(context=context(), plan_input=plan_input())
         self.assertIs(readiness.status, DeploymentReadinessStatus.READY_FOR_APPROVAL)
 
     def test_destructive_plan_requires_manual_review(self) -> None:
-        context = build_remediation_context(
-            finding=finding(),
-            snapshot=snapshot(),
-            iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
-            actual_result=result(
-                perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
-            ),
-        )
         readiness = evaluate_deployment_readiness(
-            context=context, plan_input=plan_input(destructive=True)
+            context=context(), plan_input=plan_input(destructive=True)
         )
         self.assertIs(readiness.status, DeploymentReadinessStatus.MANUAL_REVIEW)
 
     def test_unrefreshed_plan_is_blocked(self) -> None:
-        context = build_remediation_context(
-            finding=finding(),
-            snapshot=snapshot(),
-            iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.PASS),
-            actual_result=result(
-                perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
-            ),
-        )
         readiness = evaluate_deployment_readiness(
-            context=context, plan_input=plan_input(refreshed=False)
+            context=context(), plan_input=plan_input(refreshed=False)
         )
         self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
+
+
+if __name__ == "__main__":
+    unittest.main()

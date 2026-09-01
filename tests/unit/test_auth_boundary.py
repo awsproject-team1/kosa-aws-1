@@ -39,6 +39,7 @@ class AuthBoundaryTest(unittest.TestCase):
         self.assertIsNone(authorize(principal, Action.START_ASSESSMENT))
         self.assertIsNone(authorize(principal, Action.READ_JOB))
         self.assertIsNone(authorize(principal, Action.APPROVE_DEPLOYMENT))
+        self.assertIsNone(authorize(principal, Action.MANAGE_REMEDIATION_EXCEPTIONS))
 
     def test_unknown_cognito_groups_are_ignored_when_a_product_role_remains(self) -> None:
         principal = Principal.from_verified_claims(access_claims("ExternalGroup", "User"))
@@ -60,6 +61,7 @@ class AuthBoundaryTest(unittest.TestCase):
                 "START_REMEDIATION",
                 "READ_JOB",
                 "APPROVE_DEPLOYMENT",
+                "MANAGE_REMEDIATION_EXCEPTIONS",
                 "MANAGE_POLICY_SOURCES",
                 "PUBLISH_POLICY_PROFILE",
             },

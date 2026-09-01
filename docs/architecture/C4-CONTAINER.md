@@ -7,7 +7,9 @@
   요청도 직접 진입할 수 있는 Assessment, Remediation, Deployment Subgraph. 각 역할은
   Golden Dataset으로 승인된 Model Profile을 사용한다.
 - SQS + Worker Lambda: Assessment, Remediation, Deployment Queue별 resumable Task 실행;
-  DynamoDB checkpoint에서 재개하고 3분 전 checkpoint 후 재큐잉
+  DynamoDB checkpoint에서 재개하고 3분 전 checkpoint 후 재큐잉. C는 Assessment/Remediation
+  Agent와 Worker orchestration을 소유하고, Remediation Worker는 stored `RemediationDecision`으로
+  injected D Patch/Sync port만 호출한다. D는 live GitHub/Terraform adapter와 Deployment Worker를 소유한다.
 - EventBridge: GitHub Actions OIDC의 Plan/Apply 완료 Event를 Deployment Queue에 전달
 - Policy Ingestion: 고객 정책 원본을 customer-scoped S3에 보관하고, Worker Lambda의
   형식 판정·Parser(`apps/backend/policy/ingestion/`, 표준 라이브러리 전용)가 정규화 Artifact를

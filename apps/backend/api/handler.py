@@ -13,10 +13,18 @@ from apps.backend.api.jobs import (
 )
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
+from apps.backend.api.remediation_exceptions import (
+    RemediationExceptionApiService,
+    RemediationExceptionRequest,
+)
 from apps.backend.api.remediations import RemediationApiService
 from apps.backend.auth import InvalidIdentityClaims, Principal
 from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
-from packages.contracts import ApiErrorResponse, PolicySourceUploadRequest
+from packages.contracts import (
+    ApiErrorResponse,
+    PolicySourceUploadRequest,
+    RemediationExceptionReason,
+)
 
 
 class JobHttpHandler:
@@ -27,6 +35,7 @@ class JobHttpHandler:
         service: JobApiService,
         assessment_reports: AssessmentReportApiService | None = None,
         remediations: RemediationApiService | None = None,
+        remediation_exceptions: RemediationExceptionApiService | None = None,
         deployments: DeploymentApiService | None = None,
         policy_sources: PolicySourceApiService | None = None,
         policy_approvals: PolicyApprovalApiService | None = None,
@@ -43,6 +52,13 @@ class JobHttpHandler:
         if remediations is not None and not isinstance(remediations, RemediationApiService):
             raise TypeError("remediations must be a RemediationApiService or None")
         self._remediations = remediations
+        if remediation_exceptions is not None and not isinstance(
+            remediation_exceptions, RemediationExceptionApiService
+        ):
+            raise TypeError(
+                "remediation_exceptions must be a RemediationExceptionApiService or None"
+            )
+        self._remediation_exceptions = remediation_exceptions
         if deployments is not None and not isinstance(deployments, DeploymentApiService):
             raise TypeError("deployments must be a DeploymentApiService or None")
         self._deployments = deployments
@@ -125,6 +141,15 @@ class JobHttpHandler:
                 except ValueError as error:
                     raise RequestValidationError("policy profile request is invalid") from error
                 return _response(201, response.to_dict())
+            if method == "POST" and path == "/remediation-exceptions":
+                if self._remediation_exceptions is None:
+                    raise JobNotFoundError("remediation exception route not found")
+                try:
+                    request = _remediation_exception_request(event.get("body"))
+                    response = self._remediation_exceptions.create(principal, request)
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("remediation exception body is invalid") from error
+                return _response(201, response.to_dict())
             if (
                 method == "POST"
                 and path.startswith("/findings/")
@@ -135,9 +160,8 @@ class JobHttpHandler:
                     raise JobNotFoundError("finding not found")
                 if event.get("body") not in (None, "", "{}"):
                     raise RequestValidationError("remediation body is invalid")
-                return _response(
-                    202, self._remediations.create_remediation(principal, finding_id).to_dict()
-                )
+                remediation = self._remediations.create_remediation(principal, finding_id)
+                return _response(202 if remediation.accepted else 200, remediation.to_dict())
             if method == "POST" and path.startswith("/deployments/") and path.endswith("/approve"):
                 deployment_id = path.removeprefix("/deployments/").removesuffix("/approve")
                 if not deployment_id or "/" in deployment_id or self._deployments is None:
@@ -209,6 +233,24 @@ def _assessment_request(raw_body: object) -> AssessmentRequest:
     return AssessmentRequest(
         repository_id=_non_empty_string(body["repository_id"], "repository_id"),
         policy_profile_id=_non_empty_string(body["policy_profile_id"], "policy_profile_id"),
+    )
+
+
+def _remediation_exception_request(raw_body: object) -> RemediationExceptionRequest:
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    required = {"rule_id", "rule_version", "reason", "expires_at"}
+    allowed = required | {"resource_id", "ticket_reference"}
+    if set(body) - allowed or not required.issubset(body):
+        raise ValueError("remediation exception body fields are invalid")
+    return RemediationExceptionRequest(
+        rule_id=_non_empty_string(body["rule_id"], "rule_id"),
+        rule_version=_non_empty_string(body["rule_version"], "rule_version"),
+        reason=RemediationExceptionReason(body["reason"]),
+        expires_at=_non_empty_string(body["expires_at"], "expires_at"),
+        resource_id=body.get("resource_id"),
+        ticket_reference=body.get("ticket_reference"),
     )
 
 
