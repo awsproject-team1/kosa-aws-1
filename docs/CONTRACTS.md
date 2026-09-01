@@ -151,6 +151,11 @@ signature, Parser 지원 형식) 3자를 대조하고, Markdown/Plain text/CSV/X
 `apps/backend/requirements.txt`가 비어 있는 ZIP Lambda 배포 구조가 형식 목록의 제약이다.
 실패는 예외가 아니라 `FAILED` 상태와 failure code로 돌아온다.
 
+Parser 경계는 신뢰할 수 없는 고객 문서를 읽으므로 fail-closed 한도를 함께 강제한다: 업로드
+크기, zip entry 수·압축 해제 크기·압축비, 정규화 unit 수, 그리고 **DTD를 선언한 OOXML part
+거부**(`XML_DTD_NOT_ALLOWED`). 마지막 항목은 `xml.etree`가 내부 엔티티를 확장하기 때문이며,
+zip 한도로는 잡히지 않는다 — 증폭이 압축 해제 이후 Parser 안에서 일어난다.
+
 `READY` 상태이면서 사람이 승인한 정확한 Source version에서 나온 Rule만 Profile이 참조할 수 있다
 (`APPROVABLE_STATUSES`). `source_reference_for()`가 정규화 unit에서 `SourceReference`를 직접
 만들어 locator와 `content_sha256`이 같은 판본에서 나오도록 보장한다. 승인·Profile publication

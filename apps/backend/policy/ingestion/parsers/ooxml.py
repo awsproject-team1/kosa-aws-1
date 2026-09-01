@@ -5,6 +5,11 @@ Format policy). openpyxl/python-docx를 쓰지 않는 이유는 취향이 아니
 
 `scripts/policy_source_digest.py`의 XLSX 원형이 다루지 못하던 세 가지를 여기서 처리한다:
 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름 locator.
+
+`xml.etree.ElementTree`는 내부 DTD 엔티티를 확장하며 Python 문서가 billion laughs에 취약하다고
+명시한다. zip 압축 한도는 이를 막지 못한다 — 증폭이 압축 해제 **이후** XML Parser 안에서
+일어나므로 선언 크기도 읽은 바이트도 작다. 정상 OOXML은 DTD를 쓰지 않으므로
+`_parse_xml()`이 파싱 전에 DOCTYPE 선언을 fail-closed로 거부한다.
 """
 
 from __future__ import annotations
@@ -31,9 +36,9 @@ from packages.contracts.policy_ingestion import (
 )
 
 XLSX_PARSER_ID = "xlsx-parser"
-XLSX_PARSER_VERSION = "1.0.0"
+XLSX_PARSER_VERSION = "1.0.1"
 DOCX_PARSER_ID = "docx-parser"
-DOCX_PARSER_VERSION = "1.0.0"
+DOCX_PARSER_VERSION = "1.0.1"
 
 SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -49,7 +54,14 @@ MAX_SHEET_ROWS = 50_000
 MAX_COLUMN_INDEX = 1_024
 
 _CELL_REFERENCE = re.compile(r"^(?P<column>[A-Z]+)(?P<row>\d+)$")
+_ROW_REFERENCE = re.compile(r"^\+?[0-9]+$")
 _HEADING_STYLE = re.compile(r"^heading\s*(?P<level>[1-6])$", re.IGNORECASE)
+# OOXML XML parts may use UTF-8 or UTF-16, so block every supported byte representation.
+_DOCTYPE_DECLARATIONS = (
+    b"<!DOCTYPE",
+    "<!DOCTYPE".encode("utf-16-le"),
+    "<!DOCTYPE".encode("utf-16-be"),
+)
 
 
 def parse_xlsx(payload: bytes) -> ParsedPolicyDocument:
@@ -174,16 +186,31 @@ def _add_sheet_rows(
     grid: dict[int, dict[int, str]] = {}
     inline = False
     for fallback_index, row in enumerate(rows, start=1):
-        row_index = _int_or(row.get("r"), fallback_index)
+        row_index = _row_index(row.get("r"), fallback_index, sheet_slug)
         cells: dict[int, str] = {}
+        seen_columns: set[int] = set()
         next_column = 1
         for cell in row.findall(f"{SHEET_NS}c"):
-            column = _column_index(cell.get("r"), next_column)
+            column = _cell_column(cell.get("r"), next_column, row_index, sheet_slug)
+            if column in seen_columns:
+                raise DocumentParseError(
+                    IngestionFailureCode.AMBIGUOUS_LOCATOR,
+                    f"worksheet {sheet_slug!r} declares cell column {column} "
+                    f"more than once in row {row_index}",
+                )
+            seen_columns.add(column)
             next_column = column + 1
             value, is_inline = _cell_value(cell, shared)
             inline = inline or is_inline
             if value:
                 cells[column] = value
+        if row_index in grid:
+            # 같은 `r`을 가진 행이 둘이면 locator 하나가 두 행을 가리킨다. 덮어쓰면 정책
+            # 문서의 한 행이 경고 없이 사라지므로, 시트 이름 충돌과 같게 fail-closed로 막는다.
+            raise DocumentParseError(
+                IngestionFailureCode.AMBIGUOUS_LOCATOR,
+                f"worksheet {sheet_slug!r} declares row {row_index} more than once",
+            )
         grid[row_index] = cells
     if inline:
         builder.warn(ExtractionWarningCode.INLINE_STRINGS_PRESENT)
@@ -333,6 +360,7 @@ def _joined_text(node: ElementTree.Element, tag: str) -> str:
 
 
 def _parse_xml(data: bytes) -> ElementTree.Element:
+    _require_no_dtd(data)
     try:
         return ElementTree.fromstring(data)
     except ElementTree.ParseError as error:
@@ -341,10 +369,31 @@ def _parse_xml(data: bytes) -> ElementTree.Element:
         ) from error
 
 
-def _column_index(reference: str | None, fallback: int) -> int:
-    match = _CELL_REFERENCE.match(reference or "")
-    if match is None:
+def _require_no_dtd(data: bytes) -> None:
+    """Refuse UTF-8 or UTF-16 OOXML parts that declare a DTD before parsing."""
+    if any(declaration in data for declaration in _DOCTYPE_DECLARATIONS):
+        raise DocumentParseError(
+            IngestionFailureCode.XML_DTD_NOT_ALLOWED,
+            "an OOXML part declares a DTD, which is not allowed",
+        )
+
+
+def _cell_column(reference: str | None, fallback: int, row: int, sheet_slug: str) -> int:
+    if reference is None:
         return fallback
+    match = _CELL_REFERENCE.match(reference)
+    if match is None:
+        raise DocumentParseError(
+            IngestionFailureCode.CORRUPTED_DOCUMENT,
+            f"worksheet {sheet_slug!r} contains an invalid cell reference {reference!r}",
+        )
+    referenced_row = int(match.group("row"))
+    if referenced_row != row:
+        raise DocumentParseError(
+            IngestionFailureCode.AMBIGUOUS_LOCATOR,
+            f"worksheet {sheet_slug!r} row {row} contains a cell that references "
+            f"row {referenced_row}",
+        )
     return _column_number(match.group("column"))
 
 
@@ -355,11 +404,16 @@ def _column_number(letters: str) -> int:
     return min(number, MAX_COLUMN_INDEX)
 
 
-def _int_or(value: str | None, fallback: int) -> int:
-    try:
-        return int(value) if value is not None else fallback
-    except ValueError:
+def _row_index(reference: str | None, fallback: int, sheet_slug: str) -> int:
+    if reference is None:
         return fallback
+    normalized = reference.strip()
+    if _ROW_REFERENCE.match(normalized) is None or int(normalized) < 1:
+        raise DocumentParseError(
+            IngestionFailureCode.CORRUPTED_DOCUMENT,
+            f"worksheet {sheet_slug!r} contains an invalid row reference {reference!r}",
+        )
+    return int(normalized)
 
 
 __all__ = [

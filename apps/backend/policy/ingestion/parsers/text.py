@@ -23,15 +23,11 @@ from packages.contracts.policy_ingestion import (
 )
 
 MARKDOWN_PARSER_ID = "markdown-parser"
-MARKDOWN_PARSER_VERSION = "1.0.0"
+MARKDOWN_PARSER_VERSION = "1.0.1"
 PLAIN_TEXT_PARSER_ID = "plain-text-parser"
-PLAIN_TEXT_PARSER_VERSION = "1.0.0"
+PLAIN_TEXT_PARSER_VERSION = "1.0.1"
 CSV_PARSER_ID = "csv-parser"
-CSV_PARSER_VERSION = "1.0.0"
-
-# 한 문서에서 만들 수 있는 unit 상한. 구조가 없는 거대 문서가 무한히 unit을 만들지 않도록
-# fail-closed로 막는다.
-MAX_UNITS = 20_000
+CSV_PARSER_VERSION = "1.0.1"
 
 _HEADING = re.compile(r"^(?P<level>#{1,6})\s+(?P<title>.+?)\s*#*\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -74,7 +70,6 @@ def parse_markdown(payload: bytes) -> ParsedPolicyDocument:
         if not block:
             return
         ordinal += 1
-        _require_unit_budget(builder)
         kind = (
             DocumentUnitKind.LIST_ITEM if _LIST_ITEM.match(block[0]) else DocumentUnitKind.PARAGRAPH
         )
@@ -104,7 +99,6 @@ def parse_markdown(payload: bytes) -> ParsedPolicyDocument:
             path.append(slug(heading.group("title")))
             section = "/".join(path)
             ordinal = 0
-            _require_unit_budget(builder)
             builder.add(
                 locator=f"heading/{section}",
                 kind=DocumentUnitKind.SECTION,
@@ -148,7 +142,6 @@ def parse_plain_text(payload: bytes) -> ParsedPolicyDocument:
         if not block:
             return
         ordinal += 1
-        _require_unit_budget(builder)
         builder.add(
             locator=f"block/{ordinal}",
             kind=DocumentUnitKind.PARAGRAPH,
@@ -196,7 +189,6 @@ def parse_csv(payload: bytes) -> ParsedPolicyDocument:
         builder.warn(ExtractionWarningCode.RAGGED_ROWS)
 
     for index, row in enumerate(rows, start=1):
-        _require_unit_budget(builder)
         builder.add(
             locator=f"row/{index}",
             kind=DocumentUnitKind.TABLE_ROW,
@@ -213,11 +205,3 @@ def _sniff_delimiter(text: str) -> str:
         return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
     except csv.Error:
         return ","
-
-
-def _require_unit_budget(builder: DocumentBuilder) -> None:
-    if len(builder.units) >= MAX_UNITS:
-        raise DocumentParseError(
-            IngestionFailureCode.EXPANSION_LIMIT_EXCEEDED,
-            f"the document produces more than {MAX_UNITS} units",
-        )

@@ -190,6 +190,9 @@ Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. P
 - [x] XLSX Parser가 inline string(`t="inlineStr"`), 병합 셀, `xl/workbook.xml` 기반 시트 이름
       locator를 처리한다. `policy_source_digest.py`의 원형은 이 셋을 아직 다루지 않는다.
 - [x] zip 기반 형식(XLSX, DOCX)은 압축 해제 크기 상한을 먼저 검사한 뒤 읽는다.
+- [x] XML Parser가 DTD를 선언한 OOXML part를 파싱 전에 거부한다. zip 상한은 엔티티 확장을
+      막지 못한다 — 증폭이 압축 해제 **이후** Parser 안에서 일어나므로 선언 크기도 읽은
+      바이트도 작다. 정규화 unit 수 상한도 형식과 무관하게 강제한다.
 - [x] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
 - [ ] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
 - [x] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.

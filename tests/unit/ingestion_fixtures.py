@@ -70,14 +70,39 @@ def sheet_row(row: int, cells: str) -> str:
     return f'<row r="{row}">{cells}</row>'
 
 
+def entity_bomb_document(levels: int) -> str:
+    """Build a `word/document.xml` whose internal DTD entities expand exponentially.
+
+    각 엔티티가 이전 엔티티를 10번 참조하므로 `levels` 단계면 10**levels 자로 불어난다.
+    zip으로 압축하면 수백 바이트다.
+    """
+    entities = ['<!ENTITY e0 "AAAAAAAAAA">']
+    for level in range(1, levels):
+        entities.append(f'<!ENTITY e{level} "{("&e" + str(level - 1) + ";") * 10}">')
+    return "\n".join(
+        (
+            '<?xml version="1.0"?>',
+            "<!DOCTYPE document [",
+            *entities,
+            "]>",
+            f'<document xmlns:w="{WORD_NS}"><w:body><w:p><w:r>'
+            f"<w:t>&e{levels - 1};</w:t></w:r></w:p></w:body></document>",
+        )
+    )
+
+
 def build_docx(body: str) -> bytes:
+    document = (
+        f'<?xml version="1.0"?><document xmlns:w="{WORD_NS}"><w:body>{body}</w:body></document>'
+    )
+    return build_docx_part(document)
+
+
+def build_docx_part(document_xml: str | bytes) -> bytes:
+    """Package a raw `word/document.xml` so a test can control the XML exactly."""
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "word/document.xml",
-            f'<?xml version="1.0"?><document xmlns:w="{WORD_NS}"><w:body>{body}</w:body>'
-            "</document>",
-        )
+        archive.writestr("word/document.xml", document_xml)
     return buffer.getvalue()
 
 

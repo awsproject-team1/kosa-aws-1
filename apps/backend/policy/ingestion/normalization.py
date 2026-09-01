@@ -22,6 +22,10 @@ from packages.contracts.policy_ingestion import (
 
 NORMALIZED_SCHEMA_VERSION = "policy-normalized-document/1"
 
+# 한 문서가 만들 수 있는 unit 상한. `DocumentBuilder`가 강제하므로 형식과 무관하게 적용된다.
+# Parser마다 따로 걸면 새 형식을 추가할 때 빠뜨리기 쉽다.
+MAX_UNITS = 20_000
+
 _WHITESPACE_RUN = re.compile(r"[ \t 　]+")
 _SLUG_STRIP = re.compile(r"[^0-9A-Za-z가-힣]+")
 
@@ -92,6 +96,11 @@ class DocumentBuilder:
         if not normalized:
             self._skipped_empty = True
             return False
+        if len(self.units) >= MAX_UNITS:
+            raise DocumentParseError(
+                IngestionFailureCode.EXPANSION_LIMIT_EXCEEDED,
+                f"the document produces more than {MAX_UNITS} units",
+            )
         if locator in self._locators:
             raise DocumentParseError(
                 IngestionFailureCode.AMBIGUOUS_LOCATOR,

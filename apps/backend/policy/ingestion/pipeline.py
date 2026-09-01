@@ -82,6 +82,9 @@ REVIEW_REQUIRED_WARNINGS: frozenset[ExtractionWarningCode] = frozenset(
         ExtractionWarningCode.UNSTRUCTURED_DOCUMENT,
         ExtractionWarningCode.RAGGED_ROWS,
         ExtractionWarningCode.MERGED_CELLS_EXPANDED,
+        # delimiter를 잘못 추론하면 행이 다르게 쪼개져 unit 텍스트와 hash가 통째로 달라진다.
+        # 추론했다는 사실 자체가 사람이 확인해야 할 신호다.
+        ExtractionWarningCode.DELIMITER_INFERRED,
     }
 )
 
