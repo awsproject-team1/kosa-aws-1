@@ -183,10 +183,11 @@ def execute_case(
 
 
 def parse_json_output(raw_output: str) -> dict[str, Any]:
-    """Accept a JSON object, with an optional single Markdown JSON fence."""
+    """Accept a JSON object, with an optional plain or JSON Markdown fence."""
     stripped = raw_output.strip()
-    if stripped.startswith("```") and stripped.endswith("```"):
-        stripped = stripped.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
+    lines = stripped.splitlines()
+    if lines and lines[0] in {"```", "```json"} and lines[-1] == "```":
+        stripped = "\n".join(lines[1:-1]).strip()
     parsed = json.loads(stripped)
     if not isinstance(parsed, dict):
         raise ValueError("model output must be a JSON object")
@@ -368,7 +369,7 @@ def validate_remediation(response: dict[str, Any], expected: dict[str, Any]) -> 
         plan_reference = ArtifactReference(
             artifact_id="benchmark-plan",
             artifact_type=ArtifactType.TERRAFORM_PLAN,
-            content_sha256="benchmark-plan-sha256",
+            content_sha256=response["plan_hash"],
             customer_id="benchmark-customer",
             repository_id="benchmark-repository",
         )
@@ -527,7 +528,7 @@ def summarize(results: list[InvocationResult]) -> dict[str, Any]:
         quality_gate = (
             valid_rate >= 0.9
             and min_decision_agreement >= 0.9
-            and (role != "assessment" or max_score_spread is not None and max_score_spread <= 10)
+            and (role != "assessment" or (max_score_spread is not None and max_score_spread <= 10))
         )
         by_role[role].append(
             {
@@ -597,8 +598,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "# Bedrock 모델 실측 평가",
         "",
         (
-            "외부 벤치마크·단가가 아닌 이 실행의 유효성, 반복 결정 일치율, "
-            "Assessment score 편차, 지연시간, 토큰 사용량만 사용했습니다."
+            "외부 벤치마크·단가가 아닌 이 실행의 유효성, 유효 출력 내 최소 Case 결정 "
+            "일치율, Assessment score 편차, 지연시간, 토큰 사용량만 사용했습니다. "
+            "결정 일치율은 유효 출력만 분모로 계산하며, invalid 실행은 유효율에 별도로 "
+            "반영했습니다."
         ),
         "",
     ]
@@ -608,8 +611,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 f"## {ROLE_NAMES[role]}",
                 "",
                 (
-                    "| 후보 모델 | 품질 Gate | 유효 실행 | 결정 일치율 | Score 범위 | "
-                    "중앙 지연 | 중앙 토큰 | 오류 |"
+                    "| 후보 모델 | 품질 Gate | 유효 실행 | 유효 출력 내 최소 Case 결정 "
+                    "일치율 | Score 범위 | 중앙 지연 | 중앙 토큰 | 오류 |"
                 ),
                 "|---|---:|---:|---:|---:|---:|---:|---|",
             ]
@@ -639,7 +642,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     f"**선정:** {winner['label']} (`{winner['model_id']}`)",
                     "",
                     (
-                        "선정 이유: 품질 Gate 통과 후보를 유효율, Case별 결정 일치율"
+                        "선정 이유: 품질 Gate 통과 후보를 유효율, 유효 출력 내 최소 Case "
+                        "결정 일치율"
                         + (", score 편차" if role == "assessment" else "")
                         + ", 중앙 지연, 중앙 토큰 순으로 정렬했습니다."
                     ),

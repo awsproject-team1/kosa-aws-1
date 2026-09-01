@@ -147,6 +147,10 @@
   Parent=`Gemma 3 4B IT`(routing+Q&A 20/20), Assessment=`Nova Micro`,
   Remediation=`Devstral 2 123B`, Deployment=`Nova Lite`를 역할별 추천 후보로 도출했으며,
   승인된 runtime Model Profile 배정은 변경하지 않음
+- PR #18 benchmark review 후속 완료: fenced JSON 오류 분류, Assessment/Remediation validator,
+  unified diff, agreement·quality gate·ranking에 25개 unit test를 추가하고 최신 `TerraformPlan`
+  artifact digest를 응답 `plan_hash`에 결합. agreement는 유효 출력 내 최소 Case 결정 일치율임을
+  report에 명시했으며 모델 ID와 runtime Model Profile 배정은 변경하지 않음
 
 ## Next
 
