@@ -105,8 +105,9 @@ Backend가 발급한다.
 
 ## M3 planned deployment and verification storage
 
-아래 저장 경계는 아직 구현되지 않았고 ADR-0019·ADR-0020이 `Proposed`인 상태다. 합의 전에는 각 역할이
-Deployment 상태나 검증 결과를 임의 key/필드로 쓰지 않는다.
+ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable 저장과 endpoint 배선은 아직
+구현되지 않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment
+상태 기계는 계속 `Proposed`다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |

@@ -1,7 +1,7 @@
 # ADR-0020: Post-Deploy Verification과 before/after 비교 경계
 
-> **상태: Proposed (2026-09-02)** — 팀 합의 전이다. 이 ADR이 `Accepted`가 되기 전에는 C가
-> 재평가 Assessment 생성과 비교 projection을, A가 검증 Assessment 저장 경계를 구현하지 않는다.
+> **상태: Accepted (2026-09-02)** — M3 C 구현은 이 결정을 따른다. C의 비교 projection과
+> Contract는 구현됐으며, 검증 Assessment의 durable 저장·API 배선은 A/D 통합 작업으로 남는다.
 >
 > **결정 대상:** 재평가 결과를 어디에 저장하는지, 무엇을 다시 평가하는지, 어떤 Model Profile로
 > 평가하는지, "Finding이 해소됐다"를 어떤 값으로 표현하는지, 점수·Coverage 변화를 언제 비교
@@ -167,6 +167,8 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   M3 C(Before/After 비교, Finding Resolution), M4 C(품질 목표 확인), 데모의 점수 변화 화면.
 - **Proposed options:** 위 Decision 9개 항목. 각 항목의 대안과 거부 이유는 Rejected alternatives에
   있다.
-- **Final record:** 미정. 합의 시 상태를 `Accepted`로 바꾸고 `FindingResolution`,
-  `AssessmentComparison` Contract 추가와 `docs/DATABASE.md`의 Assessment 필드 확장을 같은 PR에서
-  진행한다.
+- **Final record (2026-09-02):** Decision 1–9를 채택한다. C는
+  `FindingResolution`/`AssessmentComparison` Contract와 complete immutable input을 받는 결정적
+  projection을 구현했다. 계획 집합은 단순 count가 아니라 `(resource_id, rule_id, perspective)`
+  전체로 비교한다. A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와 complete plan 조회를,
+  D는 apply 완료 뒤의 Actual 재조회 입력을 제공한다.

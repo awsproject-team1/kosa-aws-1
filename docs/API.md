@@ -148,9 +148,10 @@ adapter와 customer Lambda runtime composition은 아직 연결 대상이다. �
 
 ## Planned M3 approved-apply and verification endpoints
 
-아래 endpoint는 아직 노출되지 않았고 경계는 **ADR-0019·ADR-0020이 `Proposed`인 상태**다. 두 ADR이
-`Accepted`가 되기 전에는 구현하지 않는다. 현재 노출된 것은 `/deployments/{deploymentId}/approve`
-하나이며, 그것도 injected service가 있을 때만 handler에 배선된다.
+아래 endpoint는 아직 노출되지 않았다. ADR-0020 비교 Contract는 `Accepted` 및 구현됐지만, endpoint의
+durable input 조회·배선은 A/D 통합 작업이고 ADR-0019의 Deployment 생성/Apply 경계는 여전히
+`Proposed`다. 현재 노출된 것은 `/deployments/{deploymentId}/approve` 하나이며, 그것도 injected
+service가 있을 때만 handler에 배선된다.
 
 | Method | Planned path | Purpose |
 | --- | --- | --- |

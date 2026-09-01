@@ -2,9 +2,10 @@
 
 ## Current
 
-- M3/M4 역할 경계 미결정 사항을 ADR-0019(승인 배포 실행 경계), ADR-0020(Post-Deploy Verification과
-  before/after 비교), ADR-0021(Demo·Release readiness gate)로 문서화했고 세 ADR 모두 `Proposed`다.
-  각 항목의 담당·필요 시점·차단 대상은 아래 Blocked에 있다. 합의 전에는 해당 범위를 구현하지 않는다
+- ADR-0020(Post-Deploy Verification과 before/after 비교)·ADR-0021(Demo·Release readiness gate)을
+  `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
+  before/after projection을 구현했고 18개(6 Rule × 3 perspective) Golden fixture gate를 확인했다.
+  ADR-0019(승인 배포 실행 경계)는 계속 `Proposed`이며 아래 Blocked가 적용된다.
 - PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
   identity 검증을 통합했고, 후속 PR 검토 대기
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
@@ -162,12 +163,11 @@
 
 ## Next
 
-- **M3 합의 선행:** ADR-0019·ADR-0020을 리뷰해 `Accepted`로 확정한다. 확정 직후 순서는
-  (1) `DeploymentStatus`·`AuditAction`·`FindingResolution`·`AssessmentComparison`·
-  `TERRAFORM_PLAN_BINARY` Contract 추가와 `RemediationSyncTarget` 이관,
-  (2) D 실행 port 시그니처(`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`,
-  `ActualRereadPort`) 고정, (3) A/C가 Mock으로 병렬 구현이다. M2에서 D live adapter 지연으로 A/C가
-  대기한 상황을 반복하지 않으려면 (2)가 구현보다 먼저다
+- **M3 A/D 합의 선행:** ADR-0019를 리뷰해 `Accepted`로 확정한다. 확정 직후 A/D는
+  `DeploymentStatus`·`AuditAction`·`TERRAFORM_PLAN_BINARY` Contract, `RemediationSyncTarget` 이관과
+  D 실행 port 시그니처(`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`,
+  `ActualRereadPort`)를 고정한다. C 비교 projection의 durable input(`phase`, source/deployment link,
+  complete plan)과 verification endpoint 배선은 그 저장 경계에 연결한다.
 - **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
   계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
   bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
@@ -184,8 +184,9 @@
 - M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
   DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
   같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
-- M1 C: Rule 6건 × 3관점으로 확대된 평가 범위에 맞춰 prompt/rubric/golden dataset version을
-  재고정하고 DESIGN 품질 Gate를 재실행 (IAC/DRIFT 관점 Golden Case 추가 필요)
+- M4 C: customer sandbox/Demo IaC가 준비되면 18개 Golden Case의 실제 Bedrock 반복 평가 리포트를
+  생성해 ADR-0021 release gate 증적으로 첨부한다. fixture gate는 완료됐지만 protected runtime 없는
+  mock 결과는 릴리스 근거가 아니다.
 - M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
   ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
   선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
@@ -213,15 +214,12 @@
   `DeploymentStatus` 전이·`/reject` 시맨틱·CI fail-closed. 합의 전에는 D가 live plan/apply 경로를,
   A가 Deployment 생성·후속 전이를 구현하지 않는다.
   *Owner:* D + A + Security. *Blocks:* M3 A/C/D/Shared 전체.
-- **M3 착수 전 합의 필요 (ADR-0020 `Proposed`):** Post-Deploy Verification을 새 `assessment_id`로
-  저장하고 Assessment에 `phase`/`source_assessment_id`/`deployment_id`를 추가하는 것, 재평가 범위(원
-  평가 계획 전체 재실행), Model Profile·rubric 동일성 강제, Finding Resolution 5개 값, 점수·Coverage
-  `comparable` 판정, 예외는 평가 게이트가 아니라 표시만, 검증 지연 30초와 총 3회 재조회,
-  Deployment 단계 LLM 미사용. 합의 전에는 C가 재평가 Assessment와 비교 projection을 구현하지 않는다.
-  *Owner:* C + A + B. *Blocks:* M3 B/C, M4 C.
-- **M4 착수 전 합의 필요 (ADR-0021 `Proposed`):** 데모 IaC를 별도 고객 sandbox repository에 두는 것,
-  품질 Gate의 릴리스 차단력, 관측·비용 통과 기준, `dev → main` 필수 첨부물.
-  *Owner:* Shared + D + C + A. *Blocks:* M4 전체와 `dev → main` 통합 PR.
+- **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
+  input을 요구한다. A는 `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, complete
+  `(resource_id, rule_id, perspective)` plan의 durable 저장·조회와 endpoint 배선을, D는 apply 완료 뒤
+  Actual 재조회 입력을 제공해야 한다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
+  *Owner:* A + D (+ B exception read). *Blocks:* live M3 verification endpoint와 M4 customer runtime report,
+  C의 mock/contract implementation은 차단하지 않는다.
 
 ## Milestones
 
@@ -273,18 +271,18 @@
 
 **Exit criteria:** Human Approval 뒤 승인된 plan만 apply하고, 변경된 AWS Actual을 Post-Deploy Verification으로 재평가해 Finding 및 Readiness Score 변화를 확인한다.
 
-**미결정:** 실행 세부는 ADR-0019(plan_hash·state·merge commit·deployment_id·apply 트리거·workflow
-소유권·완료 Event·상태 기계)와 ADR-0020(검증 Assessment·재평가 범위·Profile 동일성·Finding
-Resolution·비교 가능성·예외 표시·검증 지연)이 `Proposed`로 제안했다. 합의 전에는 아래 항목을
-구현하지 않는다.
+**결정:** ADR-0020은 `Accepted`다. 검증은 새 immutable Assessment, 원 평가 계획 전체 재실행,
+동일 Profile/rubric, Code의 Finding Resolution 및 fail-closed comparison을 사용한다. ADR-0019의
+plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Proposed`다.
 
 - [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
   *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를
   얻을 수 없다 — ADR-0019 §4, ADR-0020 §7)*
 - [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(재평가는 원 Assessment의
   Profile version을 고정 재사용하고, 예외는 평가를 막지 않고 표시만 한다 — ADR-0020 §2, §6)*
-- [ ] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가
-  *(새 assessment_id + phase 저장, Profile/rubric 동일성, Code 결정적 비교 — ADR-0020 §1, §3, §4, §5)*
+- [x] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가
+  *(immutable complete-plan input Contract, Profile/rubric/plan/score fail-closed comparison 및 5개
+  Resolution의 결정적 projection 구현. durable Assessment/endpoint wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
   재검증, AWS Actual 재조회 *(plan_hash 대상 정의, state serial, saved plan apply, run 재조회 —
   ADR-0019 §1, §2, §5, §7)*
@@ -296,14 +294,15 @@ Resolution·비교 가능성·예외 표시·검증 지연)이 `Proposed`로 제
 
 **Exit criteria:** WordPress/LAMP Demo에서 폐루프 E2E가 재현되고, 품질·운영·문서 기준을 충족해 사람이 `dev → main` 통합 PR을 만들 수 있다.
 
-**미결정:** 데모 IaC 위치, 품질 Gate의 릴리스 차단력, 관측·비용 통과 기준, `dev → main` 필수
-첨부물은 ADR-0021이 `Proposed`로 제안했다. 릴리스 체크리스트 초안은 `CONTRIBUTING.md`에 있다.
+**결정:** ADR-0021은 `Accepted`다. 데모 IaC 위치, 차단형 품질 Gate, 관측·비용 기록, `dev → main`
+첨부물은 `CONTRIBUTING.md`의 release checklist를 따른다.
 
 - [ ] **A — Platform/Backend:** 배포/운영 점검, 오류·성능·비용 관측 검증 *(통과 기준은 값의 존재로
   정의한다 — ADR-0021 §3)*
 - [ ] **B — Policy/Governance Boundary:** Demo Policy/Rule/근거와 Coverage 설명 검증
-- [ ] **C — AI Evaluation:** Golden Dataset 품질 목표(정확도 90%, Score 편차 ±10점) 확인 *(IAC/DRIFT
-  관점 Golden Case 추가가 선행이며 미달 시 목표를 낮추지 않는다 — ADR-0021 §2)*
+- [x] **C — AI Evaluation:** Golden Dataset 품질 목표의 executable fixture gate 완료
+  *(6 Rule × IAC/AWS_ACTUAL/DRIFT, 총 18개 Case. customer Bedrock 반복 실행 리포트는 release 증적으로
+  A/D sandbox 준비 뒤 생성하며, 미달 시 목표를 낮추지 않는다 — ADR-0021 §2)*
 - [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인 *(데모 IaC는 별도
   고객 sandbox repository — ADR-0021 §1)*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review

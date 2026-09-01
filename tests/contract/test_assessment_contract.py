@@ -3,12 +3,16 @@
 import unittest
 
 from packages.contracts import (
+    AssessmentComparison,
     AssessmentCoverage,
     AssessmentPhase,
+    ComparisonIneligibilityReason,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     Finding,
+    FindingResolution,
+    FindingResolutionResult,
     ReadinessScore,
     ScoringMode,
 )
@@ -115,6 +119,33 @@ class AssessmentContractTest(unittest.TestCase):
         score = ReadinessScore(score=73.25, evaluated_evaluations=4)
 
         self.assertEqual(score.to_dict(), {"score": 73.25, "evaluated_evaluations": 4})
+
+    def test_post_deploy_comparison_contract_hides_delta_when_not_comparable(self) -> None:
+        comparison = AssessmentComparison(
+            source_assessment_id="asm-before",
+            verification_assessment_id="asm-after",
+            deployment_id="deployment-001",
+            comparable=False,
+            ineligibility_reasons=(ComparisonIneligibilityReason.MODEL_PROFILE_MISMATCH,),
+            source_coverage=AssessmentCoverage(planned_evaluations=1, completed_evaluations=1),
+            verification_coverage=AssessmentCoverage(
+                planned_evaluations=1, completed_evaluations=1
+            ),
+            source_readiness_score=ReadinessScore(score=20, evaluated_evaluations=1),
+            verification_readiness_score=ReadinessScore(score=100, evaluated_evaluations=1),
+            readiness_score_delta=None,
+            finding_resolutions=(
+                FindingResolutionResult(
+                    resource_id="bucket-001",
+                    rule_id="S3-001",
+                    rule_version="v1",
+                    perspective=EvaluationPerspective.AWS_ACTUAL,
+                    resolution=FindingResolution.RESOLVED,
+                ),
+            ),
+        )
+
+        self.assertIsNone(comparison.to_dict()["readiness_score_delta"])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # ADR-0021: Demo와 Release readiness gate
 
-> **상태: Proposed (2026-09-02)** — 팀 합의 전이다. 이 ADR이 `Accepted`가 되기 전에는 데모
-> Terraform 저장 위치와 `dev → main` 게이트를 확정된 것으로 취급하지 않는다.
+> **상태: Accepted (2026-09-02)** — M4는 이 release gate를 따른다. 실제 고객 sandbox 데모와
+> 릴리스 PR은 이후 실행 증적을 채워야 하며, 이 결정만으로 Gate가 통과한 것은 아니다.
 >
 > **결정 대상:** 데모 IaC를 어디에 두는지, 품질 Gate 미달이 릴리스를 막는지, 관측·비용 검증의
 > 통과 기준이 무엇인지, `dev → main` PR에 무엇을 첨부하는지.
@@ -18,7 +18,7 @@ M4 Exit criteria는 "WordPress/LAMP Demo에서 폐루프 E2E가 재현되고, �
    별도 고객 repository에 들어가는지 문서에 없다.
 2. **품질 Gate의 차단력.** 목표는 PASS/FAIL 정확도·Evidence 정확도·판정 일치율 90% 이상과 Score
    편차 ±10점 이내다. 미달일 때 릴리스를 막는지, 목표를 조정하는지, 누가 판단하는지 없다.
-   IAC/DRIFT 관점 Golden Case는 아직 부족하다(`PROGRESS.md` Next).
+   세 관점 Golden fixture는 추가됐지만 protected customer runtime의 반복 평가 리포트는 아직 없다.
 3. **관측·비용 검증의 통과 기준.** "오류·성능·비용 관측 검증"이 무엇을 측정하면 충족인지 없다.
 4. **`dev → main` PR의 필수 첨부물.** `CONTRIBUTING.md`의 Done 기준은 일반 PR 기준이며 릴리스
    PR에 필요한 산출물 목록이 없다.
@@ -101,5 +101,7 @@ M4 Exit criteria는 "WordPress/LAMP Demo에서 폐루프 E2E가 재현되고, �
   필요하다.
 - **Blocks:** M4 전체 항목과 `dev → main` 통합 PR.
 - **Proposed options:** 위 Decision 4개 항목.
-- **Final record:** 미정. 합의 시 상태를 `Accepted`로 바꾸고 `CONTRIBUTING.md`의 릴리스 체크리스트를
-  확정 표기로 옮긴다.
+- **Final record (2026-09-02):** Decision 1–4를 채택한다. C는 여섯 S3 Rule의
+  `IAC`/`AWS_ACTUAL`/`DRIFT` Golden Case(총 18개)가 version-pinned fixture 및 반복 gate contract로
+  실행됨을 확인했다. 고객 Bedrock 반복 실행 리포트는 protected customer runtime과 demo IaC가 준비된
+  뒤 이 Gate의 증적으로 별도 첨부한다.

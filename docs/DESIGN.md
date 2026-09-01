@@ -104,8 +104,8 @@ revision-bound authoritative work를 다시 읽어 `TERRAFORM_PATCH`에는 injec
 `ACTUAL_SYNC`에는 injected Sync port 하나만 호출한다. `MANUAL_REVIEW`와 `SUPPRESSED`는 Job을 만들지
 않는다. D의 `RUN_DEPLOYMENT`는 이 단계와 분리된 Deployment Worker 명령이다.
 
-M3 승인 배포와 Post-Deploy Verification의 실행 경계는 ADR-0019와 ADR-0020이 `Proposed` 상태로
-정의한다. 합의 전에는 각 역할이 아래 값을 임의로 정하지 않는다. Deployment는 A가 발급한
+M3 승인 배포 경계는 ADR-0019가 `Proposed`로 남아 있고, Post-Deploy Verification 비교 경계는
+ADR-0020이 `Accepted`로 정의한다. Deployment는 A가 발급한
 `deployment_id`로 시작해 `PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED →
 WAITING_APPROVAL → APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED`를 조건부 write로
 전이하고, `BLOCKED`, `MANUAL_REVIEW`, `REJECTED`, `VERIFICATION_INDETERMINATE`로 분기한다. 하나의
@@ -186,12 +186,12 @@ Model, Prompt, Rubric, Rule, Policy Document, Context Retrieval 또는 Tool이 �
 `docs/evaluations/BEDROCK_MODEL_SELECTION.md`에 기록한다. 모델 배정은 고정 불변값이 아니며
 Golden Case 확장 또는 위 품질 입력 변경 시 같은 절차로 재평가한다.
 
-(ADR-0020, `Proposed`) Deployment Readiness는 결정적 Code이며 모델을 호출하지 않는다. Post-Deploy
+(ADR-0020) Deployment Readiness는 결정적 Code이며 모델을 호출하지 않는다. Post-Deploy
 Verification은 Assessment Profile을 재사용하므로 MVP에서 Deployment 역할 Model Profile을 배정하지
 않는다. 벤치마크의 Deployment 후보는 근거 기록으로만 남기고, 결정적 판정 단계를 임의로 LLM화하지
 않는다.
 
-(ADR-0021, `Proposed`) `dev → main` 통합 PR은 Golden Dataset 반복 평가 리포트를 첨부하며 목표
+(ADR-0021) `dev → main` 통합 PR은 Golden Dataset 반복 평가 리포트를 첨부하며 목표
 미달이면 릴리스를 진행하지 않는다. 미달 시 선택지는 rubric/prompt/Golden Case 재고정 또는 ADR-0003
 절차에 따른 Anchor 전환이며, 목표치를 낮추는 판단은 개인이 하지 않는다. 세 관점(`IAC`,
 `AWS_ACTUAL`, `DRIFT`) 중 하나라도 Golden Case가 없어 측정하지 못한 리포트는 Gate 통과 근거로 쓰지
@@ -221,7 +221,7 @@ Operational and domain metadata uses DynamoDB while large immutable artifacts us
 
 장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery, AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow, Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology, Customer Policy Ingestion을 다룬다.
 
-M3/M4 착수 전 합의가 필요한 세 결정은 `Proposed` 상태로 남아 있다: ADR-0019(승인 배포 실행 경계),
-ADR-0020(Post-Deploy Verification과 before/after 비교), ADR-0021(Demo·Release readiness gate). 세 ADR이
-`Accepted`가 되기 전에 D는 live plan/apply 경로를, A는 Deployment 생성·후속 전이를, C는 재평가
-Assessment와 비교 projection을 구현하지 않는다.
+ADR-0019(승인 배포 실행 경계)는 `Proposed`로 남아 있다. ADR-0020(Post-Deploy Verification과
+before/after 비교)과 ADR-0021(Demo·Release readiness gate)은 `Accepted`다. 따라서 D의 live
+plan/apply와 A의 Deployment 생성·후속 전이는 ADR-0019 합의 전 구현하지 않지만, C의 비교 projection은
+ADR-0020을 따른다.

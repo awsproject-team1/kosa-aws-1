@@ -401,19 +401,18 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 허용하지만, 다른 writer가 다른 lifecycle이나 내용을 쓰면 계속 fail-closed한다. 따라서 같은
 키에 lifecycle을 별도로 쓰는 두 번째 writer를 만들지 않는다.
 
-## M3 planned contract additions
+## M3 contract additions
 
-아래 Contract는 아직 `packages/contracts/`에 없다. 경계는 ADR-0019·ADR-0020이 `Proposed`인 상태이며,
-두 ADR이 `Accepted`가 된 뒤 이 문서와 같은 PR에서 추가한다. 그 전에는 각 역할이 자기 모듈에 같은
-의미의 값을 따로 만들지 않는다 — 같은 개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인
-구조가 재발한다.
+ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019의
+A/D-owned Contract는 아직 구현되지 않았다. 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은
+개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인 구조가 재발한다.
 
 | 추가 | 소유 | 의미 |
 | --- | --- | --- |
 | `DeploymentStatus` | A | Deployment 상태 기계의 값과 전이 (ADR-0019 §8) |
 | `AuditAction` | A | 감사 event action 어휘. 현재 문자열 상수로 흩어진 값을 한곳으로 모은다 |
-| `FindingResolution` | C | Finding 해소 여부의 5개 값 (ADR-0020 §4) |
-| `AssessmentComparison` | C | before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
+| `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
+| `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
 | `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
 | `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
 
@@ -434,6 +433,12 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 `RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
 역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
 옮긴다.
+
+`AssessmentComparison`은 두 immutable Assessment의 Coverage/Readiness와 Finding Resolution을
+읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
+`model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
+`ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
+비교 가능 근거가 아니다.
 
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 

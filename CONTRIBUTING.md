@@ -33,7 +33,7 @@
 
 ## Release gate (`dev → main`)
 
-아래 목록은 ADR-0021이 `Proposed` 상태로 제안한 릴리스 게이트다. 합의 시 확정 표기로 옮긴다.
+아래 목록은 ADR-0021이 확정한 릴리스 게이트다.
 
 - [ ] 데모 폐루프 E2E 실행 기록 (Assessment → Finding → Remediation → PR → plan → 승인 → apply →
       Post-Deploy Verification)
