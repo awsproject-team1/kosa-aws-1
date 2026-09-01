@@ -112,13 +112,17 @@ Finding 조회와 예외 로드가 이미 A에 있으므로 조인 주체도 A�
 class PatchGenerator(Protocol):
     def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch: ...
 
+
 class RemediationService:
     def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch: ...
 
 
 # 제안
 class PatchGenerator(Protocol):
-    def generate(self, *, decision: RemediationDecision, snapshot: IaCSnapshot) -> RemediationPatch: ...
+    def generate(
+        self, *, decision: RemediationDecision, snapshot: IaCSnapshot
+    ) -> RemediationPatch: ...
+
 
 class RemediationService:
     def generate(self, *, decision: RemediationDecision, snapshot: IaCSnapshot) -> RemediationPatch:
