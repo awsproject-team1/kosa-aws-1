@@ -196,7 +196,9 @@ Resources:
                 Action: [s3:GetBucketVersioning]
                 Resource: !GetAtt LambdaCodeBucket.Arn
               - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject]
+                # The deployment job revalidates the immutable S3 Version ID before
+                # CloudFormation receives it, so it needs the version-specific read action.
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject]
                 Resource: !Sub "${LambdaCodeBucket.Arn}/lambda/m0/*"
               - Effect: Allow
                 Action: [cloudformation:CreateChangeSet, cloudformation:DeleteChangeSet,

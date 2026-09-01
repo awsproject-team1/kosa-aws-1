@@ -79,3 +79,12 @@ class CustomerBootstrapSecurityTest(unittest.TestCase):
             pass_role["Condition"],
             {"StringEquals": {"iam:PassedToService": "cloudformation.amazonaws.com"}},
         )
+
+    def test_github_role_can_reverify_the_exact_artifact_version(self) -> None:
+        policies = self.resources["GitHubActionsDeploymentRole"]["Properties"]["Policies"]
+        statements = policies[0]["PolicyDocument"]["Statement"]
+        artifact_read = next(
+            statement for statement in statements if "s3:GetObject" in statement["Action"]
+        )
+        self.assertIn("s3:GetObjectVersion", artifact_read["Action"])
+        self.assertEqual(artifact_read["Resource"], "${LambdaCodeBucket.Arn}/lambda/m0/*")
