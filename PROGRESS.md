@@ -63,6 +63,10 @@
   target만 Worker가 해석하도록 하고, GitHub revision preflight → Secrets Manager short-lived
   installation token/External ID → STS S3 read-only → Bedrock AWS_ACTUAL 평가를 조건부 M1
   runtime으로 연결. M0 fixture 모드는 live configuration이 없을 때만 유지한다.
+- M1 customer-operated deployment bootstrap: 고객 관리자가 1회 실행하는 CloudFormation으로
+  exact GitHub OIDC Environment subject만 신뢰하는 deployment role, private versioned Lambda-code
+  bucket, foundation 전용 CloudFormation execution role을 생성하고, 기존 workflow가 bootstrap
+  output만 사용해 M1 foundation을 배포하도록 연결 (실제 customer sandbox 실행 대기)
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
@@ -106,12 +110,14 @@
 
 ## Next
 
-- **M1 실제 검증 선행:** GitHub 저장소에 서로 다른 두 protected Environment
-  (`customer-sandbox-artifact`, `customer-sandbox-deploy`)를 만들고, 각각 Required reviewers와
-  같은 `EXPECTED_AWS_ACCOUNT_ID`를 설정한다. deploy Environment에는
+- **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
+  계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
+  bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
+  protected Environment (`customer-sandbox-artifact`, `customer-sandbox-deploy`)과 Required
+  reviewers/같은 `EXPECTED_AWS_ACCOUNT_ID`를 설정하고, deploy Environment에
   `M1_ASSESSMENT_RUNTIME_JSON`, `M1_ASSESSMENT_SECRET_ARNS`,
-  `M1_ASSESSMENT_READ_ROLE_ARNS` Secret을 등록한다. 이 설정·PR #16 승인/병합 전에는
-  고객 sandbox 배포나 실제 GitHub/AWS/Bedrock E2E를 시작하지 않는다.
+  `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정·PR #16 승인/병합 전에는 고객 sandbox
+  배포나 실제 GitHub/AWS/Bedrock E2E를 시작하지 않는다.
 - M1 D: IaC Snapshot + AWS Actual 조합 계층(Fixture/Mock) 완료 →
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합으로 collector 뒤 어댑터 교체
 - M1 C: collector가 만든 Assessment 입력 번들을 소비하는 평가 흐름 연결 (IAC/AWS_ACTUAL 관점)
