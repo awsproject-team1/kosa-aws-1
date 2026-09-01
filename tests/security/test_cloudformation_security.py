@@ -437,6 +437,9 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
         self.assertEqual(diagnostic["if"], "failure()")
         script = diagnostic["run"]
         self.assertIn("aws cloudformation list-change-sets", script)
+        self.assertIn("aws cloudformation describe-events", script)
+        self.assertIn("--filters FailedEvents=true", script)
+        self.assertIn("ValidationPath", script)
         self.assertIn("aws cloudformation describe-stack-events", script)
         self.assertNotIn("--include-property-values", script)
 

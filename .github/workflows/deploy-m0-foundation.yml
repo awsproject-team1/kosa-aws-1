@@ -302,6 +302,20 @@ jobs:
             --query 'Summaries[?Status==`FAILED`]|reverse(sort_by(@, &CreationTime))[:3].{Name:ChangeSetName,Created:CreationTime,Reason:StatusReason}' \
             --output json
           echo "::endgroup::"
+          failed_change_set_id=$(aws cloudformation list-change-sets \
+            --stack-name "${STACK_NAME}" \
+            --query 'reverse(sort_by(Summaries[?Status==`FAILED`], &CreationTime))[0].ChangeSetId' \
+            --output text)
+          if [[ -n "${failed_change_set_id}" && "${failed_change_set_id}" != "None" ]]; then
+            echo "::group::Early validation failures"
+            aws cloudformation describe-events \
+              --stack-name "${STACK_NAME}" \
+              --change-set-name "${failed_change_set_id}" \
+              --filters FailedEvents=true \
+              --query 'OperationEvents[].{LogicalResourceId:LogicalResourceId,ResourceType:ResourceType,ValidationName:ValidationName,ValidationPath:ValidationPath,ValidationStatusReason:ValidationStatusReason,HookStatusReason:HookStatusReason,ResourceStatusReason:ResourceStatusReason}' \
+              --output json
+            echo "::endgroup::"
+          fi
           echo "::group::Recent stack failures"
           aws cloudformation describe-stack-events \
             --stack-name "${STACK_NAME}" \
