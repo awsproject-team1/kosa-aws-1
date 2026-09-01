@@ -23,11 +23,11 @@ from packages.contracts.policy_ingestion import (
 )
 
 MARKDOWN_PARSER_ID = "markdown-parser"
-MARKDOWN_PARSER_VERSION = "1.0.0"
+MARKDOWN_PARSER_VERSION = "1.0.1"
 PLAIN_TEXT_PARSER_ID = "plain-text-parser"
-PLAIN_TEXT_PARSER_VERSION = "1.0.0"
+PLAIN_TEXT_PARSER_VERSION = "1.0.1"
 CSV_PARSER_ID = "csv-parser"
-CSV_PARSER_VERSION = "1.0.0"
+CSV_PARSER_VERSION = "1.0.1"
 
 _HEADING = re.compile(r"^(?P<level>#{1,6})\s+(?P<title>.+?)\s*#*\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
