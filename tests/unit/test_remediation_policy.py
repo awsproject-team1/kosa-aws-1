@@ -55,8 +55,12 @@ def _target(**overrides: object) -> RemediationTarget:
     fields: dict[str, object] = {
         "resource_id": RESOURCE,
         "resource_type": S3,
+        "rule_id": RULE_ID,
+        "rule_version": RULE_VERSION,
         "terraform_managed": True,
     }
+    if overrides.get("iac_status") is not None and "iac_perspective" not in overrides:
+        fields["iac_perspective"] = EvaluationPerspective.IAC
     fields.update(overrides)
     return RemediationTarget(**fields)  # type: ignore[arg-type]
 
@@ -144,7 +148,7 @@ class RemediationScopeTests(unittest.TestCase):
         decision = _policy().decide(
             _finding(rule_version="2026-09-30"),
             customer_id=CUSTOMER,
-            target=_target(),
+            target=_target(rule_version="2026-09-30"),
             at=NOW,
         )
 
@@ -250,6 +254,35 @@ class ActionSelectionTests(unittest.TestCase):
                 at=NOW,
             )
 
+    def test_a_target_for_another_rule_version_is_a_programming_error(self):
+        with self.assertRaises(ValueError):
+            _policy().decide(
+                _finding(),
+                customer_id=CUSTOMER,
+                target=_target(rule_version="2026-07-01"),
+                at=NOW,
+            )
+
+    def test_an_iac_outcome_from_another_rule_cannot_open_a_sync(self):
+        """같은 리소스라도 다른 Rule의 `PASS`는 이 Rule의 IaC가 안전하다는 근거가 아니다.
+
+        대조하지 않으면 안전하지 않은 IaC를 현재 commit 그대로 배포 대상으로 삼게 된다.
+        """
+        with self.assertRaises(ValueError):
+            _policy().decide(
+                _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
+                customer_id=CUSTOMER,
+                target=_target(rule_id="S3-ENCRYPT-001", iac_status=EvaluationStatus.PASS),
+                at=NOW,
+            )
+
+    def test_an_actual_outcome_cannot_masquerade_as_the_iac_outcome(self):
+        with self.assertRaises(ValueError):
+            _target(
+                iac_status=EvaluationStatus.PASS,
+                iac_perspective=EvaluationPerspective.AWS_ACTUAL,
+            )
+
 
 class RemediationExceptionTests(unittest.TestCase):
     def test_an_active_exception_suppresses_the_finding(self):
@@ -334,6 +367,46 @@ class RemediationExceptionTests(unittest.TestCase):
 
                 self.assertEqual(decision.exception_id, "exception-narrow")
 
+    def test_an_exception_does_not_apply_before_it_was_approved(self):
+        """나중에 승인된 예외가 그 이전에 평가된 Finding을 소급해 덮지 않는다."""
+        decision = _policy().decide(
+            _finding(),
+            customer_id=CUSTOMER,
+            target=_target(),
+            at=NOW,
+            exceptions=[
+                _exception(
+                    approved_at="2026-10-01T00:00:00+00:00",
+                    expires_at="2026-12-31T00:00:00+00:00",
+                )
+            ],
+        )
+
+        self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
+
+    def test_an_exception_activates_at_its_exact_approval_moment(self):
+        exception = _exception(approved_at=NOW.isoformat())
+
+        self.assertTrue(exception.is_active_at(NOW))
+        self.assertFalse(exception.is_active_at(NOW - timedelta(seconds=1)))
+
+    def test_equally_narrow_exceptions_are_chosen_independently_of_input_order(self):
+        """저장소 조회 순서가 달라져도 감사 기록에 남는 `exception_id`는 같아야 한다."""
+        first = _exception(exception_id="exception-a", resource_id=RESOURCE)
+        second = _exception(exception_id="exception-b", resource_id=RESOURCE)
+
+        for order in ((first, second), (second, first)):
+            with self.subTest(order=[exception.exception_id for exception in order]):
+                decision = _policy().decide(
+                    _finding(),
+                    customer_id=CUSTOMER,
+                    target=_target(),
+                    at=NOW,
+                    exceptions=list(order),
+                )
+
+                self.assertEqual(decision.exception_id, "exception-a")
+
     def test_an_exception_suppresses_a_manual_only_rule_too(self):
         """예외는 '조치하지 않는다'는 결정이므로 조치 유형보다 앞선다."""
         decision = _policy(RemediationEligibility.MANUAL_ONLY).decide(
@@ -367,7 +440,12 @@ class CommittedRemediationRegistryTests(unittest.TestCase):
     def test_rules_without_a_uniquely_determined_safe_state_are_manual_only(self):
         registry = load_rule_registry(REGISTRY)
 
-        for rule_id in ("S3-POLICY-001", "S3-LOGGING-001", "EC2-EBS-ENCRYPT-001"):
+        for rule_id in (
+            "S3-POLICY-001",
+            "S3-ENCRYPT-001",
+            "S3-LOGGING-001",
+            "EC2-EBS-ENCRYPT-001",
+        ):
             with self.subTest(rule_id=rule_id):
                 self.assertIs(
                     registry.remediation.eligibility(rule_id=rule_id, version=RULE_VERSION),

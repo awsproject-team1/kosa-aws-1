@@ -162,25 +162,65 @@ class RemediationTargetContractTests(unittest.TestCase):
             RemediationTarget(
                 resource_id=RESOURCE,
                 resource_type="AWS::S3::Bucket",
+                rule_id=RULE_ID,
+                rule_version=RULE_VERSION,
                 terraform_managed="yes",  # type: ignore[arg-type]
             )
 
     def test_an_unknown_iac_outcome_is_representable(self):
         target = RemediationTarget(
-            resource_id=RESOURCE, resource_type="AWS::S3::Bucket", terraform_managed=True
+            resource_id=RESOURCE,
+            resource_type="AWS::S3::Bucket",
+            rule_id=RULE_ID,
+            rule_version=RULE_VERSION,
+            terraform_managed=True,
         )
 
         self.assertIsNone(target.to_dict()["iac_status"])
+        self.assertIsNone(target.to_dict()["iac_perspective"])
 
     def test_an_iac_outcome_serializes_as_its_status_value(self):
         target = RemediationTarget(
             resource_id=RESOURCE,
             resource_type="AWS::S3::Bucket",
+            rule_id=RULE_ID,
+            rule_version=RULE_VERSION,
             terraform_managed=True,
             iac_status=EvaluationStatus.PASS,
+            iac_perspective=EvaluationPerspective.IAC,
         )
 
         self.assertEqual(target.to_dict()["iac_status"], "PASS")
+        self.assertEqual(target.to_dict()["iac_perspective"], "IAC")
+
+    def test_iac_status_and_perspective_must_be_provided_together(self):
+        cases = (
+            {"iac_status": EvaluationStatus.PASS},
+            {"iac_perspective": EvaluationPerspective.IAC},
+        )
+        for fields in cases:
+            with self.subTest(fields=fields):
+                with self.assertRaises(ValueError):
+                    RemediationTarget(
+                        resource_id=RESOURCE,
+                        resource_type="AWS::S3::Bucket",
+                        rule_id=RULE_ID,
+                        rule_version=RULE_VERSION,
+                        terraform_managed=True,
+                        **fields,
+                    )
+
+    def test_only_an_iac_perspective_can_provide_the_iac_status(self):
+        with self.assertRaises(ValueError):
+            RemediationTarget(
+                resource_id=RESOURCE,
+                resource_type="AWS::S3::Bucket",
+                rule_id=RULE_ID,
+                rule_version=RULE_VERSION,
+                terraform_managed=True,
+                iac_status=EvaluationStatus.PASS,
+                iac_perspective=EvaluationPerspective.AWS_ACTUAL,
+            )
 
 
 class RemediationDecisionContractTests(unittest.TestCase):

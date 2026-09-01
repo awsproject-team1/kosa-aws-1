@@ -43,7 +43,11 @@ FINDING = Finding(
     evidence_references=(EVIDENCE,),
 )
 TARGET = RemediationTarget(
-    resource_id=RESOURCE, resource_type="AWS::S3::Bucket", terraform_managed=True
+    resource_id=RESOURCE,
+    resource_type="AWS::S3::Bucket",
+    rule_id=RULE_ID,
+    rule_version=RULE_VERSION,
+    terraform_managed=True,
 )
 POLICY = RemediationPolicy(
     [
@@ -130,8 +134,11 @@ class RemediationFailClosedTests(unittest.TestCase):
                     target=RemediationTarget(
                         resource_id=RESOURCE,
                         resource_type="AWS::S3::Bucket",
+                        rule_id=RULE_ID,
+                        rule_version=RULE_VERSION,
                         terraform_managed=True,
                         iac_status=EvaluationStatus.PASS,
+                        iac_perspective=EvaluationPerspective.IAC,
                     ),
                     at=NOW,
                 )

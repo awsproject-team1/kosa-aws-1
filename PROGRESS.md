@@ -154,8 +154,10 @@
   등록·승인·저장(만료 포함)과 감사 record도 A 경계다
 - M2 D: `FixturePatchGenerator` 호출부를 `RemediationDecision`이 `TERRAFORM_PATCH`인
   Finding으로 제한하고, `ACTUAL_SYNC` 결정은 Patch 없이 현재 commit을 배포 대상으로 넘긴다
-- M2 A/C/D: `RemediationTarget`의 `terraform_managed`와 IaC 판정을 누가 채우는지 확정한다.
-  IaC 관점 결과는 C가, Terraform 관리 여부는 D의 Snapshot이 안다
+- M2 A/C/D: ADR-0017·ADR-0018에 따라 `RemediationDecision`을 단일 판정 정본으로
+  연결한다. A는 판정 호출·저장·Job 분기, C는 중복 `RemediationStrategy` 판정
+  제거, D는 `TERRAFORM_PATCH` 결정의 Patch 생성 강제와 `ACTUAL_SYNC` 실행을
+  구현한다
 - M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
   DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
   같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)

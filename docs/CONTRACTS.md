@@ -311,8 +311,12 @@ Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Reposi
 - `ManualReviewCode`: 자동 조치를 거부한 사유. 자유 문장이 아니다
 - `RemediationException`: `(customer_id, rule_id, rule_version)`과 선택적 `resource_id`에
   묶이는 고객 승인 면제. 사유는 열거값이고 `approved_at`/`expires_at`은 offset을 포함한
-  ISO-8601이어야 한다
-- `RemediationTarget`: 대상 Resource의 Terraform 관리 여부와 같은 `Resource × Rule`의 IaC 판정
+  ISO-8601이어야 한다. 유효 구간은 `approved_at <= moment < expires_at`이며, 승인 이전 시점의
+  Finding은 나중에 등록된 예외로 소급 억제되지 않는다
+- `RemediationTarget`: 대상 Resource의 Terraform 관리 여부와 그 Resource에 대한 **해당 Rule
+  version의 IAC 관점** 판정. `rule_id`/`rule_version`을 Finding과 대조하고,
+  `iac_status`/`iac_perspective=IAC`를 한 쌍으로 강제한다. 같은 리소스의 다른 Rule이나
+  Actual 관점에서 나온 `PASS`가 `ACTUAL_SYNC`를 열 수 없다
 - `RemediationDecision`: Finding·Rule version·관점과 판정. `MANUAL_REVIEW`만
   `manual_review_code`를, `SUPPRESSED`만 `exception_id`를 가진다
 
