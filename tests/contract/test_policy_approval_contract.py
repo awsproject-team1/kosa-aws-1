@@ -145,7 +145,24 @@ class RejectionCodeContractTest(unittest.TestCase):
 
     def test_codes_are_stable_strings(self) -> None:
         self.assertEqual(ApprovalRejectionCode.RULE_NOT_APPROVED.value, "RULE_NOT_APPROVED")
+        self.assertEqual(ApprovalRejectionCode.RULE_NOT_APPROVABLE.value, "RULE_NOT_APPROVABLE")
         self.assertEqual(RuleLifecycle.APPROVED.value, "APPROVED")
+
+    def test_every_refusal_the_approval_path_can_raise_has_a_code(self) -> None:
+        """승인 경로의 거부도 게시와 같은 열거값으로 표현된다.
+
+        A가 `rejection_code`를 API 오류 코드로 옮기므로, 한 경로만 코드 없는 예외를 던지면
+        그 자리가 오류 코드 없는 실패로 새어 나간다.
+        """
+        for code in (
+            ApprovalRejectionCode.SOURCE_NOT_APPROVABLE,
+            ApprovalRejectionCode.RULE_NOT_APPROVABLE,
+            ApprovalRejectionCode.UNKNOWN_LOCATOR,
+            ApprovalRejectionCode.CONTENT_DIGEST_MISMATCH,
+            ApprovalRejectionCode.DUPLICATE_RULE_REFERENCE,
+            ApprovalRejectionCode.EMPTY_PROFILE,
+        ):
+            self.assertIsInstance(code.value, str)
 
 
 if __name__ == "__main__":

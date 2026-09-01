@@ -202,6 +202,63 @@ class ApproveSourceTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.rejection_code, ApprovalRejectionCode.EMPTY_PROFILE)
 
+    def test_refuses_the_same_rule_listed_twice(self) -> None:
+        """중복은 게시와 같은 코드로 거부된다. Contract의 맨 `ValueError`로 새면 안 된다."""
+        document = _document()
+        candidate = _candidate(document, PUBLIC_LOCATOR, rule_id="S3-PUBLIC-100")
+
+        with self.assertRaises(ApprovalRejectedError) as raised:
+            approve_source(
+                document,
+                [candidate, candidate],
+                approved_by="policy-owner",
+                approved_at="2026-09-01T00:00:00Z",
+            )
+
+        self.assertEqual(
+            raised.exception.rejection_code, ApprovalRejectionCode.DUPLICATE_RULE_REFERENCE
+        )
+
+    def test_refuses_a_candidate_a_reviewer_already_decided_on(self) -> None:
+        """`REJECTED`/`SUPERSEDED`는 조용히 뒤집히지 않는다. 재검토는 새 후보로 올린다."""
+        document = _document()
+        candidate = _candidate(document, PUBLIC_LOCATOR, rule_id="S3-PUBLIC-100")
+
+        for decided in (
+            candidate.rejected(),
+            RuleCandidate(rule=candidate.rule, lifecycle=RuleLifecycle.SUPERSEDED),
+        ):
+            with self.subTest(lifecycle=decided.lifecycle):
+                with self.assertRaises(ApprovalRejectedError) as raised:
+                    approve_source(
+                        document,
+                        [decided],
+                        approved_by="policy-owner",
+                        approved_at="2026-09-01T00:00:00Z",
+                    )
+                self.assertEqual(
+                    raised.exception.rejection_code, ApprovalRejectionCode.RULE_NOT_APPROVABLE
+                )
+
+    def test_re_approving_an_approved_candidate_is_idempotent(self) -> None:
+        """승인 API가 at-least-once로 재시도돼도 같은 승인이 다시 나온다 (ADR-0013)."""
+        document = _document()
+        first, approved = approve_source(
+            document,
+            [_candidate(document, PUBLIC_LOCATOR, rule_id="S3-PUBLIC-100")],
+            approved_by="policy-owner",
+            approved_at="2026-09-01T00:00:00Z",
+        )
+
+        second, _ = approve_source(
+            document,
+            approved,
+            approved_by="policy-owner",
+            approved_at="2026-09-01T00:00:00Z",
+        )
+
+        self.assertEqual(second, first)
+
 
 class PublishProfileTest(unittest.TestCase):
     def setUp(self) -> None:

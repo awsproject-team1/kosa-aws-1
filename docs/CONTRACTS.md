@@ -178,10 +178,18 @@ zip 한도로는 잡히지 않는다 — 증폭이 압축 해제 이후 Parser �
 
 - `approve_source(document, candidates, ...)` — `READY` 문서에만 붙고, 후보가 인용한
   (source_id, source_version)·locator·`content_sha256`을 정규화 결과와 대조한다. 사람이 검토한
-  문장과 Rule이 고정한 hash가 같음을 승인 시점에 못 박는다.
+  문장과 Rule이 고정한 hash가 같음을 승인 시점에 못 박는다. 이미 `REJECTED`/`SUPERSEDED`인
+  후보는 거부한다 (`RULE_NOT_APPROVABLE`) — 재검토는 새 후보로 올린다. 이미 `APPROVED`인 후보를
+  다시 넘기는 것은 허용한다. 승인 API가 at-least-once로 재시도될 수 있기 때문이다 (ADR-0013).
 - `publish_profile(...)` — `docs/POLICY_INGESTION.md`의 거부 조건 3건을 구현한다: 승인되지 않은
   Source/Rule 참조, 승인된 것과 다른 Source version 참조, 승인 record의
-  `(artifact_id, s3_version_id, content_sha256)`과 어긋나는 Rule.
+  `(artifact_id, s3_version_id, content_sha256)`과 어긋나는 Rule. 마지막 항목의 게시 시점 대조는
+  `(artifact_id, content_sha256)`까지다 — `PolicySource`에 `s3_version_id` 필드가 없다. 두 값이
+  같으면 같은 바이트이므로 판본이 뒤바뀌는 경우는 걸리며, S3 object version까지 고정하는 것은
+  A가 조건부 write에서 `PolicySourceApproval.original_binding`을 쓰는 몫이다.
+
+두 경로의 거부 사유는 **같은 `ApprovalRejectionCode` 열거값**이다. 같은 성격의 거부가 경로에
+따라 코드 없는 예외로 새면 A가 응답 오류 코드로 옮길 수 없다.
 
 두 함수는 아무것도 영속화하지 않는다. A가 DynamoDB 조건부 write 앞에서 호출하고, 거부되면
 write를 시도하지 않는다. 게시 결과는 기존 `PolicyProfile`이므로 `InMemoryPolicyCatalog`와

@@ -22,7 +22,12 @@ from packages.contracts.policy_approval import (
     ApprovalRejectionCode,
     PolicySourceApproval,
     RuleCandidate,
+    RuleLifecycle,
 )
+
+#: 이미 판단이 내려진 lifecycle. 재승인은 새 후보로 다시 올려야 한다. `APPROVED`는 제외한다 —
+#: 승인 API가 at-least-once로 재시도될 때(ADR-0013) 같은 후보가 다시 들어오는 것은 정상이다.
+_DECIDED_LIFECYCLES = frozenset({RuleLifecycle.REJECTED, RuleLifecycle.SUPERSEDED})
 
 
 class ApprovalRejectedError(ValueError):
@@ -49,6 +54,9 @@ def approve_source(
     사람이 본 문장과 Rule이 가리키는 문장이 같음을 승인 시점에 고정한다. 나중에 원문이 개정되면
     새 Source version이 되므로 이 승인은 옛 판본에 그대로 남는다.
 
+    거부 사유는 `publish_profile()`과 같은 열거값이다 — 같은 성격의 거부가 경로에 따라 코드
+    없는 예외로 새면 A가 응답 오류 코드로 옮길 수 없다.
+
     Returns the immutable approval record and the candidates marked `APPROVED`.
     """
     if not isinstance(document, NormalizedPolicyDocument):
@@ -64,10 +72,28 @@ def approve_source(
         raise ApprovalRejectedError(
             ApprovalRejectionCode.EMPTY_PROFILE, "an approval must cover at least one rule"
         )
+    seen: set[tuple[str, str]] = set()
     for candidate in reviewed:
         if not isinstance(candidate, RuleCandidate):
             raise TypeError("candidates must contain RuleCandidate values")
-        _require_rule_matches_document(candidate.rule, document)
+        rule = candidate.rule
+        if candidate.lifecycle in _DECIDED_LIFECYCLES:
+            # 이미 내려진 판단을 조용히 뒤집지 않는다. 재검토는 새 후보로 올린다.
+            raise ApprovalRejectedError(
+                ApprovalRejectionCode.RULE_NOT_APPROVABLE,
+                f"rule {rule.rule_id}@{rule.version} is {candidate.lifecycle.value} "
+                "and may not be approved again",
+            )
+        key = (rule.rule_id, rule.version)
+        if key in seen:
+            # `publish_profile()`이 같은 조건에 코드를 붙이므로 여기서도 붙인다. Contract의
+            # `ValueError`로 새면 A가 오류 코드 없이 받게 된다.
+            raise ApprovalRejectedError(
+                ApprovalRejectionCode.DUPLICATE_RULE_REFERENCE,
+                f"rule {rule.rule_id}@{rule.version} is listed more than once",
+            )
+        seen.add(key)
+        _require_rule_matches_document(rule, document)
 
     approved = tuple(candidate.approved() for candidate in reviewed)
     # `normalized_artifact_id`/`normalized_sha256`은 `is_approvable`이 이미 `FAILED`를 배제해
@@ -106,7 +132,10 @@ def publish_profile(
     3. 승인 record가 인용한 `(artifact_id, s3_version_id, content_sha256)`과 어긋나는 Rule
 
     `sources`는 이미 게시된 `PolicySource` 목록이다. 3번을 검사하려면 승인 record의 binding과
-    대조할 Source 쪽 값이 필요하다. 비워 두면 1·2번만 검사한다.
+    대조할 Source 쪽 값이 필요하다. 비워 두면 1·2번만 검사한다. `PolicySource`에 `s3_version_id`
+    필드가 없어 대조는 `(artifact_id, content_sha256)`까지다 — 두 값이 같으면 같은 바이트이므로
+    판본이 뒤바뀌는 경우는 걸린다. S3 object version까지 못 박는 것은 A의 조건부 write 몫이며
+    `PolicySourceApproval.original_binding`이 그 tuple을 그대로 준다.
     """
     approval_index = _approval_index(approvals)
     source_index = {(source.source_id, source.version): source for source in sources}

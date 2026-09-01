@@ -36,6 +36,7 @@ class ApprovalRejectionCode(StrEnum):
     """
 
     SOURCE_NOT_APPROVABLE = "SOURCE_NOT_APPROVABLE"
+    RULE_NOT_APPROVABLE = "RULE_NOT_APPROVABLE"
     SOURCE_VERSION_MISMATCH = "SOURCE_VERSION_MISMATCH"
     ORIGINAL_BINDING_MISMATCH = "ORIGINAL_BINDING_MISMATCH"
     UNKNOWN_LOCATOR = "UNKNOWN_LOCATOR"
@@ -128,7 +129,13 @@ class PolicySourceApproval:
 
     @property
     def original_binding(self) -> tuple[str, str, str]:
-        """`(artifact_id, s3_version_id, content_sha256)` — publication이 대조하는 값."""
+        """`(artifact_id, s3_version_id, content_sha256)` — 승인이 붙은 정확한 원본 판본.
+
+        `docs/POLICY_INGESTION.md` Original finalization이 요구하는 tuple 전체다. 게시 시점의
+        대조는 `(artifact_id, content_sha256)`까지만 가능하다 — `PolicySource` Contract에
+        `s3_version_id` 필드가 없다. 두 값이 같으면 같은 바이트이므로 판본이 뒤바뀌는 경우는
+        걸리지만, S3 object version까지 못 박으려면 A가 조건부 write에서 이 tuple을 그대로 쓴다.
+        """
         return (self.artifact_id, self.s3_version_id, self.content_sha256)
 
     def approves(self, reference: PolicyRuleReference) -> bool:
