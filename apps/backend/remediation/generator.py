@@ -16,16 +16,23 @@ import hashlib
 import json
 from collections.abc import Mapping
 
-from packages.contracts import ArtifactReference, ArtifactType, IaCSnapshot, RemediationPatch
+from packages.contracts import (
+    ArtifactReference,
+    ArtifactType,
+    IaCSnapshot,
+    RemediationDecision,
+    RemediationPatch,
+)
 
 
 class FixturePatchGenerator:
     """Fixture로 주입된 변경 계획을 snapshot에 바인딩된 patch로 만드는 결정적 generator.
 
     `PatchGenerator` Protocol(service.py)을 만족한다. finding_id별로 "어떤 파일을 어떻게
-    바꿀지"를 미리 주입받고, 요청이 오면 그 계획을 요청한 `IaCSnapshot`의 좌표
-    (commit/customer/repository)에 결정적으로 묶어 `RemediationPatch`를 만든다. 실제 코드
-    생성을 하지 않으므로, 같은 입력은 항상 같은 patch를 만든다.
+    바꿀지"를 미리 주입받고, 요청이 오면 판정(`RemediationDecision`)의 finding_id에 해당하는
+    계획을 `IaCSnapshot`의 좌표(commit/customer/repository)에 결정적으로 묶어
+    `RemediationPatch`를 만든다. 실제 코드 생성을 하지 않으므로, 같은 입력은 항상 같은 patch를
+    만든다. 판정의 action 게이트(TERRAFORM_PATCH만 허용)는 `RemediationService`가 강제한다.
     """
 
     def __init__(self, plans: Mapping[str, tuple[str, ...]]) -> None:
@@ -49,17 +56,22 @@ class FixturePatchGenerator:
             normalized[finding_id] = tuple(sorted(paths))
         self._plans = normalized
 
-    def generate(self, *, finding_id: str, snapshot: IaCSnapshot) -> RemediationPatch:
-        """요청한 finding에 대한 변경 계획을 snapshot에 바인딩해 patch를 만든다.
+    def generate(self, *, decision: RemediationDecision, snapshot: IaCSnapshot) -> RemediationPatch:
+        """판정에 해당하는 변경 계획을 snapshot에 바인딩해 patch를 만든다.
 
-        계획이 없는 finding_id는 만들 patch가 없다는 뜻이므로 `KeyError`가 아니라
-        의미가 분명한 `ValueError`로 거부한다. snapshot 좌표는 그대로 patch artifact에
-        반영되어, `RemediationService`의 scope·commit 바인딩 검증을 통과한다.
+        finding_id는 판정에서 꺼낸다(ADR-0018 D3). 별도 인자로 받으면 판정과 대상이 어긋난
+        호출이 가능해지기 때문이다. 계획이 없는 finding_id는 만들 patch가 없다는 뜻이므로
+        `KeyError`가 아니라 의미가 분명한 `ValueError`로 거부한다. snapshot 좌표는 그대로
+        patch artifact에 반영되어, `RemediationService`의 scope·commit 바인딩 검증을 통과한다.
+
+        action 게이트(TERRAFORM_PATCH만 허용)는 `RemediationService`가 강제하므로 여기서는
+        중복 검사하지 않는다. 다만 타입은 최소한으로 확인한다.
         """
-        if not isinstance(finding_id, str) or not finding_id.strip():
-            raise ValueError("finding_id must be a non-empty string")
+        if not isinstance(decision, RemediationDecision):
+            raise TypeError("decision must be a RemediationDecision")
         if not isinstance(snapshot, IaCSnapshot):
             raise TypeError("snapshot must be an IaCSnapshot")
+        finding_id = decision.finding_id
         try:
             changed_paths = self._plans[finding_id]
         except KeyError:

@@ -1,4 +1,4 @@
-"""FixturePatchGenerator는 승인된 snapshot에 결정적으로 바인딩된 patch를 만든다."""
+"""FixturePatchGenerator는 승인된 판정·snapshot에 결정적으로 바인딩된 patch를 만든다."""
 
 import unittest
 
@@ -6,7 +6,16 @@ from apps.backend.remediation import (
     FixturePatchGenerator,
     RemediationService,
 )
-from packages.contracts import ArtifactReference, ArtifactType, IaCSnapshot, RemediationPatch
+from packages.contracts import (
+    ArtifactReference,
+    ArtifactType,
+    EvaluationPerspective,
+    IaCSnapshot,
+    ManualReviewCode,
+    RemediationAction,
+    RemediationDecision,
+    RemediationPatch,
+)
 
 
 def snapshot(
@@ -26,6 +35,28 @@ def snapshot(
     )
 
 
+def decision(
+    *,
+    finding: str = "finding-001",
+    action: RemediationAction = RemediationAction.TERRAFORM_PATCH,
+) -> RemediationDecision:
+    """테스트용 판정. 기본은 patch를 허가하는 TERRAFORM_PATCH."""
+    manual_code = (
+        ManualReviewCode.RULE_NOT_IN_SCOPE if action is RemediationAction.MANUAL_REVIEW else None
+    )
+    exception_id = "exc-001" if action is RemediationAction.SUPPRESSED else None
+    return RemediationDecision(
+        finding_id=finding,
+        resource_id="res-001",
+        rule_id="rule-001",
+        rule_version="1",
+        perspective=EvaluationPerspective.IAC,
+        action=action,
+        manual_review_code=manual_code,
+        exception_id=exception_id,
+    )
+
+
 def generator() -> FixturePatchGenerator:
     return FixturePatchGenerator(
         {
@@ -37,7 +68,7 @@ def generator() -> FixturePatchGenerator:
 
 class FixturePatchGeneratorTest(unittest.TestCase):
     def test_binds_patch_to_requested_snapshot_and_finding(self) -> None:
-        patch = generator().generate(finding_id="finding-001", snapshot=snapshot())
+        patch = generator().generate(decision=decision(), snapshot=snapshot())
         self.assertIsInstance(patch, RemediationPatch)
         self.assertEqual(patch.finding_id, "finding-001")
         self.assertEqual(patch.base_commit_sha, "abc123")
@@ -49,34 +80,34 @@ class FixturePatchGeneratorTest(unittest.TestCase):
     def test_output_passes_remediation_service_validation(self) -> None:
         # generator 출력이 검증 계층(RemediationService)을 그대로 통과해야 한다.
         service = RemediationService(generator())
-        patch = service.generate(finding_id="finding-002", snapshot=snapshot())
+        patch = service.generate(decision=decision(finding="finding-002"), snapshot=snapshot())
         self.assertEqual(patch.finding_id, "finding-002")
         self.assertEqual(patch.changed_paths, ("modules/s3/main.tf", "variables.tf"))
 
     def test_generation_is_deterministic(self) -> None:
         # 같은 입력 → 같은 patch(특히 결정적 digest).
-        first = generator().generate(finding_id="finding-001", snapshot=snapshot())
-        second = generator().generate(finding_id="finding-001", snapshot=snapshot())
+        first = generator().generate(decision=decision(), snapshot=snapshot())
+        second = generator().generate(decision=decision(), snapshot=snapshot())
         self.assertEqual(first.artifact.content_sha256, second.artifact.content_sha256)
         self.assertEqual(first.artifact.artifact_id, second.artifact.artifact_id)
 
     def test_different_commit_yields_different_digest(self) -> None:
         # snapshot commit이 다르면 patch 내용 digest도 달라져야 한다(재실행 안전성).
-        base = generator().generate(finding_id="finding-001", snapshot=snapshot())
-        other = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="def456"))
+        base = generator().generate(decision=decision(), snapshot=snapshot())
+        other = generator().generate(decision=decision(), snapshot=snapshot(commit="def456"))
         self.assertNotEqual(base.artifact.content_sha256, other.artifact.content_sha256)
 
     def test_different_commit_yields_different_artifact_id(self) -> None:
         # [P2] immutable artifact identity: 같은 repository/finding이라도 commit이 다르면
         # 내용이 다르므로 artifact_id도 달라져야 한다. 같은 ID가 다른 내용을 가리키면 안 된다.
-        base = generator().generate(finding_id="finding-001", snapshot=snapshot())
-        other = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="def456"))
+        base = generator().generate(decision=decision(), snapshot=snapshot())
+        other = generator().generate(decision=decision(), snapshot=snapshot(commit="def456"))
         self.assertNotEqual(base.artifact.artifact_id, other.artifact.artifact_id)
 
     def test_artifact_id_includes_content_digest(self) -> None:
         # [P2] artifact_id는 내용을 유일하게 규정하는 content digest를 담아야 한다.
         # 이것이 "같은 ID = 같은 내용" 불변식의 근거다.
-        patch = generator().generate(finding_id="finding-001", snapshot=snapshot())
+        patch = generator().generate(decision=decision(), snapshot=snapshot())
         self.assertIn(patch.artifact.content_sha256, patch.artifact.artifact_id)
 
     def test_same_commit_different_plan_yields_different_artifact_id(self) -> None:
@@ -85,8 +116,8 @@ class FixturePatchGeneratorTest(unittest.TestCase):
         # 같은 ID가 다른 내용을 가리켰다. AI 재생성/계획 변경에서 실제로 발생하는 시나리오.
         plan_a = FixturePatchGenerator({"finding-001": ("main.tf",)})
         plan_b = FixturePatchGenerator({"finding-001": ("main.tf", "variables.tf")})
-        a = plan_a.generate(finding_id="finding-001", snapshot=snapshot())
-        b = plan_b.generate(finding_id="finding-001", snapshot=snapshot())
+        a = plan_a.generate(decision=decision(), snapshot=snapshot())
+        b = plan_b.generate(decision=decision(), snapshot=snapshot())
         # 같은 finding/commit이지만 내용이 다르므로,
         self.assertNotEqual(a.artifact.content_sha256, b.artifact.content_sha256)
         # artifact_id도 달라야 한다(불변식).
@@ -97,8 +128,8 @@ class FixturePatchGeneratorTest(unittest.TestCase):
         # 같은 changed_paths(정렬)와 같은 digest로 정규화되어야 한다.
         forward = FixturePatchGenerator({"finding-001": ("a.tf", "b.tf")})
         reverse = FixturePatchGenerator({"finding-001": ("b.tf", "a.tf")})
-        first = forward.generate(finding_id="finding-001", snapshot=snapshot())
-        second = reverse.generate(finding_id="finding-001", snapshot=snapshot())
+        first = forward.generate(decision=decision(), snapshot=snapshot())
+        second = reverse.generate(decision=decision(), snapshot=snapshot())
         # 반환되는 changed_paths가 정렬되어 동일하고,
         self.assertEqual(first.changed_paths, ("a.tf", "b.tf"))
         self.assertEqual(second.changed_paths, ("a.tf", "b.tf"))
@@ -107,15 +138,15 @@ class FixturePatchGeneratorTest(unittest.TestCase):
 
     def test_rejects_unknown_finding(self) -> None:
         with self.assertRaises(ValueError):
-            generator().generate(finding_id="finding-999", snapshot=snapshot())
+            generator().generate(decision=decision(finding="finding-999"), snapshot=snapshot())
 
-    def test_rejects_empty_finding_id(self) -> None:
-        with self.assertRaises(ValueError):
-            generator().generate(finding_id="  ", snapshot=snapshot())
+    def test_rejects_non_decision(self) -> None:
+        with self.assertRaises(TypeError):
+            generator().generate(decision=object(), snapshot=snapshot())
 
     def test_rejects_non_snapshot(self) -> None:
         with self.assertRaises(TypeError):
-            generator().generate(finding_id="finding-001", snapshot=object())
+            generator().generate(decision=decision(), snapshot=object())
 
     def test_rejects_empty_plans(self) -> None:
         with self.assertRaises(ValueError):
@@ -129,12 +160,12 @@ class FixturePatchGeneratorTest(unittest.TestCase):
         # 절대경로는 RemediationPatch Contract가 생성 시점에 거부한다(경계 재사용 확인).
         gen = FixturePatchGenerator({"finding-001": ("/etc/passwd",)})
         with self.assertRaises(ValueError):
-            gen.generate(finding_id="finding-001", snapshot=snapshot())
+            gen.generate(decision=decision(), snapshot=snapshot())
 
     def test_rejects_parent_traversal_path_via_contract(self) -> None:
         gen = FixturePatchGenerator({"finding-001": ("../secrets.tf",)})
         with self.assertRaises(ValueError):
-            gen.generate(finding_id="finding-001", snapshot=snapshot())
+            gen.generate(decision=decision(), snapshot=snapshot())
 
 
 if __name__ == "__main__":
