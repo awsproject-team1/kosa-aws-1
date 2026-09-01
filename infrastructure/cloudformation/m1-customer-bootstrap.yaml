@@ -203,11 +203,15 @@ Resources:
               - Effect: Allow
                 Action: [cloudformation:CreateChangeSet, cloudformation:DeleteChangeSet,
                   cloudformation:DescribeChangeSet, cloudformation:DescribeStackEvents,
-                  cloudformation:DescribeEvents, cloudformation:DescribeStacks,
-                  cloudformation:ExecuteChangeSet,
+                  cloudformation:DescribeStacks, cloudformation:ExecuteChangeSet,
                   cloudformation:GetTemplate, cloudformation:GetTemplateSummary,
                   cloudformation:ListChangeSets, cloudformation:ListStackResources]
                 Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*"
+              # DescribeEvents does not support resource-level IAM permissions. The
+              # workflow queries only failed events and excludes ResourceProperties.
+              - Effect: Allow
+                Action: cloudformation:DescribeEvents
+                Resource: "*"
               - Effect: Allow
                 Action: cloudformation:ValidateTemplate
                 Resource: "*"

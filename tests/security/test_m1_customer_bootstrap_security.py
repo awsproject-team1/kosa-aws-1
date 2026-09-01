@@ -98,9 +98,14 @@ class CustomerBootstrapSecurityTest(unittest.TestCase):
             if "cloudformation:DescribeChangeSet" in statement["Action"]
         )
         self.assertIn("cloudformation:DescribeStackEvents", cloudformation_read["Action"])
-        self.assertIn("cloudformation:DescribeEvents", cloudformation_read["Action"])
         self.assertIn("cloudformation:ListChangeSets", cloudformation_read["Action"])
         self.assertEqual(
             cloudformation_read["Resource"],
             "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*",
         )
+        describe_events = next(
+            statement
+            for statement in statements
+            if statement["Action"] == "cloudformation:DescribeEvents"
+        )
+        self.assertEqual(describe_events["Resource"], "*")
