@@ -76,13 +76,14 @@ class FixturePatchGenerator:
             finding_id=finding_id,
             base_commit_sha=snapshot.commit_sha,
             artifact=ArtifactReference(
-                # artifact_id는 immutable artifact의 identity다. 같은 repository/finding이라도
-                # commit이 다르면 내용(digest)이 달라지므로, commit_sha를 identity에 포함해
-                # "같은 ID = 같은 내용" 불변식을 지킨다. commit을 빼면 서로 다른 내용이 같은
-                # ID를 가리켜 저장 계층에서 충돌·오조회가 생긴다.
-                artifact_id=(
-                    f"remediation-patch:{snapshot.repository_id}:{finding_id}:{snapshot.commit_sha}"
-                ),
+                # artifact_id는 immutable artifact의 identity이므로 "같은 ID = 같은 내용"이
+                # 보장돼야 한다. 내용을 유일하게 규정하는 값은 content digest이며, digest는
+                # (finding_id, commit_sha, changed_paths)를 모두 담는다. 따라서 digest를
+                # identity에 포함하면, 같은 repository/finding/commit이라도 계획(changed_paths)이
+                # 달라지면 ID도 달라진다. commit만 넣던 이전 방식은 같은 commit에서 계획이 바뀌면
+                # 같은 ID가 다른 내용을 가리켜 저장 계층에서 충돌·오조회를 냈다. finding_id는
+                # 사람이 로그에서 식별하기 쉽도록 접두로 남긴다(정확성은 digest가 보장).
+                artifact_id=f"remediation-patch:{snapshot.repository_id}:{finding_id}:{digest}",
                 artifact_type=ArtifactType.REMEDIATION_PATCH,
                 content_sha256=digest,
                 customer_id=snapshot.customer_id,

@@ -73,10 +73,24 @@ class FixturePatchGeneratorTest(unittest.TestCase):
         other = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="def456"))
         self.assertNotEqual(base.artifact.artifact_id, other.artifact.artifact_id)
 
-    def test_artifact_id_includes_commit_sha(self) -> None:
-        # artifact_id가 실제로 commit_sha를 담는지 명시적으로 고정한다.
-        patch = generator().generate(finding_id="finding-001", snapshot=snapshot(commit="abc123"))
-        self.assertIn("abc123", patch.artifact.artifact_id)
+    def test_artifact_id_includes_content_digest(self) -> None:
+        # [P2] artifact_id는 내용을 유일하게 규정하는 content digest를 담아야 한다.
+        # 이것이 "같은 ID = 같은 내용" 불변식의 근거다.
+        patch = generator().generate(finding_id="finding-001", snapshot=snapshot())
+        self.assertIn(patch.artifact.content_sha256, patch.artifact.artifact_id)
+
+    def test_same_commit_different_plan_yields_different_artifact_id(self) -> None:
+        # [P2 잔여] 같은 repository/finding/commit이라도 계획(changed_paths)이 다르면
+        # 내용이 다르므로 artifact_id도 달라져야 한다. commit만 담던 이전 방식은 이 경우
+        # 같은 ID가 다른 내용을 가리켰다. AI 재생성/계획 변경에서 실제로 발생하는 시나리오.
+        plan_a = FixturePatchGenerator({"finding-001": ("main.tf",)})
+        plan_b = FixturePatchGenerator({"finding-001": ("main.tf", "variables.tf")})
+        a = plan_a.generate(finding_id="finding-001", snapshot=snapshot())
+        b = plan_b.generate(finding_id="finding-001", snapshot=snapshot())
+        # 같은 finding/commit이지만 내용이 다르므로,
+        self.assertNotEqual(a.artifact.content_sha256, b.artifact.content_sha256)
+        # artifact_id도 달라야 한다(불변식).
+        self.assertNotEqual(a.artifact.artifact_id, b.artifact.artifact_id)
 
     def test_input_path_order_does_not_change_patch(self) -> None:
         # [P3] changed_paths 순서는 집합 의미만 가진다. 입력 순서만 다른 두 계획은
