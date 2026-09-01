@@ -213,6 +213,15 @@ class AmbiguousWorksheetCoordinateTest(unittest.TestCase):
             parse_xlsx(workbook)
         self.assertEqual(raised.exception.failure_code, IngestionFailureCode.AMBIGUOUS_LOCATOR)
 
+    def test_accepts_a_cell_without_an_explicit_reference(self) -> None:
+        cell_without_reference = '<c t="inlineStr"><is><t>no explicit reference</t></is></c>'
+        workbook = build_xlsx(sheets=[("Security", sheet_row(1, cell_without_reference))])
+
+        document = parse_xlsx(workbook)
+
+        self.assertEqual([unit.locator for unit in document.units], ["sheet/security/row/1"])
+        self.assertEqual(document.units[0].text, "no explicit reference")
+
 
 class InferredDelimiterNeedsReviewTest(unittest.TestCase):
     """delimiter를 추론했다는 사실 자체가 사람이 확인해야 할 신호다."""
