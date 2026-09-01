@@ -77,10 +77,16 @@ class RemediationPolicy:
         *,
         customer_id: str,
         target: RemediationTarget,
+        commit_sha: str,
+        finding_evaluated_at: datetime,
         at: datetime,
         exceptions: Iterable[RemediationException] = (),
     ) -> RemediationDecision:
         """Decide what may happen to one Finding, without performing any of it.
+
+        `commit_sha`는 이 판정이 조치 대상으로 삼는 IaC commit이고, `finding_evaluated_at`은
+        Finding이 평가된 시각, `at`은 판정 시각이다. 조치 요청은 평가보다 늦게 들어오는 것이
+        정상이므로 셋을 하나로 합칠 수 없다.
 
         판정 순서는 그 자체가 정책이다.
 
@@ -93,7 +99,8 @@ class RemediationPolicy:
         4. Terraform이 관리하지 않는 리소스는 `MANUAL_REVIEW`. Patch가 닿을 자리가 없다.
         5. `IAC` Finding은 `TERRAFORM_PATCH`. `AWS_ACTUAL`/`DRIFT` Finding은 같은
            `Resource × Rule`의 IaC 판정이 `PASS`면 `ACTUAL_SYNC`, `FAIL`이면
-           `TERRAFORM_PATCH`, 알 수 없으면 `MANUAL_REVIEW`다.
+           `TERRAFORM_PATCH`, 알 수 없으면 `MANUAL_REVIEW`다. 그 판정이 `commit_sha`가 아닌
+           다른 commit에서 나왔으면 알 수 없는 것으로 취급한다.
         6. 5번이 `TERRAFORM_PATCH`를 고른 경우에만 `MANUAL_ONLY` 판단이 막는다. 허용 범위는
            **Patch 합성**에 대한 판단이기 때문이다 (ADR-0017).
         """
@@ -103,10 +110,13 @@ class RemediationPolicy:
             raise TypeError("target must be a RemediationTarget")
         if not isinstance(customer_id, str) or not customer_id.strip():
             raise ValueError("customer_id must be a non-empty string")
-        if not isinstance(at, datetime):
-            raise TypeError("at must be a datetime")
-        if at.tzinfo is None or at.utcoffset() is None:
-            raise ValueError("at must be offset-aware")
+        if not isinstance(commit_sha, str) or not commit_sha.strip():
+            raise ValueError("commit_sha must be a non-empty string")
+        for name, moment in (("finding_evaluated_at", finding_evaluated_at), ("at", at)):
+            if not isinstance(moment, datetime):
+                raise TypeError(f"{name} must be a datetime")
+            if moment.tzinfo is None or moment.utcoffset() is None:
+                raise ValueError(f"{name} must be offset-aware")
         if finding.resource_id != target.resource_id:
             # 다른 리소스의 상태로 판정하면 관리 여부와 IaC 판정이 통째로 어긋난다.
             raise ValueError("target describes a different resource than the finding")
@@ -116,8 +126,12 @@ class RemediationPolicy:
             # 배포 대상으로 삼게 된다.
             raise ValueError("target describes a different rule than the finding")
 
-        exception = self._active_exception(
-            finding, customer_id=customer_id, at=at, exceptions=exceptions
+        exception = self._exception_in_force(
+            finding,
+            customer_id=customer_id,
+            finding_evaluated_at=finding_evaluated_at,
+            at=at,
+            exceptions=exceptions,
         )
         if exception is not None:
             return self._decision(
@@ -140,6 +154,9 @@ class RemediationPolicy:
         if not target.terraform_managed:
             return self._manual(finding, ManualReviewCode.RESOURCE_NOT_IAC_MANAGED)
 
+        if self._is_stale_verdict(finding, target, commit_sha=commit_sha):
+            return self._manual(finding, ManualReviewCode.IAC_VERDICT_COMMIT_MISMATCH)
+
         action = self._proposed_action(finding, target)
         if action is None:
             return self._manual(finding, ManualReviewCode.IAC_OUTCOME_UNKNOWN)
@@ -149,6 +166,25 @@ class RemediationPolicy:
         ):
             return self._manual(finding, ManualReviewCode.RULE_MANUAL_ONLY)
         return self._decision(finding, action=action)
+
+    @staticmethod
+    def _is_stale_verdict(finding: Finding, target: RemediationTarget, *, commit_sha: str) -> bool:
+        """Whether the IaC verdict came from a commit other than the one being remediated.
+
+        Assessment 이후 Repository가 진행하는 것은 예외 상황이 아니라 정상이다. 사람이 결과를
+        보고 조치를 고르는 사이에 다른 commit이 올라오면, `IAC` 관점이 통과시킨 것은 그 옛
+        commit이고 지금 배포될 commit은 평가된 적이 없다. `ACTUAL_SYNC`는 **IAC를 통과한 그
+        commit**을 배포해야 하므로(ADR-0017), 출처가 어긋난 판정은 `PASS`든 `FAIL`이든 모르는
+        것으로 되돌린다. `FAIL`도 마찬가지다 — 옛 commit의 실패는 이미 고쳐졌을 수 있고, 그 위에
+        Patch를 합성하면 사람이 쓴 수정을 되돌릴 수 있다.
+
+        `IAC` Finding은 자기 관점의 판정을 다시 읽지 않으므로(`_proposed_action`이 곧바로
+        `TERRAFORM_PATCH`를 고른다) 이 대조의 대상이 아니다. 판정이 아예 없는 경우도 여기서
+        걸러내지 않는다 — 그것은 출처 불일치가 아니라 `IAC_OUTCOME_UNKNOWN`이다.
+        """
+        if finding.perspective is EvaluationPerspective.IAC:
+            return False
+        return target.iac_commit_sha is not None and target.iac_commit_sha != commit_sha
 
     @staticmethod
     def _proposed_action(finding: Finding, target: RemediationTarget) -> RemediationAction | None:
@@ -168,15 +204,16 @@ class RemediationPolicy:
             return RemediationAction.TERRAFORM_PATCH
         return None
 
-    def _active_exception(
+    def _exception_in_force(
         self,
         finding: Finding,
         *,
         customer_id: str,
+        finding_evaluated_at: datetime,
         at: datetime,
         exceptions: Iterable[RemediationException],
     ) -> RemediationException | None:
-        """Return the narrowest active exemption covering this Finding, or `None`.
+        """Return the narrowest in-force exemption covering this Finding, or `None`.
 
         여러 예외가 겹치면 리소스 단위가 Rule 전체보다 우선한다. 같은 좁기가 여러 건이면
         `exception_id` 순으로 첫 번째다 — 입력 순서를 기준으로 삼으면 저장소 조회 순서가 달라질
@@ -193,8 +230,9 @@ class RemediationPolicy:
                 resource_id=finding.resource_id,
             ):
                 continue
-            if not exception.is_active_at(at):
-                # 승인 전이거나 만료된 예외는 없는 것과 같다. Finding은 조치 판정을 받는다.
+            if not exception.is_in_force_for(evaluated_at=finding_evaluated_at, at=at):
+                # Finding이 평가된 뒤에 승인된 예외이거나 이미 만료된 예외다. 둘 다 없는 것과
+                # 같고, Finding은 조치 판정을 받는다.
                 continue
             matches.append(exception)
         if not matches:

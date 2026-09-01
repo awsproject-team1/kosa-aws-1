@@ -30,8 +30,24 @@ RESOURCE = "arn:aws:s3:::example-bucket"
 RULE_ID = "S3-PUBLIC-001"
 RULE_VERSION = "2026-08-31"
 S3 = "AWS::S3::Bucket"
+COMMIT = "a" * 40
+NEWER_COMMIT = "b" * 40
+#: Finding이 평가된 시각. 조치 요청(`NOW`)보다 앞선다 — 사람이 결과를 보고 고르는 흐름이다.
+EVALUATED_AT = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 REGISTRY = Path("fixtures/rules")
+
+
+def _decide(policy: RemediationPolicy, finding: Finding, **overrides: object):
+    """Call `decide()` with the request-shaped defaults every test shares."""
+    kwargs: dict[str, object] = {
+        "customer_id": CUSTOMER,
+        "commit_sha": COMMIT,
+        "finding_evaluated_at": EVALUATED_AT,
+        "at": NOW,
+    }
+    kwargs.update(overrides)
+    return policy.decide(finding, **kwargs)  # type: ignore[arg-type]
 
 
 def _finding(**overrides: object) -> Finding:
@@ -59,8 +75,9 @@ def _target(**overrides: object) -> RemediationTarget:
         "rule_version": RULE_VERSION,
         "terraform_managed": True,
     }
-    if overrides.get("iac_status") is not None and "iac_perspective" not in overrides:
-        fields["iac_perspective"] = EvaluationPerspective.IAC
+    if overrides.get("iac_status") is not None:
+        fields.setdefault("iac_perspective", EvaluationPerspective.IAC)
+        fields.setdefault("iac_commit_sha", COMMIT)
     fields.update(overrides)
     return RemediationTarget(**fields)  # type: ignore[arg-type]
 
@@ -88,15 +105,15 @@ def _policy(eligibility: RemediationEligibility = RemediationEligibility.AUTOMAT
 
 class RemediationScopeTests(unittest.TestCase):
     def test_an_automatic_iac_finding_becomes_a_terraform_patch(self):
-        decision = _policy().decide(_finding(), customer_id=CUSTOMER, target=_target(), at=NOW)
+        decision = _decide(_policy(), _finding(), target=_target())
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
         self.assertIsNone(decision.manual_review_code)
         self.assertTrue(decision.is_actionable)
 
     def test_a_manual_only_rule_is_never_patched(self):
-        decision = _policy(RemediationEligibility.MANUAL_ONLY).decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW
+        decision = _decide(
+            _policy(RemediationEligibility.MANUAL_ONLY), _finding(), target=_target()
         )
 
         self.assertIs(decision.action, RemediationAction.MANUAL_REVIEW)
@@ -106,61 +123,50 @@ class RemediationScopeTests(unittest.TestCase):
         """허용 범위는 Patch 합성에 대한 판단이다. 동기화는 새 변경을 만들지 않는다."""
         for perspective in (EvaluationPerspective.AWS_ACTUAL, EvaluationPerspective.DRIFT):
             with self.subTest(perspective=perspective):
-                decision = _policy(RemediationEligibility.MANUAL_ONLY).decide(
+                decision = _decide(
+                    _policy(RemediationEligibility.MANUAL_ONLY),
                     _finding(perspective=perspective),
-                    customer_id=CUSTOMER,
                     target=_target(iac_status=EvaluationStatus.PASS),
-                    at=NOW,
                 )
 
                 self.assertIs(decision.action, RemediationAction.ACTUAL_SYNC)
 
     def test_a_manual_only_rule_over_unsafe_iac_is_still_refused(self):
-        decision = _policy(RemediationEligibility.MANUAL_ONLY).decide(
+        decision = _decide(
+            _policy(RemediationEligibility.MANUAL_ONLY),
             _finding(perspective=EvaluationPerspective.DRIFT),
-            customer_id=CUSTOMER,
             target=_target(iac_status=EvaluationStatus.FAIL),
-            at=NOW,
         )
 
         self.assertIs(decision.manual_review_code, ManualReviewCode.RULE_MANUAL_ONLY)
 
     def test_an_unregistered_rule_is_not_synced_either(self):
         """판단의 부재는 `MANUAL_ONLY`라는 판단과 다르다. 전자는 동기화도 막는다."""
-        decision = RemediationPolicy([]).decide(
+        decision = _decide(
+            RemediationPolicy([]),
             _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
-            customer_id=CUSTOMER,
             target=_target(iac_status=EvaluationStatus.PASS),
-            at=NOW,
         )
 
         self.assertIs(decision.manual_review_code, ManualReviewCode.RULE_NOT_IN_SCOPE)
 
     def test_an_unregistered_rule_falls_closed_to_manual_review(self):
-        decision = RemediationPolicy([]).decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW
-        )
+        decision = _decide(RemediationPolicy([]), _finding(), target=_target())
 
         self.assertIs(decision.action, RemediationAction.MANUAL_REVIEW)
         self.assertIs(decision.manual_review_code, ManualReviewCode.RULE_NOT_IN_SCOPE)
 
     def test_scope_is_pinned_to_the_exact_rule_version(self):
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(rule_version="2026-09-30"),
-            customer_id=CUSTOMER,
             target=_target(rule_version="2026-09-30"),
-            at=NOW,
         )
 
         self.assertIs(decision.manual_review_code, ManualReviewCode.RULE_NOT_IN_SCOPE)
 
     def test_a_resource_outside_terraform_is_manual_review(self):
-        decision = _policy().decide(
-            _finding(),
-            customer_id=CUSTOMER,
-            target=_target(terraform_managed=False),
-            at=NOW,
-        )
+        decision = _decide(_policy(), _finding(), target=_target(terraform_managed=False))
 
         self.assertIs(decision.manual_review_code, ManualReviewCode.RESOURCE_NOT_IAC_MANAGED)
 
@@ -177,31 +183,26 @@ class ActionSelectionTests(unittest.TestCase):
     """`docs/PRD.md` Assessment stages: 안전한 IaC를 다시 고치지 않는다."""
 
     def test_a_drifted_actual_over_safe_iac_is_synced_not_patched(self):
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
-            customer_id=CUSTOMER,
             target=_target(iac_status=EvaluationStatus.PASS),
-            at=NOW,
         )
 
         self.assertIs(decision.action, RemediationAction.ACTUAL_SYNC)
 
     def test_a_drift_finding_over_unsafe_iac_is_patched(self):
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(perspective=EvaluationPerspective.DRIFT),
-            customer_id=CUSTOMER,
             target=_target(iac_status=EvaluationStatus.FAIL),
-            at=NOW,
         )
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
 
     def test_an_actual_finding_without_an_iac_outcome_is_manual_review(self):
-        decision = _policy().decide(
-            _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
-            customer_id=CUSTOMER,
-            target=_target(),
-            at=NOW,
+        decision = _decide(
+            _policy(), _finding(perspective=EvaluationPerspective.AWS_ACTUAL), target=_target()
         )
 
         self.assertIs(decision.manual_review_code, ManualReviewCode.IAC_OUTCOME_UNKNOWN)
@@ -214,17 +215,16 @@ class ActionSelectionTests(unittest.TestCase):
             EvaluationStatus.INSUFFICIENT_EVIDENCE,
         ):
             with self.subTest(status=status):
-                decision = _policy().decide(
+                decision = _decide(
+                    _policy(),
                     _finding(perspective=EvaluationPerspective.DRIFT),
-                    customer_id=CUSTOMER,
                     target=_target(iac_status=status),
-                    at=NOW,
                 )
 
                 self.assertIs(decision.manual_review_code, ManualReviewCode.IAC_OUTCOME_UNKNOWN)
 
     def test_an_iac_finding_does_not_need_an_iac_outcome(self):
-        decision = _policy().decide(_finding(), customer_id=CUSTOMER, target=_target(), at=NOW)
+        decision = _decide(_policy(), _finding(), target=_target())
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
 
@@ -235,33 +235,18 @@ class ActionSelectionTests(unittest.TestCase):
         }
         for status, code in cases.items():
             with self.subTest(status=status):
-                decision = _policy().decide(
-                    _finding(status=status),
-                    customer_id=CUSTOMER,
-                    target=_target(),
-                    at=NOW,
-                )
+                decision = _decide(_policy(), _finding(status=status), target=_target())
 
                 self.assertIs(decision.action, RemediationAction.MANUAL_REVIEW)
                 self.assertIs(decision.manual_review_code, code)
 
     def test_a_target_for_another_resource_is_a_programming_error(self):
         with self.assertRaises(ValueError):
-            _policy().decide(
-                _finding(),
-                customer_id=CUSTOMER,
-                target=_target(resource_id="arn:aws:s3:::other-bucket"),
-                at=NOW,
-            )
+            _decide(_policy(), _finding(), target=_target(resource_id="arn:aws:s3:::other-bucket"))
 
     def test_a_target_for_another_rule_version_is_a_programming_error(self):
         with self.assertRaises(ValueError):
-            _policy().decide(
-                _finding(),
-                customer_id=CUSTOMER,
-                target=_target(rule_version="2026-07-01"),
-                at=NOW,
-            )
+            _decide(_policy(), _finding(), target=_target(rule_version="2026-07-01"))
 
     def test_an_iac_outcome_from_another_rule_cannot_open_a_sync(self):
         """같은 리소스라도 다른 Rule의 `PASS`는 이 Rule의 IaC가 안전하다는 근거가 아니다.
@@ -269,11 +254,10 @@ class ActionSelectionTests(unittest.TestCase):
         대조하지 않으면 안전하지 않은 IaC를 현재 commit 그대로 배포 대상으로 삼게 된다.
         """
         with self.assertRaises(ValueError):
-            _policy().decide(
+            _decide(
+                _policy(),
                 _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
-                customer_id=CUSTOMER,
                 target=_target(rule_id="S3-ENCRYPT-001", iac_status=EvaluationStatus.PASS),
-                at=NOW,
             )
 
     def test_an_actual_outcome_cannot_masquerade_as_the_iac_outcome(self):
@@ -284,15 +268,76 @@ class ActionSelectionTests(unittest.TestCase):
             )
 
 
+class IacVerdictCommitBindingTests(unittest.TestCase):
+    """`ACTUAL_SYNC`는 `IAC` 관점이 통과시킨 **그** commit만 배포 대상으로 삼는다 (ADR-0017)."""
+
+    def test_a_verdict_from_another_commit_cannot_open_a_sync(self):
+        """평가 뒤 Repository가 진행하면 옛 `PASS`는 새 commit에 대해 아무것도 말하지 않는다."""
+        for perspective in (EvaluationPerspective.AWS_ACTUAL, EvaluationPerspective.DRIFT):
+            with self.subTest(perspective=perspective):
+                decision = _decide(
+                    _policy(),
+                    _finding(perspective=perspective),
+                    target=_target(iac_status=EvaluationStatus.PASS, iac_commit_sha=NEWER_COMMIT),
+                )
+
+                self.assertIs(decision.action, RemediationAction.MANUAL_REVIEW)
+                self.assertIs(
+                    decision.manual_review_code, ManualReviewCode.IAC_VERDICT_COMMIT_MISMATCH
+                )
+
+    def test_a_stale_failing_verdict_does_not_open_a_patch_either(self):
+        """옛 commit의 `FAIL`은 이미 고쳐졌을 수 있다. 그 위에 Patch를 합성하면 수정을 되돌린다."""
+        decision = _decide(
+            _policy(),
+            _finding(perspective=EvaluationPerspective.DRIFT),
+            target=_target(iac_status=EvaluationStatus.FAIL, iac_commit_sha=NEWER_COMMIT),
+        )
+
+        self.assertIs(decision.manual_review_code, ManualReviewCode.IAC_VERDICT_COMMIT_MISMATCH)
+
+    def test_a_verdict_from_the_remediated_commit_is_used(self):
+        decision = _decide(
+            _policy(),
+            _finding(perspective=EvaluationPerspective.AWS_ACTUAL),
+            target=_target(iac_status=EvaluationStatus.PASS, iac_commit_sha=COMMIT),
+            commit_sha=COMMIT,
+        )
+
+        self.assertIs(decision.action, RemediationAction.ACTUAL_SYNC)
+
+    def test_an_iac_finding_does_not_consult_the_verdict_commit(self):
+        """`IAC` Finding은 자기 관점의 판정을 다시 읽지 않는다. Patch는 Snapshot에 바인딩된다."""
+        decision = _decide(
+            _policy(),
+            _finding(),
+            target=_target(iac_status=EvaluationStatus.FAIL, iac_commit_sha=NEWER_COMMIT),
+        )
+
+        self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
+
+    def test_a_verdict_without_its_source_commit_is_not_representable(self):
+        with self.assertRaises(ValueError):
+            RemediationTarget(
+                resource_id=RESOURCE,
+                resource_type=S3,
+                rule_id=RULE_ID,
+                rule_version=RULE_VERSION,
+                terraform_managed=True,
+                iac_status=EvaluationStatus.PASS,
+                iac_perspective=EvaluationPerspective.IAC,
+            )
+
+    def test_the_remediated_commit_must_be_declared(self):
+        for commit_sha in ("", "   "):
+            with self.subTest(commit_sha=repr(commit_sha)):
+                with self.assertRaises(ValueError):
+                    _decide(_policy(), _finding(), target=_target(), commit_sha=commit_sha)
+
+
 class RemediationExceptionTests(unittest.TestCase):
     def test_an_active_exception_suppresses_the_finding(self):
-        decision = _policy().decide(
-            _finding(),
-            customer_id=CUSTOMER,
-            target=_target(),
-            at=NOW,
-            exceptions=[_exception()],
-        )
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[_exception()])
 
         self.assertIs(decision.action, RemediationAction.SUPPRESSED)
         self.assertEqual(decision.exception_id, "exception-001")
@@ -301,9 +346,7 @@ class RemediationExceptionTests(unittest.TestCase):
     def test_an_expired_exception_no_longer_covers_the_finding(self):
         expired = _exception(expires_at="2026-08-15T00:00:00+00:00")
 
-        decision = _policy().decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW, exceptions=[expired]
-        )
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[expired])
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
 
@@ -314,22 +357,20 @@ class RemediationExceptionTests(unittest.TestCase):
         self.assertTrue(exception.is_active_at(NOW - timedelta(seconds=1)))
 
     def test_an_exception_does_not_follow_a_rule_to_a_new_version(self):
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(),
-            customer_id=CUSTOMER,
             target=_target(),
-            at=NOW,
             exceptions=[_exception(rule_version="2026-07-01")],
         )
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
 
     def test_another_customers_exception_never_applies(self):
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(),
-            customer_id=CUSTOMER,
             target=_target(),
-            at=NOW,
             exceptions=[_exception(customer_id="customer-002")],
         )
 
@@ -338,16 +379,12 @@ class RemediationExceptionTests(unittest.TestCase):
     def test_a_resource_scoped_exception_covers_only_that_resource(self):
         scoped = _exception(resource_id="arn:aws:s3:::other-bucket")
 
-        decision = _policy().decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW, exceptions=[scoped]
-        )
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[scoped])
 
         self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
 
     def test_a_rule_wide_exception_covers_every_resource(self):
-        decision = _policy().decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW, exceptions=[_exception()]
-        )
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[_exception()])
 
         self.assertIs(decision.action, RemediationAction.SUPPRESSED)
 
@@ -357,23 +394,52 @@ class RemediationExceptionTests(unittest.TestCase):
 
         for order in ((rule_wide, resource_scoped), (resource_scoped, rule_wide)):
             with self.subTest(order=[exception.exception_id for exception in order]):
-                decision = _policy().decide(
-                    _finding(),
-                    customer_id=CUSTOMER,
-                    target=_target(),
-                    at=NOW,
-                    exceptions=list(order),
-                )
+                decision = _decide(_policy(), _finding(), target=_target(), exceptions=list(order))
 
                 self.assertEqual(decision.exception_id, "exception-narrow")
 
+    def test_an_exception_approved_after_the_finding_does_not_suppress_it(self):
+        """소급 억제 금지. 판정 시각에 유효해도, 위반 시점에는 아무도 면제를 승인하지 않았다.
+
+        조치 요청이 승인보다 늦게 들어오는 것은 정상 흐름이므로, 만료만 판정 시각으로 보고
+        승인까지 같은 시각으로 보면 이 경로가 열린다 (ADR-0017).
+        """
+        approved_later = _exception(
+            approved_at="2026-09-01T10:00:00+00:00",
+            expires_at="2026-12-31T00:00:00+00:00",
+        )
+
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[approved_later])
+
+        self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
+        self.assertIsNone(decision.exception_id)
+
+    def test_an_exception_approved_before_the_finding_still_expires_at_decision_time(self):
+        """평가 시점에 유효했다는 사실이 이미 만료된 예외를 되살리지는 않는다."""
+        expired_since = _exception(
+            approved_at="2026-08-01T00:00:00+00:00",
+            expires_at="2026-09-01T10:00:00+00:00",
+        )
+
+        self.assertTrue(expired_since.is_active_at(EVALUATED_AT))
+
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[expired_since])
+
+        self.assertIs(decision.action, RemediationAction.TERRAFORM_PATCH)
+
+    def test_an_exception_applies_at_the_exact_evaluation_moment(self):
+        exception = _exception(approved_at=EVALUATED_AT.isoformat())
+
+        decision = _decide(_policy(), _finding(), target=_target(), exceptions=[exception])
+
+        self.assertIs(decision.action, RemediationAction.SUPPRESSED)
+
     def test_an_exception_does_not_apply_before_it_was_approved(self):
         """나중에 승인된 예외가 그 이전에 평가된 Finding을 소급해 덮지 않는다."""
-        decision = _policy().decide(
+        decision = _decide(
+            _policy(),
             _finding(),
-            customer_id=CUSTOMER,
             target=_target(),
-            at=NOW,
             exceptions=[
                 _exception(
                     approved_at="2026-10-01T00:00:00+00:00",
@@ -397,20 +463,17 @@ class RemediationExceptionTests(unittest.TestCase):
 
         for order in ((first, second), (second, first)):
             with self.subTest(order=[exception.exception_id for exception in order]):
-                decision = _policy().decide(
-                    _finding(),
-                    customer_id=CUSTOMER,
-                    target=_target(),
-                    at=NOW,
-                    exceptions=list(order),
-                )
+                decision = _decide(_policy(), _finding(), target=_target(), exceptions=list(order))
 
                 self.assertEqual(decision.exception_id, "exception-a")
 
     def test_an_exception_suppresses_a_manual_only_rule_too(self):
         """예외는 '조치하지 않는다'는 결정이므로 조치 유형보다 앞선다."""
-        decision = _policy(RemediationEligibility.MANUAL_ONLY).decide(
-            _finding(), customer_id=CUSTOMER, target=_target(), at=NOW, exceptions=[_exception()]
+        decision = _decide(
+            _policy(RemediationEligibility.MANUAL_ONLY),
+            _finding(),
+            target=_target(),
+            exceptions=[_exception()],
         )
 
         self.assertIs(decision.action, RemediationAction.SUPPRESSED)
