@@ -1,8 +1,8 @@
 # Customer Policy Ingestion
 
-> Status: Partially implemented — 형식 allow-list, 정규화 Schema, 5개 형식 Parser는
-> `apps/backend/policy/ingestion/`에 구현됐다 (B). 업로드 세션·저장·상태 write(A), Rule 후보
-> 검토·승인과 Profile publication(B, 후속), AI 추출(C)은 미구현이다.
+> Status: Partially implemented — 형식 allow-list, 정규화 Schema, 5개 형식 Parser, 승인 판정과
+> Profile publication 거부 규칙은 `apps/backend/policy/ingestion/`에 구현됐다 (B).
+> 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C)은 미구현이다.
 >
 > Delivery gate: this boundary must be implemented and integration-tested before the service claims
 > that a customer can evaluate against an uploaded internal policy. 현재 `policies-local/`과
@@ -196,8 +196,10 @@ Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. P
 - [x] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
 - [ ] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
 - [x] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.
-- [ ] Source version, Parser version, locator, 원문/정규화 hash가 Evidence까지 추적된다.
-- [ ] 사람 승인 전 Rule은 Profile 및 Assessment Context에 들어가지 않는다.
+- [x] Source version, Parser version, locator, 원문/정규화 hash가 Evidence까지 추적된다.
+      (정규화 unit → `source_reference_for()` → 승인 record의 finalization tuple →
+      게시된 Profile → `PolicyContext.allows_evidence()`까지 테스트로 이어져 있다.)
+- [x] 사람 승인 전 Rule은 Profile 및 Assessment Context에 들어가지 않는다.
 - [ ] 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트가 통과한다.
 - [x] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
       (Contract가 텍스트를 담을 수 없고, `tests/security/test_policy_ingestion_boundary.py`가

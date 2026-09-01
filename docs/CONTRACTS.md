@@ -161,6 +161,42 @@ zip 한도로는 잡히지 않는다 — 증폭이 압축 해제 이후 Parser �
 만들어 locator와 `content_sha256`이 같은 판본에서 나오도록 보장한다. 승인·Profile publication
 경계와 업로드 세션/저장은 아직 구현되지 않았다 (각각 B, A). 결정 근거는 ADR-0015다.
 
+### Approval and Profile publication boundary
+
+`packages/contracts/policy_approval.py`가 승인과 게시를 정의한다. 문서와 API가 못 박은 대로
+**승인과 게시는 서로 다른 operation이다.** 승인은 Source/Control/Rule version을 확정하고, 게시는
+그 Rule들을 평가 경계로 만든다.
+
+| 값 | 역할 |
+| --- | --- |
+| `RuleLifecycle` | `CANDIDATE`/`APPROVED`/`REJECTED`/`SUPERSEDED`. `docs/DATABASE.md`의 Rule metadata가 담는 lifecycle |
+| `RuleCandidate` | 승인 전 Rule. frozen이며 `approved()`가 새 값을 만든다 |
+| `PolicySourceApproval` | `(source_id, source_version, artifact_id, s3_version_id, content_sha256)`을 인용하는 immutable 승인 record |
+| `ApprovalRejectionCode` | 승인·게시 거부 사유. 자유 문장이 아니다 |
+
+판정은 `apps/backend/policy/ingestion/approval.py`의 두 함수다.
+
+- `approve_source(document, candidates, ...)` — `READY` 문서에만 붙고, 후보가 인용한
+  (source_id, source_version)·locator·`content_sha256`을 정규화 결과와 대조한다. 사람이 검토한
+  문장과 Rule이 고정한 hash가 같음을 승인 시점에 못 박는다. 이미 `REJECTED`/`SUPERSEDED`인
+  후보는 거부한다 (`RULE_NOT_APPROVABLE`) — 재검토는 새 후보로 올린다. 이미 `APPROVED`인 후보를
+  다시 넘기는 것은 허용한다. 승인 API가 at-least-once로 재시도될 수 있기 때문이다 (ADR-0013).
+- `publish_profile(...)` — `docs/POLICY_INGESTION.md`의 거부 조건 3건을 구현한다: 승인되지 않은
+  Source/Rule 참조, 승인된 것과 다른 Source version 참조, 승인 record의
+  `(artifact_id, s3_version_id, content_sha256)`과 어긋나는 Rule. 마지막 항목의 게시 시점 대조는
+  `(artifact_id, content_sha256)`까지다 — `PolicySource`에 `s3_version_id` 필드가 없다. 두 값이
+  같으면 같은 바이트이므로 판본이 뒤바뀌는 경우는 걸리며, S3 object version까지 고정하는 것은
+  A가 조건부 write에서 `PolicySourceApproval.original_binding`을 쓰는 몫이다.
+
+두 경로의 거부 사유는 **같은 `ApprovalRejectionCode` 열거값**이다. 같은 성격의 거부가 경로에
+따라 코드 없는 예외로 새면 A가 응답 오류 코드로 옮길 수 없다.
+
+두 함수는 아무것도 영속화하지 않는다. A가 DynamoDB 조건부 write 앞에서 호출하고, 거부되면
+write를 시도하지 않는다. 게시 결과는 기존 `PolicyProfile`이므로 `InMemoryPolicyCatalog`와
+`PolicyContextResolver` 경로가 그대로 동작한다. **Profile allow-list가 Rule의 유일한 진입
+경로이므로, Catalog에 후보 Rule이 있어도 Profile이 참조하지 않으면 Policy Context에 들어오지
+못한다.**
+
 ## M1 rule registry
 
 MVP Rule Registry는 `fixtures/rules/`에 커밋된다. `apps/backend/policy/registry.py`의
