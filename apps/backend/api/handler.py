@@ -71,12 +71,12 @@ class JobHttpHandler:
             if method == "POST" and path == "/policy-sources/uploads":
                 if self._policy_sources is None:
                     raise JobNotFoundError("policy source route not found")
-                return _response(
-                    201,
-                    self._policy_sources.create_upload_session(
-                        principal, _policy_upload_request(event.get("body"))
-                    ).to_dict(),
-                )
+                try:
+                    request = _policy_upload_request(event.get("body"))
+                    response = self._policy_sources.create_upload_session(principal, request)
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("policy source upload body is invalid") from error
+                return _response(201, response.to_dict())
             policy_path = _policy_source_path(path)
             if policy_path is not None and self._policy_sources is not None:
                 source_id, source_version, action = policy_path
@@ -90,33 +90,37 @@ class JobHttpHandler:
                 if method == "POST" and action == "process":
                     if self._policy_reader is None:
                         raise JobNotFoundError("policy process route not found")
-                    return _response(
-                        202,
-                        self._policy_sources.process_upload(
+                    try:
+                        response = self._policy_sources.process_upload(
                             principal,
                             source_id=source_id,
                             source_version=source_version,
                             reader=self._policy_reader,
-                        ).to_dict(),
-                    )
+                        )
+                    except ValueError as error:
+                        raise RequestValidationError("policy source process request is invalid") from error
+                    return _response(202, response.to_dict())
                 if method == "POST" and action == "approve" and self._policy_approvals is not None:
                     if event.get("body") not in (None, "", "{}"):
                         raise RequestValidationError("policy approval body is invalid")
-                    return _response(
-                        200,
-                        self._policy_approvals.approve(
+                    try:
+                        response = self._policy_approvals.approve(
                             principal, source_id=source_id, source_version=source_version
-                        ).to_dict(),
-                    )
+                        )
+                    except ValueError as error:
+                        raise RequestValidationError("policy approval request is invalid") from error
+                    return _response(200, response.to_dict())
             if (
                 method == "POST"
                 and path == "/policy-profiles"
                 and self._policy_approvals is not None
             ):
                 request = _policy_profile_request(event.get("body"))
-                return _response(
-                    201, self._policy_approvals.publish(principal, **request).to_dict()
-                )
+                try:
+                    response = self._policy_approvals.publish(principal, **request)
+                except ValueError as error:
+                    raise RequestValidationError("policy profile request is invalid") from error
+                return _response(201, response.to_dict())
             if (
                 method == "POST"
                 and path.startswith("/findings/")

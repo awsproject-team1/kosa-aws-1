@@ -10,7 +10,9 @@ from packages.contracts import (
     EvaluationStatus,
     Finding,
     IaCSnapshot,
+    RemediationAction,
     RemediationContext,
+    RemediationDecision,
     RemediationPatch,
     RemediationStrategy,
 )
@@ -75,11 +77,26 @@ def context() -> RemediationContext:
     )
 
 
+def decision() -> RemediationDecision:
+    return RemediationDecision(
+        finding_id="finding-001",
+        resource_id="bucket-001",
+        rule_id="rule-001",
+        rule_version="v1",
+        perspective=EvaluationPerspective.IAC,
+        action=RemediationAction.TERRAFORM_PATCH,
+    )
+
+
 class RemediationServiceTest(unittest.TestCase):
     def test_returns_patch_bound_to_finding_and_snapshot(self) -> None:
-        result = RemediationService(Generator(patch())).generate(context=context())
+        result = RemediationService(Generator(patch())).generate(
+            context=context(), decision=decision()
+        )
         self.assertEqual(result.base_commit_sha, "abc123")
 
     def test_rejects_patch_for_another_commit(self) -> None:
         with self.assertRaises(RemediationContractError):
-            RemediationService(Generator(patch(commit="other"))).generate(context=context())
+            RemediationService(Generator(patch(commit="other"))).generate(
+                context=context(), decision=decision()
+            )

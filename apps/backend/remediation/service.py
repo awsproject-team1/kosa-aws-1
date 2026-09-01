@@ -2,7 +2,12 @@
 
 from typing import Protocol
 
-from packages.contracts import RemediationContext, RemediationPatch
+from packages.contracts import (
+    RemediationAction,
+    RemediationContext,
+    RemediationDecision,
+    RemediationPatch,
+)
 
 
 class RemediationContractError(ValueError):
@@ -21,11 +26,19 @@ class RemediationService:
             raise TypeError("generator is required")
         self._generator = generator
 
-    def generate(self, *, context: RemediationContext) -> RemediationPatch:
+    def generate(
+        self, *, context: RemediationContext, decision: RemediationDecision
+    ) -> RemediationPatch:
         if not isinstance(context, RemediationContext):
             raise TypeError("context must be a RemediationContext")
+        if not isinstance(decision, RemediationDecision):
+            raise TypeError("decision must be a RemediationDecision")
         finding_id = context.finding.finding_id
         snapshot = context.snapshot
+        if decision.finding_id != finding_id:
+            raise RemediationContractError("remediation decision is outside context")
+        if decision.action is not RemediationAction.TERRAFORM_PATCH:
+            raise RemediationContractError("remediation decision does not permit a Terraform patch")
         patch = self._generator.generate(context=context)
         if not isinstance(patch, RemediationPatch):
             raise RemediationContractError("generator must return a RemediationPatch")

@@ -157,7 +157,9 @@ class DynamoDbEvaluationResultStore(EvaluationResultStore):
             ).get("Item")
         except Exception:
             raise EvaluationResultStoreError("assessment plan read failed") from None
-        return isinstance(item, Mapping) and "completed_evaluations" in item
+        # A missing plan is handled by the transaction's plan-exists condition;
+        # keep the update in the write set so the provider reports that failure.
+        return item is None or (isinstance(item, Mapping) and "completed_evaluations" in item)
 
     def _existing_item_matches(self, expected: dict[str, object]) -> bool:
         try:

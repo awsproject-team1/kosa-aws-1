@@ -47,6 +47,8 @@ class DeploymentApprovalService:
         if not isinstance(readiness, DeploymentReadiness):
             raise TypeError("readiness must be a DeploymentReadiness")
         authorize(principal, Action.APPROVE_DEPLOYMENT)
+        if plan.plan_hash != plan.artifact.content_sha256:
+            raise DeploymentApprovalError("Terraform plan digest is not exact")
         if plan.artifact.customer_id != principal.customer_id:
             raise DeploymentApprovalError("plan is outside the principal customer scope")
         if readiness.status is not DeploymentReadinessStatus.READY_FOR_APPROVAL:

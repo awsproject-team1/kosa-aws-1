@@ -13,6 +13,10 @@ class ConditionalFailure(Exception):
     response = {"Error": {"Code": "ConditionalCheckFailedException"}}
 
 
+class TransactionCanceled(Exception):
+    response = {"Error": {"Code": "TransactionCanceledException"}}
+
+
 class Table:
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict[str, object]] = {}
@@ -40,6 +44,12 @@ class TransactionClient:
         self.requests.append(kwargs)
 
 
+class ReplayingTransactionClient(TransactionClient):
+    def transact_write_items(self, **kwargs: object) -> None:
+        self.requests.append(kwargs)
+        raise TransactionCanceled()
+
+
 def result(
     *,
     score: float = 90,
@@ -59,6 +69,22 @@ def result(
         rubric_version="mvp-v1",
         model_profile_id="assessment-nova-lite-m0-v1",
     )
+
+
+def _item_for_result(
+    customer_id: str, assessment_id: str, value: EvaluationResult
+) -> dict[str, object]:
+    return {
+        "PK": f"CUSTOMER#{customer_id}",
+        "SK": (
+            f"ASSESSMENT#{assessment_id}#RESULT#{value.resource_id}#RULE#{value.rule_id}"
+            f"#PERSPECTIVE#{value.perspective.value}"
+        ),
+        "entity_type": "ASSESSMENT_RESULT",
+        "customer_id": customer_id,
+        "assessment_id": assessment_id,
+        **value.to_dict(),
+    }
 
 
 class DynamoDbEvaluationResultStoreTest(unittest.TestCase):
@@ -82,6 +108,24 @@ class DynamoDbEvaluationResultStoreTest(unittest.TestCase):
         store.put_if_absent(customer_id="cust-001", assessment_id="asm-001", results=(result(),))
 
         self.assertEqual(len(table.items), 1)
+
+    def test_transaction_cancellation_for_existing_identical_result_is_idempotent(self) -> None:
+        table = Table()
+        existing = _item_for_result("cust-001", "asm-001", result())
+        table.items[(existing["PK"], existing["SK"])] = existing
+        table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001#PLAN")] = {
+            "PK": "CUSTOMER#cust-001",
+            "SK": "ASSESSMENT#asm-001#PLAN",
+            "entity_type": "ASSESSMENT_EVALUATION_PLAN",
+            "customer_id": "cust-001",
+            "assessment_id": "asm-001",
+            "planned_evaluations": 1,
+            "completed_evaluations": 1,
+        }
+        store = DynamoDbEvaluationResultStore(
+            table, table_name="metadata", transaction_client=ReplayingTransactionClient()
+        )
+        store.put_if_absent(customer_id="cust-001", assessment_id="asm-001", results=(result(),))
 
     def test_cannot_replace_an_existing_result(self) -> None:
         table = Table()

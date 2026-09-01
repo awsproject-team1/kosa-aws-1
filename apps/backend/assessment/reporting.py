@@ -168,11 +168,14 @@ class DynamoDbAssessmentReportStore:
             for item in items
             if isinstance(item, Mapping) and item.get("entity_type") == "FINDING"
         )
-        coverage = (
-            AssessmentCoverage(planned_evaluations=expected, completed_evaluations=completed)
-            if completed is not None
-            else calculate_coverage(results=results, planned_evaluations=expected)
-        )
+        # Non-transactional/local stores cannot atomically maintain the new
+        # counter; retain the scan fallback while a zero counter has results.
+        if completed is None or (completed == 0 and results):
+            coverage = calculate_coverage(results=results, planned_evaluations=expected)
+        else:
+            coverage = AssessmentCoverage(
+                planned_evaluations=expected, completed_evaluations=completed
+            )
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
@@ -230,6 +233,19 @@ class DynamoDbAssessmentReportStore:
                 planned_evaluations=expected, completed_evaluations=completed
             )
             readiness_score = None
+            if completed == 0:
+                # A non-transactional/local writer may not have a counter
+                # update primitive; recover its exact coverage until it does.
+                existing_results = tuple(
+                    _result_from_item(item, customer_id, assessment_id)
+                    for item in self._query_prefix_items(
+                        customer_id, _result_sk_prefix(assessment_id)
+                    )
+                )
+                if existing_results:
+                    coverage = calculate_coverage(
+                        results=existing_results, planned_evaluations=expected
+                    )
             # Readiness is intentionally unavailable until every applicable
             # evaluation is durable.  Once complete, derive it from all results
             # rather than trusting any page-local slice.

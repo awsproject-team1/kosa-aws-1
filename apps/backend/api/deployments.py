@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from apps.backend.auth import Principal
-from apps.backend.deployment import DeploymentApprovalService
+from apps.backend.deployment import DeploymentApprovalError, DeploymentApprovalService
 from packages.contracts import DeploymentApproval, TerraformPlan
 from packages.contracts.remediation import DeploymentReadiness
 
@@ -49,5 +49,5 @@ class DeploymentApiService:
             plan.commit_sha,
             plan.plan_hash,
         ):
-            raise ValueError("approval request does not match the stored Terraform plan")
+            raise DeploymentApprovalError("approval request does not match the stored Terraform plan")
         return self._approvals.approve(principal=principal, plan=plan, readiness=readiness)
