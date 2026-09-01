@@ -12,9 +12,14 @@ on:
         required: true
         type: string
       environment:
-        description: Environment CloudFormation parameter and artifact-preparation GitHub Environment
+        description: Protected GitHub Environment for artifact preparation
         required: true
         type: environment
+      stack_environment:
+        description: Short CloudFormation Environment parameter, for example sandbox
+        required: true
+        default: sandbox
+        type: string
       artifact_approval_environment:
         description: Separate protected Environment for approving the exact Lambda artifact binding
         required: true
@@ -26,6 +31,10 @@ on:
         type: string
       role_to_assume:
         description: Customer-approved GitHub Actions OIDC deployment role ARN
+        required: true
+        type: string
+      cloudformation_execution_role_arn:
+        description: Customer bootstrap FoundationExecutionRole ARN passed only to CloudFormation
         required: true
         type: string
       lambda_code_s3_bucket:
@@ -76,6 +85,32 @@ jobs:
           [[ "${EXPECTED_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
           [[ "${ROLE_TO_ASSUME}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
           test "${ARTIFACT_APPROVAL_ENVIRONMENT}" != "${DEPLOYMENT_ENVIRONMENT}"
+
+      # Temporary diagnostic: prints selected claim identifiers, never the JWT.
+      - name: Show OIDC claim identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl -fsSL \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          token=$(jq -r '.value' <<<"${response}")
+          TOKEN="${token}" python - <<'PY'
+          import base64
+          import json
+          import os
+
+          payload = os.environ["TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          print(json.dumps(
+              {key: claims.get(key) for key in (
+                  "sub", "aud", "repository", "repository_id",
+                  "repository_owner_id", "ref", "environment",
+              )},
+              indent=2,
+          ))
+          PY
 
       - name: Configure customer artifact credentials
         # v6.2.3
@@ -180,14 +215,18 @@ jobs:
     env:
       STACK_NAME: ${{ inputs.stack_name }}
       PROJECT_NAME: ${{ inputs.project_name }}
-      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+      STACK_ENVIRONMENT: ${{ inputs.stack_environment }}
       AWS_REGION: ${{ inputs.aws_region }}
       ROLE_TO_ASSUME: ${{ inputs.role_to_assume }}
+      CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ inputs.cloudformation_execution_role_arn }}
       LAMBDA_CODE_S3_BUCKET: ${{ inputs.lambda_code_s3_bucket }}
       LAMBDA_CODE_S3_KEY: ${{ needs.prepare-artifact.outputs.lambda_code_s3_key }}
       LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
       LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
       ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+      M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
+      M1_ASSESSMENT_SECRET_ARNS: ${{ secrets.M1_ASSESSMENT_SECRET_ARNS }}
+      M1_ASSESSMENT_READ_ROLE_ARNS: ${{ secrets.M1_ASSESSMENT_READ_ROLE_ARNS }}
       EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out approved repository revision
@@ -198,6 +237,7 @@ jobs:
           set -euo pipefail
           [[ "${EXPECTED_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
           [[ "${ROLE_TO_ASSUME}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
+          [[ "${CLOUDFORMATION_EXECUTION_ROLE_ARN}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
           test -n "${LAMBDA_CODE_S3_KEY}"
           test -n "${LAMBDA_CODE_S3_OBJECT_VERSION}"
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
@@ -238,12 +278,47 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/m0-foundation.yaml \
             --stack-name "${STACK_NAME}" \
+            --role-arn "${CLOUDFORMATION_EXECUTION_ROLE_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
-              "Environment=${DEPLOYMENT_ENVIRONMENT}" \
+              "Environment=${STACK_ENVIRONMENT}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}" \
               "AssessmentScopeJson=${ASSESSMENT_SCOPE_JSON}" \
+              "M1AssessmentRuntimeJson=${M1_ASSESSMENT_RUNTIME_JSON}" \
+              "M1AssessmentSecretArns=${M1_ASSESSMENT_SECRET_ARNS}" \
+              "M1AssessmentReadRoleArns=${M1_ASSESSMENT_READ_ROLE_ARNS}" \
             --no-fail-on-empty-changeset
+
+      - name: Diagnose failed CloudFormation deployment
+        if: failure()
+        run: |
+          set +e
+          echo "::group::Recent failed change sets"
+          aws cloudformation list-change-sets \
+            --stack-name "${STACK_NAME}" \
+            --query 'Summaries[?Status==`FAILED`]|reverse(sort_by(@, &CreationTime))[:3].{Name:ChangeSetName,Created:CreationTime,Reason:StatusReason}' \
+            --output json
+          echo "::endgroup::"
+          failed_change_set_id=$(aws cloudformation list-change-sets \
+            --stack-name "${STACK_NAME}" \
+            --query 'reverse(sort_by(Summaries[?Status==`FAILED`], &CreationTime))[0].ChangeSetId' \
+            --output text)
+          if [[ -n "${failed_change_set_id}" && "${failed_change_set_id}" != "None" ]]; then
+            echo "::group::Early validation failures"
+            aws cloudformation describe-events \
+              --stack-name "${STACK_NAME}" \
+              --change-set-name "${failed_change_set_id}" \
+              --filters FailedEvents=true \
+              --query 'OperationEvents[].{LogicalResourceId:LogicalResourceId,ResourceType:ResourceType,ValidationName:ValidationName,ValidationPath:ValidationPath,ValidationStatusReason:ValidationStatusReason,HookStatusReason:HookStatusReason,ResourceStatusReason:ResourceStatusReason}' \
+              --output json
+            echo "::endgroup::"
+          fi
+          echo "::group::Recent stack failures"
+          aws cloudformation describe-stack-events \
+            --stack-name "${STACK_NAME}" \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+            --output table
+          echo "::endgroup::"

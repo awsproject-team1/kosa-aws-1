@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from apps.backend.assessment.model_profiles import ModelProfileRegistry
+from apps.backend.assessment.reporting import AssessmentEvaluationPlan
 from apps.backend.assessment.runner import AssessmentRunner
 from apps.backend.policy import PolicyContextResolver
 from packages.contracts import (
@@ -79,6 +80,10 @@ class EvaluationResultStore(Protocol):
     ) -> None: ...
 
 
+class AssessmentPlanStore(Protocol):
+    def put_plan_if_absent(self, plan: AssessmentEvaluationPlan) -> None: ...
+
+
 class AssessmentWorker:
     """Evaluate a single resource only after reloading its approved state."""
 
@@ -90,6 +95,7 @@ class AssessmentWorker:
         runner: AssessmentRunner,
         model_profiles: ModelProfileRegistry,
         result_store: EvaluationResultStore,
+        plan_store: AssessmentPlanStore | None = None,
     ) -> None:
         for name, value in (
             ("work_repository", work_repository),
@@ -105,6 +111,7 @@ class AssessmentWorker:
         self._runner = runner
         self._model_profiles = model_profiles
         self._result_store = result_store
+        self._plan_store = plan_store
 
     def handle(self, task: WorkflowTask) -> tuple[EvaluationResult, ...]:
         """Process one `ASSESS_RESOURCE` task; no queue payload is trusted as state."""
@@ -124,6 +131,14 @@ class AssessmentWorker:
             phase=work.phase,
             resource_type=work.resource_type,
         )
+        if self._plan_store is not None:
+            self._plan_store.put_plan_if_absent(
+                AssessmentEvaluationPlan(
+                    customer_id=work.customer_id,
+                    assessment_id=work.assessment_id,
+                    planned_evaluations=len(context.rules),
+                )
+            )
         profile = self._model_profiles.get_assessment_profile(work.model_profile_id)
         results = self._runner.evaluate_resource(
             resource_id=work.resource_id,

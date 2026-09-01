@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from typing import Protocol
 
+from apps.backend.assessment.findings import DynamoDbFindingStore, finding_from_result
 from apps.backend.assessment.worker import EvaluationResultStore
 from packages.contracts import EvaluationResult
 
@@ -28,6 +29,7 @@ class DynamoDbEvaluationResultStore(EvaluationResultStore):
         if table is None:
             raise TypeError("table is required")
         self._table = table
+        self._findings = DynamoDbFindingStore(table)
 
     def put_if_absent(
         self,
@@ -53,10 +55,16 @@ class DynamoDbEvaluationResultStore(EvaluationResultStore):
                 if _provider_error_code(error) != "ConditionalCheckFailedException":
                     raise EvaluationResultStoreError("evaluation result write failed") from None
                 if self._existing_item_matches(item):
-                    continue
-                raise ImmutableEvaluationResultConflict(
-                    "evaluation result key already contains different content"
-                ) from None
+                    pass
+                else:
+                    raise ImmutableEvaluationResultConflict(
+                        "evaluation result key already contains different content"
+                    ) from None
+            finding = finding_from_result(result)
+            if finding is not None:
+                self._findings.put_if_absent(
+                    customer_id=customer_id, assessment_id=assessment_id, finding=finding
+                )
 
     def _existing_item_matches(self, expected: dict[str, object]) -> bool:
         try:

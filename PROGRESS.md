@@ -2,6 +2,14 @@
 
 ## Current
 
+- Frontend local smoke test: restore the documented Vite development-server entrypoint for the
+  Cognito/API integration check.
+- Customer sandbox OIDC diagnosis: the deployment workflow logs selected non-secret OIDC
+  claim identifiers before role assumption; bootstrap uses the confirmed immutable owner/repository
+  IDs, and its deployment role permits fixed-Version ID artifact revalidation. The foundation now
+  omits the optional M1 input policy when live assessment configuration is absent; failed deployments
+  emit scoped diagnostics without exposing protected parameter values, including the CloudFormation
+  Early Validation path and reason; `DescribeEvents` is read-only but requires `Resource: "*"`.
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료,
   두 Tool을 소비해 IaC Snapshot + AWS Actual을 함께 읽는 Assessment 입력 조합 계층(collector) 완료
@@ -55,6 +63,25 @@
 - M1 C S3 Initial Assessment 코드 경계: 승인 Region Bedrock structured evaluator, read-only S3
   Actual Evidence, immutable plan-based Coverage, paginated 결과 조회 API와 기본 React 화면 구현
   (고객 Account Role·Bedrock 환경 설정은 D/A deployment 단계에서 주입)
+- M1 C Finding·Readiness projection: follow-up Evaluation Result를 immutable Finding으로
+  idempotent 저장하고, 완료된 Assessment plan에서 severity-weighted Readiness Score를 계산해
+  Assessment API·React report로 조회
+- M1 A auth bootstrap: Cognito local-user `Admin`/`User` group과 Hosted UI PKCE를 구성하고,
+  React 로그인·Assessment 시작 화면 및 고객 sandbox E2E handoff 절차를 추가
+- M1 통합 개발: Worker가 M0 단일 Rule fixture 대신 승인된 6개 S3 MVP Rule Registry를
+  사용하도록 전환하고, API → Outbox → structured evaluator → immutable Result/Finding →
+  Coverage/Readiness report의 multi-rule fixture integration test를 고정
+- M1 A/D integration boundary: 승인된 Registry를 고객별 DynamoDB Policy Catalog에
+  immutable/idempotent하게 publish하는 Bootstrap과, 지정 commit의 Terraform blob manifest만
+  GitHub REST `GET`으로 읽는 scoped Snapshot adapter를 구현·unit test로 고정
+- M1 customer-sandbox wiring: protected Environment Secret의 exact customer/repository/profile
+  target만 Worker가 해석하도록 하고, GitHub revision preflight → Secrets Manager short-lived
+  installation token/External ID → STS S3 read-only → Bedrock AWS_ACTUAL 평가를 조건부 M1
+  runtime으로 연결. M0 fixture 모드는 live configuration이 없을 때만 유지한다.
+- M1 customer-operated deployment bootstrap: 고객 관리자가 1회 실행하는 CloudFormation으로
+  exact GitHub OIDC Environment subject만 신뢰하는 deployment role, private versioned Lambda-code
+  bucket, foundation 전용 CloudFormation execution role을 생성하고, 기존 workflow가 bootstrap
+  output만 사용해 M1 foundation을 배포하도록 연결 (실제 customer sandbox 실행 대기)
 - PR #10 review follow-up: Lambda artifact의 `agent` 포함과 Assessment report HTTP route를
   추가하고, cross-account S3 AssumeRole에 ExternalId·만료 전 credential cache, frontend
   API authentication/configuration·pinned build CI, Evidence reference 정규형을 반영
@@ -98,6 +125,14 @@
 
 ## Next
 
+- **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
+  계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
+  bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
+  protected Environment (`customer-sandbox-artifact`, `customer-sandbox-deploy`)과 Required
+  reviewers/같은 `EXPECTED_AWS_ACCOUNT_ID`를 설정하고, deploy Environment에
+  `M1_ASSESSMENT_RUNTIME_JSON`, `M1_ASSESSMENT_SECRET_ARNS`,
+  `M1_ASSESSMENT_READ_ROLE_ARNS`를 등록한다. 이 설정·PR #16 승인/병합 전에는 고객 sandbox
+  배포나 실제 GitHub/AWS/Bedrock E2E를 시작하지 않는다.
 - M1 D: IaC Snapshot + AWS Actual 조합 계층(Fixture/Mock) 완료 →
   실제 AWS SDK/AssumeRole 및 GitHub App/OIDC 통합으로 collector 뒤 어댑터 교체
 - M1 C: collector가 만든 Assessment 입력 번들을 소비하는 평가 흐름 연결 (IAC/AWS_ACTUAL 관점)
@@ -115,29 +150,20 @@
   finalization tuple에 조건부로 묶는다
 - M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
   고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
+- M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
+  로그인·Assessment 시작·결과 조회 E2E를 실행한다.
+- M1 Shared: Rule 확대에 맞춰 prompt/rubric/golden dataset version을 재고정하고
+  DESIGN 품질 Gate를 재실행한다. (현재 fixture integration은 Registry의 6개 S3 Rule을 사용)
+- M1 A/D: 고객 sandbox의 Metadata Table에 승인 Registry를 publish하고, GitHub App installation
+  token/승인 repository 및 AWS read Role을 runtime configuration에 주입해 actual adapter E2E를
+  실행한다. 이 단계는 고객 자격 증명·보호된 배포 승인 없이는 실행하지 않는다.
+- M1 A/B/C Shared: 고객 Policy Source 업로드·정규화 Contract와 지원 형식 allow-list 확정 후,
+   tenant-scoped S3/API, Parser Adapter, Rule 검토·승인, Profile 게시 경로 구현.
+  지원 형식은 Markdown/Plain text/CSV/XLSX/DOCX이며 서드파티 런타임 의존성 없이 처리한다.
 
 ## Blocked
 
-- **M1 Exit criteria의 `Finding`과 `Readiness Score`에 담당 역할이 없다.** (제기: B, 2026-08-31)
-
-  두 산출물은 Exit criteria와 `docs/PRD.md`의 제품 흐름에 있고 저장 모델까지 정의돼 있지만,
-  생산하는 코드가 없고 M1의 A/B/C/D 역할 항목 어디에도 들어 있지 않다.
-
-  | 산출물 | 정의된 것 | 없는 것 |
-  | --- | --- | --- |
-  | `Finding` | `docs/DATABASE.md` item(`ASSESSMENT#{id}#FINDING#{finding_id}`), Job step `GENERATE_FINDINGS`, M2 소비처(`RemediationPatch.finding_id`, `POST /findings/{findingId}/remediations`) | 생성 코드, `packages/contracts`의 Schema, 조회 API, 담당 역할 |
-  | `Readiness Score` | `docs/DATABASE.md`의 Assessment item 예시(`readiness_score`), `docs/PRD.md`가 서비스의 대표 점수로 규정 | 산출 코드, 계산 정의(Score/Severity/Coverage와의 관계), 담당 역할 |
-
-  M2의 `RemediationPatch`가 `finding_id`를 필수로 요구하므로, M1이 Finding을 생산하지 않으면
-  M2 Remediation 전체가 입력을 얻지 못한다.
-
-  - Decision: 두 산출물의 담당 역할과 M1 포함 여부
-  - Owner: 미정
-  - Needed by: M1 Exit criteria 판정 전
-  - Blocks: M1 종료 판정, M2 Remediation 착수
-  - Proposed options: (1) Finding 생성·조회는 A, Readiness Score 산출은 C가 맡는다
-    (2) 둘 다 평가 산출물로 보고 C가 맡는다 (3) M1 Exit criteria에서 빼고 M2로 옮긴다
-  - Final record: 미정
+- 없음
 
 ## Milestones
 
@@ -159,10 +185,15 @@
 
 **Exit criteria:** EC2/RDS/ALB/S3 중 첫 대상 범위에서 Repository + 승인된 Policy Profile을 입력해 Initial Assessment, Finding, Evidence, Readiness Score, Coverage를 조회할 수 있다. 정적 seed가 아닌 사용자 업로드 정책을 제품 기능으로 표시하려면 `docs/POLICY_INGESTION.md`의 별도 Delivery gate를 충족해야 한다.
 
-- [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장
-- [ ] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog, Policy Ingestion의 형식 allow-list·정규화 Schema·Parser·승인 판정·Profile publication 거부 규칙 구현 완료; C의 Registry 채택, A의 실제 테이블 적재와 API 배선은 대기)*
-- [ ] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증, Assessment UI 기본 화면
-- [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; 실제 SDK/GitHub App 통합 대기)*
+- [ ] **A — Platform/Backend:** Assessment Job 생성·상태 조회, JWT/RBAC/Scope 검증, Metadata/Artifact 저장,
+  고객 AWS Account용 Auth bootstrap *(고객 소유 IdP federation 또는 Cognito local user 결정, 초기
+  Admin 인수, Admin/User claim·group, 로그인 UI 및 고객 측 사용자 관리 절차 E2E 검증; Registry의
+  customer-scoped DynamoDB immutable Bootstrap 구현 완료, sandbox publish/E2E 대기)*
+- [x] **B — Policy/Governance Boundary:** MVP Rule Registry, Profile 적용, Control/Resource Mapping, Policy Context 제공 *(Registry·Control 매핑·Context 확장과 read-only DynamoDB Catalog, Policy Ingestion의 형식 allow-list·정규화 Schema·Parser·승인 판정·Profile publication 거부 규칙 구현 완료; Worker가 Registry를 채택한 multi-rule fixture integration 완료. 실제 고객 정책 업로드·테이블 적재는 별도 Delivery gate)*
+- [x] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
+  Finding·Readiness Score projection, Assessment UI 기본 화면 *(6개 S3 Rule의 fixture integration으로
+  결과·Finding·Coverage·Readiness까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기)*
+- [ ] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + 두 Tool을 함께 소비하는 Assessment 입력 조합 계층 Fixture/Mock 완료; S3 AssumeRole 및 GitHub REST commit/tree read adapter 구현, 고객 GitHub App/runtime injection E2E 대기)*
 - [ ] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증
 
 **Dependencies:** C는 B의 승인된 Policy Context와 D의 Snapshot/Read-Only Interface를 사용한다. A가 Job/상태 Contract를 제공한다. 고객 정책 업로드 기능은 A의 upload/storage, B의 normalization/approval, C의 AI extraction quality gate와 Shared 보안·통합 테스트가 모두 필요하다.

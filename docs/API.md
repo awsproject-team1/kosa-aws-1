@@ -79,6 +79,13 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   추가 페이지로 표시한다. 이 Coverage는 통제 수 자체가 아닌 **평가 실행률**이다.
   Frontend는 `VITE_API_BASE_URL`(운영 API origin) 또는 개발용 `VITE_API_PROXY_TARGET`을
   설정하고 Cognito access token을 `Authorization: Bearer <token>`으로 보낸다.
+- M1 sandbox SPA는 Cognito Hosted UI authorization-code + PKCE 로그인으로 access token을
+  얻는다. `VITE_COGNITO_DOMAIN`, `VITE_COGNITO_CLIENT_ID`, `VITE_COGNITO_REDIRECT_URI`는
+  stack output으로 설정하며, token·password는 build artifact나 저장소에 넣지 않는다.
+- 같은 응답의 `findings`는 `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE` 결과에서 C가
+  결정적으로 만든 actionable projection이다. `readiness_score`는 전체 평가 계획이 완료되기
+  전에는 `null`이고, 완료 후에는 `{score, evaluated_evaluations}`를 반환한다. 점수는 severity
+  가중 평가 score이며 Coverage와 혼동하지 않는다.
 - IaC 변경이 필요한 Remediation 결과는 `IaCSnapshot`과 `RemediationPatch` Artifact
   reference를 반환한다. IaC가 이미 안전한 Actual Drift 동기화는 Patch 없이 IaC Snapshot의
   commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.

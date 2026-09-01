@@ -6,7 +6,6 @@ from pathlib import Path
 
 from apps.backend.api.jobs import AssessmentRequest, JobApiService
 from apps.backend.assessment import (
-    AssessmentEvaluationPlan,
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
@@ -17,7 +16,12 @@ from apps.backend.assessment import (
 )
 from apps.backend.auth import Principal, Role
 from apps.backend.jobs import OutboxDispatcher, OutboxStatus, WorkflowOutboxEntry
-from apps.backend.policy import PolicyContext, PolicyContextResolver, load_m0_fixture_catalog
+from apps.backend.policy import (
+    PolicyContext,
+    PolicyContextResolver,
+    load_m0_fixture_catalog,
+    load_rule_registry,
+)
 from packages.contracts import (
     AssessmentPhase,
     EvaluationPerspective,
@@ -30,6 +34,7 @@ from packages.contracts import (
 
 FIXTURE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "policy_profile.json"
 SNAPSHOT_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "s3_resource_snapshot.json"
+RULE_REGISTRY_PATH = Path(__file__).parents[2] / "fixtures" / "rules"
 
 MODEL_PROFILE = ModelProfile(
     model_profile_id="assessment-nova-lite-m0-v1",
@@ -252,22 +257,17 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
             ),
             AssessmentRequest(repository_id="repo-001", policy_profile_id="profile-mvp-baseline"),
         )
-        _, catalog = load_m0_fixture_catalog(FIXTURE_PATH)
+        registry = load_rule_registry(RULE_REGISTRY_PATH)
         snapshot = json.loads(SNAPSHOT_PATH.read_text())
         evidence = snapshot["evidence_references"]
         assert isinstance(evidence, list) and all(isinstance(item, str) for item in evidence)
         client = BedrockClient()
         table = Table()
         report_store = DynamoDbAssessmentReportStore(table)
-        report_store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=1
-            )
-        )
 
         outcomes = AssessmentWorker(
             work_repository=WorkRepository(snapshot),
-            context_resolver=PolicyContextResolver(catalog),
+            context_resolver=PolicyContextResolver(registry.catalog),
             runner=AssessmentRunner(
                 BedrockStructuredEvaluator(
                     client=client,
@@ -278,9 +278,15 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
             ),
             model_profiles=InMemoryModelProfileRegistry((MODEL_PROFILE,)),
             result_store=DynamoDbEvaluationResultStore(table),
+            plan_store=report_store,
         ).handle(queue.tasks[0])
         report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
 
-        self.assertEqual(outcomes[0].status, EvaluationStatus.FAIL)
+        self.assertEqual(len(outcomes), 6)
+        self.assertTrue(all(outcome.status is EvaluationStatus.FAIL for outcome in outcomes))
         self.assertEqual(client.calls[0]["modelId"], MODEL_PROFILE.model_id)
         self.assertEqual(report.coverage.percentage, 100)
+        self.assertEqual(len(report.findings), 6)
+        self.assertIsNotNone(report.readiness_score)
+        assert report.readiness_score is not None
+        self.assertEqual(report.readiness_score.score, 20)

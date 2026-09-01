@@ -2,6 +2,24 @@
 
 CloudFormation packaging, IAM definitions, and deployment parameters for the customer-deployed platform.
 
+## Customer-operated M1 bootstrap
+
+`cloudformation/m1-customer-bootstrap.yaml` is the one-time stack a customer
+administrator runs in the target sandbox account before any repository workflow
+can access it. It creates a private, versioned Lambda-code bucket, a GitHub
+Actions OIDC deployment role, and a CloudFormation execution role. The GitHub
+role trusts only the two exact protected Environment subjects supplied to the
+bootstrap and can upload only `lambda/m0/*`, manage the one declared foundation
+stack, and pass only the execution role to CloudFormation. It has no customer
+workload, Secrets Manager, Bedrock, or `sts:AssumeRole` permission.
+
+The bootstrap supports an existing account-level GitHub OIDC provider through
+`ExistingGitHubOidcProviderArn`; otherwise it creates one. A customer must run
+this stack with its own approved administrator path. It is not run by a local
+Agent session or by the repository workflow it enables. Its outputs are the
+only AWS identifiers needed by `Deploy M0 Foundation`; see
+`docs/M1-SANDBOX-INTEGRATION.md` for the complete M1 sequence.
+
 ## M0 foundation contract
 
 The first stack accepts `ProjectName` and `Environment`; it normally derives physical names as
@@ -35,6 +53,11 @@ reviewers and the same `EXPECTED_AWS_ACCOUNT_ID`. No stack is deployed from a lo
 session. `AssessmentScopeJson` is a fail-closed, customer-scoped M0 selector map and must be supplied
 by the deployment workflow.
 
+For M1 sandbox frontend testing, the stack also creates Cognito `Admin`/`User` groups and a
+Hosted UI domain with Authorization Code OAuth enabled. The customer-operated local-user
+handoff and PKCE frontend test are documented in `docs/M1-AUTH-FRONTEND-TEST.md`; no user
+password is a CloudFormation parameter or repository value.
+
 ## Storage hardening and validation
 
 The canonical YAML template protects the metadata table with deletion protection, SSE, PITR,
@@ -67,5 +90,7 @@ completed through the protected GitHub Actions path, not from a local developer 
 Run the same offline CloudFormation validation used by CI without deploying:
 
 ```bash
-cfn-lint --non-zero-exit-code error infrastructure/cloudformation/m0-foundation.yaml
+cfn-lint --non-zero-exit-code error \
+  infrastructure/cloudformation/m0-foundation.yaml \
+  infrastructure/cloudformation/m1-customer-bootstrap.yaml
 ```

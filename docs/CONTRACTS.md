@@ -72,6 +72,19 @@ M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule �
 평가로 집계하고 `EXECUTION_ERROR`는 분모에 남겨 재시도·실패 범위를 드러낸다. 동일한
 Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
 
+## M1 Finding and Readiness boundary
+
+`EvaluationResult` 중 `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`는 C가 각각 하나의
+immutable `Finding`으로 투영한다. Finding ID는 `resource_id`, `rule_id`, `rule_version`,
+`perspective`에서 결정적으로 만들며, 원 Evaluation Result의 status, severity, score, rationale,
+evidence를 보존한다. `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
+
+`ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`는 점수
+계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`, `MEDIUM=2`, `HIGH=4`,
+`CRITICAL=8`로 가중 평균하여 소수 둘째 자리로 반올림한다. `EXECUTION_ERROR` 또는 미완료
+평가가 있으면 Readiness Score는 `null`이며 Coverage가 그 이유를 표시한다. 이 산식은 AI가
+아닌 C의 결정적 report projection이다.
+
 ## Async Worker boundary
 
 `WorkflowTask`는 Queue에 Artifact 본문이나 고객 scope를 복사하지 않고 `job_id`,
