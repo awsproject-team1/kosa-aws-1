@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from apps.backend.auth import AuthorizationDenied, InvalidIdentityClaims
 from apps.backend.deployment.approval import DeploymentApprovalError
 from apps.backend.jobs.lifecycle import InvalidJobTransition, StaleJobRevision
+from apps.backend.remediation.service import RemediationNotAutomatableError
 from apps.backend.repositories.ports import (
     DuplicateJobError,
     InvalidJobMutationError,
@@ -56,7 +57,7 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(404, "NOT_FOUND", "The requested resource was not found")
     if isinstance(error, RequestValidationError):
         return _failure(400, "VALIDATION_ERROR", "The request is invalid")
-    if isinstance(error, DeploymentApprovalError):
+    if isinstance(error, (DeploymentApprovalError, RemediationNotAutomatableError)):
         return _failure(409, "CONFLICT", "The request conflicts with current state")
     if isinstance(
         error,

@@ -7,9 +7,10 @@ from typing import Protocol
 from apps.backend.auth import Action, Principal, authorize
 from apps.backend.jobs import OutboxDispatcher, WorkflowOutboxEntry, create_job
 from apps.backend.jobs.models import Job
+from apps.backend.remediation.service import RemediationNotAutomatableError
 from apps.backend.repositories import RepositoryError
 from packages.contracts import JobCurrentStep, JobResponse, WorkflowCommand, WorkflowTask
-from packages.contracts.remediation import RemediationContext
+from packages.contracts.remediation import RemediationContext, RemediationStrategy
 
 
 class RemediationContextReader(Protocol):
@@ -60,6 +61,18 @@ class RemediationApiService:
             or context.snapshot.customer_id != principal.customer_id
         ):
             raise RepositoryError("remediation context is outside the requested scope")
+        if context.strategy is RemediationStrategy.MANUAL_REVIEW:
+            raise RemediationNotAutomatableError("remediation requires manual review")
+        command = (
+            WorkflowCommand.GENERATE_REMEDIATION
+            if context.strategy is RemediationStrategy.PATCH_IAC
+            else WorkflowCommand.RUN_DEPLOYMENT
+        )
+        initial_step = (
+            JobCurrentStep.GENERATE_REMEDIATION
+            if context.strategy is RemediationStrategy.PATCH_IAC
+            else JobCurrentStep.PRE_DEPLOY_VALIDATION
+        )
         job_id, remediation_id = (
             self._new(self._job_id_factory, "job"),
             self._new(self._remediation_id_factory, "remediation"),
@@ -68,16 +81,14 @@ class RemediationApiService:
             job_id=job_id,
             customer_id=principal.customer_id,
             job_type="REMEDIATION",
-            initial_step=JobCurrentStep.GENERATE_REMEDIATION,
+            initial_step=initial_step,
             requested_by=principal.subject,
         )
         job = replace(job, remediation_id=remediation_id)
         outbox = WorkflowOutboxEntry(
             customer_id=principal.customer_id,
             job_id=job_id,
-            task=WorkflowTask(
-                job_id=job_id, expected_revision=0, command=WorkflowCommand.GENERATE_REMEDIATION
-            ),
+            task=WorkflowTask(job_id=job_id, expected_revision=0, command=command),
         )
         self._repository.create_remediation_workflow(
             context=context, job=job, remediation_id=remediation_id, outbox=outbox

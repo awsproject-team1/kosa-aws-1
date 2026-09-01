@@ -14,6 +14,10 @@ class RemediationContractError(ValueError):
     """Raised when a generated patch is not bound to the requested finding and snapshot."""
 
 
+class RemediationNotAutomatableError(ValueError):
+    """The policy context requires review and must not enter patch generation."""
+
+
 class PatchGenerator(Protocol):
     def generate(self, *, context: RemediationContext) -> RemediationPatch: ...
 
