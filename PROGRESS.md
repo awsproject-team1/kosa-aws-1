@@ -5,7 +5,7 @@
 - Customer sandbox OIDC diagnosis: the deployment workflow logs selected non-secret OIDC
   claim identifiers before role assumption; bootstrap uses the confirmed immutable owner/repository
   IDs, and its deployment role permits fixed-Version ID artifact revalidation. The foundation now
-  omits the optional M1 input policy when live assessment configuration is absent; failed Change Sets
+  omits the optional M1 input policy when live assessment configuration is absent; failed deployments
   emit scoped diagnostics without exposing protected parameter values.
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료,
