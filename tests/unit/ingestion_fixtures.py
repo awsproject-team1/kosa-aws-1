@@ -98,7 +98,7 @@ def build_docx(body: str) -> bytes:
     return build_docx_part(document)
 
 
-def build_docx_part(document_xml: str) -> bytes:
+def build_docx_part(document_xml: str | bytes) -> bytes:
     """Package a raw `word/document.xml` so a test can control the XML exactly."""
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:

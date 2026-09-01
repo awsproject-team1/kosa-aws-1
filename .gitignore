@@ -10,6 +10,8 @@ build/
 coverage/
 .pytest_cache/
 .ruff_cache/
+bench/results/*
+!bench/results/.gitkeep
 __pycache__/
 *.py[cod]
 .terraform/

@@ -90,6 +90,11 @@
   소비해 승인된 Repository IaC Snapshot(IAC)과 AWS Actual(AWS_ACTUAL)을 하나의 불변
   Assessment 입력 번들로 묶어 C 평가 경계에 전달, 단일 customer_id로 두 Tool scope를
   구조적으로 강제, write/mutation 표면 없음 (평가/Drift 판정은 out of scope)
+- Bedrock 실측 모델 평가 기반 구축 및 최종 강화 평가 완료: 활성 Text→Text 45개를
+  6개 Case에서 5회 반복한 최종 1,350회 결과(세션 전체 3,115회)에서
+  Parent=`Gemma 3 4B IT`(routing+Q&A 20/20), Assessment=`Nova Micro`,
+  Remediation=`Devstral 2 123B`, Deployment=`Nova Lite`를 역할별 추천 후보로 도출했으며,
+  승인된 runtime Model Profile 배정은 변경하지 않음
 
 ## Next
 

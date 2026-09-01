@@ -25,6 +25,7 @@ from apps.backend.policy.ingestion import UploadedPolicyOriginal, normalize_uplo
 from apps.backend.policy.ingestion.normalization import (  # noqa: E402
     MAX_UNITS,
     DocumentParseError,
+    text_sha256,
 )
 from apps.backend.policy.ingestion.parsers.ooxml import parse_docx, parse_xlsx  # noqa: E402
 from packages.contracts import (  # noqa: E402
@@ -82,10 +83,48 @@ class XmlEntityExpansionTest(unittest.TestCase):
             parse_xlsx(workbook)
         self.assertEqual(raised.exception.failure_code, IngestionFailureCode.XML_DTD_NOT_ALLOWED)
 
+    def test_rejects_utf16le_and_utf16be_dtds(self) -> None:
+        encodings_and_boms = (
+            ("utf-16-le", b"\xff\xfe"),
+            ("utf-16-be", b"\xfe\xff"),
+        )
+        for encoding, bom in encodings_and_boms:
+            with self.subTest(encoding=encoding):
+                document = bom + entity_bomb_document(4).encode(encoding)
+
+                with self.assertRaises(DocumentParseError) as raised:
+                    parse_docx(build_docx_part(document))
+                self.assertEqual(
+                    raised.exception.failure_code,
+                    IngestionFailureCode.XML_DTD_NOT_ALLOWED,
+                )
+
+    def test_a_comment_before_the_dtd_cannot_hide_it(self) -> None:
+        document = entity_bomb_document(4).replace(
+            '<?xml version="1.0"?>',
+            '<?xml version="1.0"?>\n<!-- <fake> -->',
+            1,
+        )
+
+        with self.assertRaises(DocumentParseError) as raised:
+            parse_docx(build_docx_part(document))
+        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.XML_DTD_NOT_ALLOWED)
+
     def test_an_ordinary_document_without_a_dtd_still_parses(self) -> None:
         payload = build_docx(paragraph("Controls", style="Heading1") + paragraph("A rule."))
 
         self.assertEqual(len(parse_docx(payload).units), 2)
+
+    def test_an_ordinary_utf16_document_still_parses(self) -> None:
+        document = (
+            '<?xml version="1.0" encoding="UTF-16"?>'
+            '<document xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main"><w:body>'
+            f"{paragraph('Controls', style='Heading1')}{paragraph('A rule.')}"
+            "</w:body></document>"
+        )
+
+        self.assertEqual(len(parse_docx(build_docx_part(document.encode("utf-16"))).units), 2)
 
 
 class UnitBudgetTest(unittest.TestCase):
@@ -118,7 +157,7 @@ class UnitBudgetTest(unittest.TestCase):
         self.assertEqual(len(parse_docx(payload).units), 50)
 
 
-class DuplicateSheetRowTest(unittest.TestCase):
+class AmbiguousWorksheetCoordinateTest(unittest.TestCase):
     """같은 행 번호가 둘이면 locator 하나가 두 행을 가리킨다. 조용히 덮어쓰면 근거가 사라진다."""
 
     def test_refuses_a_worksheet_that_declares_a_row_twice(self) -> None:
@@ -151,6 +190,67 @@ class DuplicateSheetRowTest(unittest.TestCase):
             [unit.locator for unit in parse_xlsx(workbook).units],
             ["sheet/security/row/1", "sheet/security/row/2"],
         )
+
+    def test_refuses_duplicate_cell_coordinates(self) -> None:
+        workbook = build_xlsx(
+            sheets=[
+                (
+                    "Security",
+                    sheet_row(
+                        1,
+                        inline_cell("A", 1, "first policy")
+                        + inline_cell("A", 1, "overwriting policy"),
+                    ),
+                )
+            ]
+        )
+
+        with self.assertRaises(DocumentParseError) as raised:
+            parse_xlsx(workbook)
+        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.AMBIGUOUS_LOCATOR)
+
+    def test_refuses_a_cell_that_references_a_different_row(self) -> None:
+        workbook = build_xlsx(
+            sheets=[
+                (
+                    "Security",
+                    sheet_row(1, inline_cell("A", 2, "misplaced policy")),
+                )
+            ]
+        )
+
+        with self.assertRaises(DocumentParseError) as raised:
+            parse_xlsx(workbook)
+        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.AMBIGUOUS_LOCATOR)
+
+    def test_accepts_a_cell_without_an_explicit_reference(self) -> None:
+        cell_without_reference = '<c t="inlineStr"><is><t>no explicit reference</t></is></c>'
+        workbook = build_xlsx(sheets=[("Security", sheet_row(1, cell_without_reference))])
+
+        document = parse_xlsx(workbook)
+
+        self.assertEqual([unit.locator for unit in document.units], ["sheet/security/row/1"])
+        self.assertEqual(document.units[0].text_sha256, text_sha256("no explicit reference"))
+
+    def test_refuses_an_invalid_explicit_row_reference(self) -> None:
+        for reference in ("invalid", "0", "-1", "1_0"):
+            with self.subTest(reference=reference):
+                row = f'<row r="{reference}"><c t="inlineStr"><is><t>policy</t></is></c></row>'
+
+                with self.assertRaises(DocumentParseError) as raised:
+                    parse_xlsx(build_xlsx(sheets=[("Security", row)]))
+                self.assertEqual(
+                    raised.exception.failure_code,
+                    IngestionFailureCode.CORRUPTED_DOCUMENT,
+                )
+
+    def test_refuses_an_invalid_explicit_cell_reference(self) -> None:
+        cell = '<c r="invalid" t="inlineStr"><is><t>policy</t></is></c>'
+        workbook = build_xlsx(sheets=[("Security", sheet_row(1, cell))])
+
+        with self.assertRaises(DocumentParseError) as raised:
+            parse_xlsx(workbook)
+        self.assertEqual(raised.exception.failure_code, IngestionFailureCode.CORRUPTED_DOCUMENT)
 
 
 class InferredDelimiterNeedsReviewTest(unittest.TestCase):

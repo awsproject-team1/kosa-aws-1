@@ -36,9 +36,9 @@ from packages.contracts.policy_ingestion import (
 )
 
 XLSX_PARSER_ID = "xlsx-parser"
-XLSX_PARSER_VERSION = "1.0.0"
+XLSX_PARSER_VERSION = "1.0.1"
 DOCX_PARSER_ID = "docx-parser"
-DOCX_PARSER_VERSION = "1.0.0"
+DOCX_PARSER_VERSION = "1.0.1"
 
 SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -54,10 +54,14 @@ MAX_SHEET_ROWS = 50_000
 MAX_COLUMN_INDEX = 1_024
 
 _CELL_REFERENCE = re.compile(r"^(?P<column>[A-Z]+)(?P<row>\d+)$")
+_ROW_REFERENCE = re.compile(r"^\+?[0-9]+$")
 _HEADING_STYLE = re.compile(r"^heading\s*(?P<level>[1-6])$", re.IGNORECASE)
-# 루트 요소의 시작 태그. `<?xml`, `<!--`, `<!DOCTYPE`는 `<` 뒤가 문자가 아니라 걸리지 않는다.
-_ROOT_ELEMENT = re.compile(rb"<[A-Za-z_]")
-_DOCTYPE_DECLARATION = b"<!DOCTYPE"
+# OOXML XML parts may use UTF-8 or UTF-16, so block every supported byte representation.
+_DOCTYPE_DECLARATIONS = (
+    b"<!DOCTYPE",
+    "<!DOCTYPE".encode("utf-16-le"),
+    "<!DOCTYPE".encode("utf-16-be"),
+)
 
 
 def parse_xlsx(payload: bytes) -> ParsedPolicyDocument:
@@ -182,11 +186,19 @@ def _add_sheet_rows(
     grid: dict[int, dict[int, str]] = {}
     inline = False
     for fallback_index, row in enumerate(rows, start=1):
-        row_index = _int_or(row.get("r"), fallback_index)
+        row_index = _row_index(row.get("r"), fallback_index, sheet_slug)
         cells: dict[int, str] = {}
+        seen_columns: set[int] = set()
         next_column = 1
         for cell in row.findall(f"{SHEET_NS}c"):
-            column = _column_index(cell.get("r"), next_column)
+            column = _cell_column(cell.get("r"), next_column, row_index, sheet_slug)
+            if column in seen_columns:
+                raise DocumentParseError(
+                    IngestionFailureCode.AMBIGUOUS_LOCATOR,
+                    f"worksheet {sheet_slug!r} declares cell column {column} "
+                    f"more than once in row {row_index}",
+                )
+            seen_columns.add(column)
             next_column = column + 1
             value, is_inline = _cell_value(cell, shared)
             inline = inline or is_inline
@@ -358,27 +370,30 @@ def _parse_xml(data: bytes) -> ElementTree.Element:
 
 
 def _require_no_dtd(data: bytes) -> None:
-    """Refuse an OOXML part that declares a DTD, before any entity can expand.
-
-    `ElementTree`는 내부 엔티티를 확장하므로 수백 바이트짜리 part가 메모리에서 수백만 자로
-    불어날 수 있다. 정상 OOXML은 DTD를 선언하지 않으니 잃는 것이 없다. prolog 안에 있는
-    선언만 본다 — 본문의 `<`는 XML에서 escape되므로 여기까지 오지 않는다.
-    """
-    index = data.find(_DOCTYPE_DECLARATION)
-    if index == -1:
-        return
-    root = _ROOT_ELEMENT.search(data)
-    if root is None or index < root.start():
+    """Refuse UTF-8 or UTF-16 OOXML parts that declare a DTD before parsing."""
+    if any(declaration in data for declaration in _DOCTYPE_DECLARATIONS):
         raise DocumentParseError(
             IngestionFailureCode.XML_DTD_NOT_ALLOWED,
             "an OOXML part declares a DTD, which is not allowed",
         )
 
 
-def _column_index(reference: str | None, fallback: int) -> int:
-    match = _CELL_REFERENCE.match(reference or "")
-    if match is None:
+def _cell_column(reference: str | None, fallback: int, row: int, sheet_slug: str) -> int:
+    if reference is None:
         return fallback
+    match = _CELL_REFERENCE.match(reference)
+    if match is None:
+        raise DocumentParseError(
+            IngestionFailureCode.CORRUPTED_DOCUMENT,
+            f"worksheet {sheet_slug!r} contains an invalid cell reference {reference!r}",
+        )
+    referenced_row = int(match.group("row"))
+    if referenced_row != row:
+        raise DocumentParseError(
+            IngestionFailureCode.AMBIGUOUS_LOCATOR,
+            f"worksheet {sheet_slug!r} row {row} contains a cell that references "
+            f"row {referenced_row}",
+        )
     return _column_number(match.group("column"))
 
 
@@ -389,11 +404,16 @@ def _column_number(letters: str) -> int:
     return min(number, MAX_COLUMN_INDEX)
 
 
-def _int_or(value: str | None, fallback: int) -> int:
-    try:
-        return int(value) if value is not None else fallback
-    except ValueError:
+def _row_index(reference: str | None, fallback: int, sheet_slug: str) -> int:
+    if reference is None:
         return fallback
+    normalized = reference.strip()
+    if _ROW_REFERENCE.match(normalized) is None or int(normalized) < 1:
+        raise DocumentParseError(
+            IngestionFailureCode.CORRUPTED_DOCUMENT,
+            f"worksheet {sheet_slug!r} contains an invalid row reference {reference!r}",
+        )
+    return int(normalized)
 
 
 __all__ = [
