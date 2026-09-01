@@ -22,8 +22,18 @@ from agent.runtime.github_tool import (
     require_repository_scope,
     require_snapshot_request,
 )
+from agent.runtime.github_write_tool import (
+    GitHubWriteScopeError,
+    GitHubWriteTool,
+    GitHubWriteToolError,
+    ProposedPullRequest,
+    derive_head_branch,
+    require_patch_scope,
+    require_remediation_patch,
+)
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
 from agent.runtime.mock_github_tool import MockGitHubTool
+from agent.runtime.mock_github_write_tool import MockGitHubWriteTool
 
 __all__ = [
     "AwsResourceNotFoundError",
@@ -37,12 +47,20 @@ __all__ = [
     "GitHubTool",
     "GitHubToolError",
     "GitHubToolScopeError",
+    "GitHubWriteScopeError",
+    "GitHubWriteTool",
+    "GitHubWriteToolError",
     "IaCDocument",
     "IaCDocumentReader",
     "IaCSnapshotRequest",
     "MockAwsResourceTool",
     "MockGitHubTool",
+    "MockGitHubWriteTool",
+    "ProposedPullRequest",
+    "derive_head_branch",
+    "require_patch_scope",
     "require_read_operation",
+    "require_remediation_patch",
     "require_repository_scope",
     "require_scope",
     "require_snapshot_request",
