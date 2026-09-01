@@ -5,6 +5,7 @@ import unittest
 from agent.context import (
     AssessmentInputBundle,
     AssessmentInputCollector,
+    AssessmentInputError,
     AwsResourceSelector,
     SnapshotReadRequest,
 )
@@ -13,6 +14,8 @@ from agent.runtime import (
     AwsResourceView,
     GitHubSnapshotNotFoundError,
     GitHubToolScopeError,
+    IaCDocument,
+    IaCSnapshotRequest,
     MockAwsResourceTool,
     MockGitHubTool,
 )
@@ -213,3 +216,150 @@ class AssessmentInputCollectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TERRAFORM_BODY = 'resource "aws_s3_bucket_public_access_block" "a" { block_public_acls = true }'
+
+
+def build_document(*, commit_sha: str = COMMIT_A) -> IaCDocument:
+    return IaCDocument(
+        customer_id=CUSTOMER_ID,
+        repository_id=REPOSITORY_ID,
+        commit_sha=commit_sha,
+        files=(("main.tf", TERRAFORM_BODY),),
+    )
+
+
+class SnapshotOnlyGitHubTool:
+    """A tool that can read the snapshot reference but not the Terraform body."""
+
+    def read_iac_snapshot(self, request: object) -> IaCSnapshot:
+        return build_snapshot()
+
+
+class IaCDocumentCollectionTest(unittest.TestCase):
+    def collector(self, *, documents: tuple[IaCDocument, ...] = ()) -> AssessmentInputCollector:
+        return AssessmentInputCollector(
+            github_tool=MockGitHubTool(
+                customer_id=CUSTOMER_ID,
+                repository_id=REPOSITORY_ID,
+                snapshots=[build_snapshot()],
+                documents=documents,
+            ),
+            aws_tool=build_aws_tool(),
+        )
+
+    def test_document_is_absent_unless_the_request_asks_for_it(self) -> None:
+        bundle = self.collector(documents=(build_document(),)).collect(read_request())
+
+        self.assertIsNone(bundle.iac_document)
+
+    def test_requested_document_joins_the_bundle_for_the_same_commit(self) -> None:
+        request = SnapshotReadRequest(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT_A,
+            aws_account_id=AWS_ACCOUNT_ID,
+            aws_selectors=(
+                AwsResourceSelector(
+                    operation=AwsResourceOperation.READ_RESOURCE,
+                    resource_type="AWS::S3::Bucket",
+                    resource_id="bucket-a",
+                ),
+            ),
+            include_iac_document=True,
+        )
+
+        bundle = self.collector(documents=(build_document(),)).collect(request)
+
+        assert bundle.iac_document is not None
+        self.assertEqual(bundle.iac_document.commit_sha, bundle.iac_snapshot.commit_sha)
+        self.assertEqual(bundle.iac_document.evidence_references, ("terraform:main.tf",))
+        self.assertEqual(bundle.to_dict()["iac_document"], bundle.iac_document.to_dict())
+
+    def test_missing_document_for_the_pinned_commit_fails_closed(self) -> None:
+        request = read_request()
+        request = SnapshotReadRequest(
+            customer_id=request.customer_id,
+            repository_id=request.repository_id,
+            commit_sha=request.commit_sha,
+            aws_account_id=request.aws_account_id,
+            aws_selectors=request.aws_selectors,
+            include_iac_document=True,
+        )
+
+        with self.assertRaises(GitHubSnapshotNotFoundError):
+            self.collector().collect(request)
+
+    def test_tool_without_body_read_support_fails_instead_of_dropping_the_perspective(
+        self,
+    ) -> None:
+        collector = AssessmentInputCollector(
+            github_tool=SnapshotOnlyGitHubTool(), aws_tool=build_aws_tool()
+        )
+        request = SnapshotReadRequest(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT_A,
+            aws_account_id=AWS_ACCOUNT_ID,
+            aws_selectors=(
+                AwsResourceSelector(
+                    operation=AwsResourceOperation.READ_RESOURCE,
+                    resource_type="AWS::S3::Bucket",
+                    resource_id="bucket-a",
+                ),
+            ),
+            include_iac_document=True,
+        )
+
+        with self.assertRaisesRegex(AssessmentInputError, "Terraform body"):
+            collector.collect(request)
+
+    def test_bundle_rejects_a_document_from_another_commit(self) -> None:
+        with self.assertRaisesRegex(AssessmentInputError, "snapshot commit"):
+            AssessmentInputBundle(
+                customer_id=CUSTOMER_ID,
+                iac_snapshot=build_snapshot(),
+                aws_resources=(),
+                iac_document=build_document(commit_sha="b" * 40),
+            )
+
+    def test_document_rejects_duplicate_paths_and_empty_file_sets(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            IaCDocument(
+                customer_id=CUSTOMER_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT_A,
+                files=(("main.tf", "a"), ("main.tf", "b")),
+            )
+        with self.assertRaisesRegex(ValueError, "non-empty tuple"):
+            IaCDocument(
+                customer_id=CUSTOMER_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT_A,
+                files=(),
+            )
+
+    def test_mock_tool_rejects_documents_outside_its_scope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "document scope"):
+            MockGitHubTool(
+                customer_id=CUSTOMER_ID,
+                repository_id="repo-other",
+                snapshots=[],
+                documents=(build_document(),),
+            )
+
+    def test_mock_tool_refuses_out_of_scope_document_reads(self) -> None:
+        tool = MockGitHubTool(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            snapshots=[build_snapshot()],
+            documents=(build_document(),),
+        )
+
+        with self.assertRaises(GitHubToolScopeError):
+            tool.read_iac_document(
+                IaCSnapshotRequest(
+                    customer_id="cust-002", repository_id=REPOSITORY_ID, commit_sha=COMMIT_A
+                )
+            )

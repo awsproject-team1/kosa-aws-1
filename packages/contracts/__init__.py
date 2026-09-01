@@ -7,6 +7,8 @@ from packages.contracts.assessments import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    Finding,
+    ReadinessScore,
     ScoringMode,
 )
 from packages.contracts.deployments import (
@@ -59,6 +61,16 @@ from packages.contracts.policy_ingestion import (
     PolicySourceFormat,
     PolicySourceUploadRequest,
 )
+from packages.contracts.remediation_policy import (
+    ManualReviewCode,
+    RemediationAction,
+    RemediationDecision,
+    RemediationEligibility,
+    RemediationException,
+    RemediationExceptionReason,
+    RemediationRuleScope,
+    RemediationTarget,
+)
 
 __all__ = [
     "ApiError",
@@ -78,6 +90,7 @@ __all__ = [
     "EvaluationStatus",
     "ExtractionWarningCode",
     "FORMAT_MEDIA_TYPES",
+    "Finding",
     "GoldenDatasetCase",
     "IaCSnapshot",
     "IngestionFailureCode",
@@ -85,6 +98,7 @@ __all__ = [
     "JobCurrentStep",
     "JobResponse",
     "JobStatus",
+    "ManualReviewCode",
     "ModelProfile",
     "ModelProfileRole",
     "NormalizedDocumentUnit",
@@ -98,7 +112,15 @@ __all__ = [
     "PolicySourceFormat",
     "PolicySourceKind",
     "PolicySourceUploadRequest",
+    "ReadinessScore",
+    "RemediationAction",
+    "RemediationDecision",
+    "RemediationEligibility",
+    "RemediationException",
+    "RemediationExceptionReason",
     "RemediationPatch",
+    "RemediationRuleScope",
+    "RemediationTarget",
     "RuleCandidate",
     "RuleLifecycle",
     "RuleSeverity",

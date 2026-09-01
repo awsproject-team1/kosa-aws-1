@@ -186,7 +186,14 @@ class CloudFormationSecurityTest(unittest.TestCase):
         role_properties = _properties(self.resources["WorkflowRuntimeRole"])
         policies = role_properties["Policies"]
         statements = [
-            statement for policy in policies for statement in policy["PolicyDocument"]["Statement"]
+            statement
+            for policy in policies
+            for policy_document in [
+                policy["PolicyDocument"]
+                if isinstance(policy, dict)
+                else policy[1]["PolicyDocument"]
+            ]
+            for statement in _policy_statements(policy_document["Statement"])
         ]
         flattened_actions = [
             action
@@ -205,6 +212,18 @@ class CloudFormationSecurityTest(unittest.TestCase):
         )
         self.assertFalse(self._contains_artifact_bucket_reference(role_properties))
 
+    def test_fixture_mode_omits_the_m1_input_policy_instead_of_creating_an_empty_policy(
+        self,
+    ) -> None:
+        role_properties = _properties(self.resources["WorkflowRuntimeRole"])
+        policies = role_properties["Policies"]
+        live_policy_condition = policies[1]
+        self.assertEqual(live_policy_condition[0], "M1LiveAssessmentEnabled")
+        self.assertEqual(live_policy_condition[1]["PolicyName"], "M1ReadOnlyAssessmentInputs")
+        self.assertEqual(live_policy_condition[2], "AWS::NoValue")
+        statements = live_policy_condition[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 3)
+
     @staticmethod
     def _contains_artifact_bucket_reference(value: object) -> bool:
         if isinstance(value, dict):
@@ -218,6 +237,18 @@ class CloudFormationSecurityTest(unittest.TestCase):
                 for item in value
             )
         return isinstance(value, str) and "ArtifactBucket" in value
+
+
+def _policy_statements(value: object) -> list[dict[str, object]]:
+    """Expand both branches of a static CloudFormation policy `Fn::If`."""
+    if isinstance(value, list):
+        return [statement for statement in value if isinstance(statement, dict)]
+    if not isinstance(value, dict):
+        return []
+    branches = value.get("Fn::If")
+    if not isinstance(branches, list) or len(branches) != 3:
+        return []
+    return [statement for branch in branches[1:] for statement in _policy_statements(branch)]
 
 
 class DeploymentArtifactSecurityTest(unittest.TestCase):
@@ -400,6 +431,17 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
             '"LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}"',
             deploy,
         )
+
+    def test_failed_deployments_emit_scoped_diagnostics(self) -> None:
+        diagnostic = self.deploy_steps["Diagnose failed CloudFormation deployment"]
+        self.assertEqual(diagnostic["if"], "failure()")
+        script = diagnostic["run"]
+        self.assertIn("aws cloudformation list-change-sets", script)
+        self.assertIn("aws cloudformation describe-events", script)
+        self.assertIn("--filters FailedEvents=true", script)
+        self.assertIn("ValidationPath", script)
+        self.assertIn("aws cloudformation describe-stack-events", script)
+        self.assertNotIn("--include-property-values", script)
 
     def test_audit_metadata_listing_is_account_bound_and_not_paginated(self) -> None:
         self.assertEqual(self.runbook.count("aws s3api list-objects-v2"), 2)

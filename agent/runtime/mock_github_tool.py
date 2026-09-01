@@ -10,6 +10,7 @@ from collections.abc import Iterable
 
 from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
+    IaCDocument,
     IaCSnapshotRequest,
     require_repository_scope,
     require_snapshot_request,
@@ -26,11 +27,21 @@ class MockGitHubTool:
         customer_id: str,
         repository_id: str,
         snapshots: Iterable[IaCSnapshot],
+        documents: Iterable[IaCDocument] = (),
     ) -> None:
         _require_non_empty_string(customer_id, "customer_id")
         _require_non_empty_string(repository_id, "repository_id")
         self._customer_id = customer_id
         self._repository_id = repository_id
+        self._documents: dict[str, IaCDocument] = {}
+        for document in documents:
+            if not isinstance(document, IaCDocument):
+                raise TypeError("documents must contain IaCDocument items")
+            if document.customer_id != customer_id or document.repository_id != repository_id:
+                raise ValueError("document scope must match tool scope")
+            if document.commit_sha in self._documents:
+                raise ValueError(f"duplicate document for commit {document.commit_sha!r}")
+            self._documents[document.commit_sha] = document
         self._by_commit: dict[str, IaCSnapshot] = {}
         for snapshot in snapshots:
             if not isinstance(snapshot, IaCSnapshot):
@@ -53,6 +64,17 @@ class MockGitHubTool:
                 f"no IaC snapshot for commit {request.commit_sha!r} in scope"
             )
         return snapshot
+
+    def read_iac_document(self, request: IaCSnapshotRequest) -> IaCDocument:
+        """Return the Terraform body for a request within tool scope."""
+        request = require_snapshot_request(request)
+        self._require_scope(request)
+        document = self._documents.get(request.commit_sha)
+        if document is None:
+            raise GitHubSnapshotNotFoundError(
+                f"no IaC document for commit {request.commit_sha!r} in scope"
+            )
+        return document
 
     def _require_scope(self, request: IaCSnapshotRequest) -> None:
         require_repository_scope(

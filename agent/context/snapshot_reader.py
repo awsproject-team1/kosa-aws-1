@@ -15,7 +15,12 @@ Actual resource view(AWS_ACTUAL 관점)를 수집하기만 한다. Drift 판정
 from dataclasses import dataclass
 
 from agent.runtime.aws_resource_tool import AwsResourceTool, AwsResourceView
-from agent.runtime.github_tool import GitHubTool, IaCSnapshotRequest
+from agent.runtime.github_tool import (
+    GitHubTool,
+    IaCDocument,
+    IaCDocumentReader,
+    IaCSnapshotRequest,
+)
 from packages.contracts import (
     AwsResourceOperation,
     AwsResourceQuery,
@@ -79,12 +84,20 @@ class SnapshotReadRequest:
     commit_sha: str
     aws_account_id: str
     aws_selectors: tuple[AwsResourceSelector, ...]
+    include_iac_document: bool = False
+    """IAC 관점을 평가할 때만 Terraform 본문까지 read하도록 호출자가 명시한다.
+
+    본문 read는 blob 단위 추가 호출이므로 필요한 Assessment에서만 요청한다. 명시했는데
+    tool이 본문 read를 지원하지 않으면 조용히 관점을 빼지 않고 실패한다.
+    """
 
     def __post_init__(self) -> None:
         for name in ("customer_id", "repository_id", "commit_sha", "aws_account_id"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        if not isinstance(self.include_iac_document, bool):
+            raise TypeError("include_iac_document must be a bool")
         if not isinstance(self.aws_selectors, tuple):
             raise TypeError("aws_selectors must be a tuple")
         if not self.aws_selectors:
@@ -113,6 +126,13 @@ class AssessmentInputBundle:
     customer_id: str
     iac_snapshot: IaCSnapshot
     aws_resources: tuple[AwsResourceView, ...]
+    iac_document: IaCDocument | None = None
+    """IAC 관점 평가에 필요한 Terraform 본문. tool이 read를 지원할 때만 채워진다.
+
+    ``iac_snapshot``은 무엇을 읽었는지를 가리키는 Artifact reference이므로, IaC 준수
+    여부를 판정하려면 그 commit의 본문이 필요하다. 본문 read를 지원하지 않는 tool도
+    AWS_ACTUAL 관점만으로 계속 동작할 수 있도록 optional로 둔다.
+    """
 
     def __post_init__(self) -> None:
         if not isinstance(self.customer_id, str) or not self.customer_id.strip():
@@ -124,12 +144,20 @@ class AssessmentInputBundle:
         for view in self.aws_resources:
             if not isinstance(view, AwsResourceView):
                 raise TypeError("aws_resources must contain AwsResourceView items")
+        if self.iac_document is not None:
+            if not isinstance(self.iac_document, IaCDocument):
+                raise TypeError("iac_document must be an IaCDocument or None")
+            if self.iac_document.commit_sha != self.iac_snapshot.commit_sha:
+                raise AssessmentInputError("iac_document must describe the snapshot commit")
+            if self.iac_document.customer_id != self.customer_id:
+                raise AssessmentInputError("iac_document must stay inside the customer scope")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "customer_id": self.customer_id,
             "iac_snapshot": self.iac_snapshot.to_dict(),
             "aws_resources": [view.to_dict() for view in self.aws_resources],
+            "iac_document": (None if self.iac_document is None else self.iac_document.to_dict()),
         }
 
 
@@ -151,6 +179,11 @@ class AssessmentInputCollector:
             raise TypeError("request must be a SnapshotReadRequest")
 
         iac_snapshot = self._github_tool.read_iac_snapshot(request.iac_request())
+        iac_document: IaCDocument | None = None
+        if request.include_iac_document:
+            if not isinstance(self._github_tool, IaCDocumentReader):
+                raise AssessmentInputError("GitHub tool cannot read the Terraform body")
+            iac_document = self._github_tool.read_iac_document(request.iac_request())
 
         views: list[AwsResourceView] = []
         for selector in request.aws_selectors:
@@ -167,4 +200,5 @@ class AssessmentInputCollector:
             customer_id=request.customer_id,
             iac_snapshot=iac_snapshot,
             aws_resources=tuple(views),
+            iac_document=iac_document,
         )

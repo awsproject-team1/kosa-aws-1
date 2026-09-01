@@ -1,5 +1,9 @@
 """Policy Context boundary used by assessment workers."""
 
+from apps.backend.policy.bootstrap import (
+    DynamoDbPolicyCatalogBootstrap,
+    PolicyCatalogBootstrapError,
+)
 from apps.backend.policy.catalog import InMemoryPolicyCatalog, load_m0_fixture_catalog
 from apps.backend.policy.context import PolicyContext, PolicyContextResolver, PolicyNotFoundError
 from apps.backend.policy.dynamodb_catalog import DynamoDbPolicyCatalog
@@ -21,6 +25,7 @@ from apps.backend.policy.registry import (
     PolicyRegistryError,
     load_rule_registry,
 )
+from apps.backend.policy.remediation import RemediationPolicy, RemediationPolicyError
 
 __all__ = [
     "ApprovalRejectedError",
@@ -29,13 +34,17 @@ __all__ = [
     "DocumentFormatError",
     "DocumentParseError",
     "DynamoDbPolicyCatalog",
+    "DynamoDbPolicyCatalogBootstrap",
     "InMemoryPolicyCatalog",
     "NormalizationOutcome",
     "PolicyContext",
+    "PolicyCatalogBootstrapError",
     "PolicyContextResolver",
     "PolicyNotFoundError",
     "PolicyRegistry",
     "PolicyRegistryError",
+    "RemediationPolicy",
+    "RemediationPolicyError",
     "UploadedPolicyOriginal",
     "approve_source",
     "load_m0_fixture_catalog",

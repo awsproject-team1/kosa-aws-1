@@ -10,11 +10,14 @@ from agent.runtime.aws_resource_tool import (
     require_read_operation,
     require_scope,
 )
+from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
 from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
     GitHubTool,
     GitHubToolError,
     GitHubToolScopeError,
+    IaCDocument,
+    IaCDocumentReader,
     IaCSnapshotRequest,
     require_repository_scope,
     require_snapshot_request,
@@ -30,9 +33,12 @@ __all__ = [
     "AwsResourceView",
     "AssumeRoleS3ResourceTool",
     "GitHubSnapshotNotFoundError",
+    "GitHubRestSnapshotTool",
     "GitHubTool",
     "GitHubToolError",
     "GitHubToolScopeError",
+    "IaCDocument",
+    "IaCDocumentReader",
     "IaCSnapshotRequest",
     "MockAwsResourceTool",
     "MockGitHubTool",

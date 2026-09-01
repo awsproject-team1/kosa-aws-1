@@ -58,7 +58,9 @@ class Reports:
         return AssessmentReport(
             assessment_id=assessment_id,
             results=(),
+            findings=(),
             coverage=AssessmentCoverage(planned_evaluations=1, completed_evaluations=0),
+            readiness_score=None,
         )
 
 
