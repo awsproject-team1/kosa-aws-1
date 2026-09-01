@@ -86,6 +86,32 @@ jobs:
           [[ "${ROLE_TO_ASSUME}" =~ ^arn:[^:]+:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/.+$ ]]
           test "${ARTIFACT_APPROVAL_ENVIRONMENT}" != "${DEPLOYMENT_ENVIRONMENT}"
 
+      # Temporary diagnostic: prints selected claim identifiers, never the JWT.
+      - name: Show OIDC claim identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl -fsSL \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          token=$(jq -r '.value' <<<"${response}")
+          TOKEN="${token}" python - <<'PY'
+          import base64
+          import json
+          import os
+
+          payload = os.environ["TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          print(json.dumps(
+              {key: claims.get(key) for key in (
+                  "sub", "aud", "repository", "repository_id",
+                  "repository_owner_id", "ref", "environment",
+              )},
+              indent=2,
+          ))
+          PY
+
       - name: Configure customer artifact credentials
         # v6.2.3
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c

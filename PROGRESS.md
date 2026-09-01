@@ -2,6 +2,8 @@
 
 ## Current
 
+- Customer sandbox OIDC diagnosis: the deployment workflow logs selected non-secret OIDC
+  claim identifiers before role assumption; compare the emitted `sub` to the bootstrap trust policy.
 - Repository V3 문서 구조와 개발 골격 초기화
 - M1 D 진행: AWS Resource Tool + GitHub Integration Tool(둘 다 read-only) 경계와 결정적 Mock 어댑터 완료,
   두 Tool을 소비해 IaC Snapshot + AWS Actual을 함께 읽는 Assessment 입력 조합 계층(collector) 완료
