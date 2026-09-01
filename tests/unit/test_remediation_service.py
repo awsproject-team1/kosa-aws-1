@@ -77,13 +77,9 @@ def context() -> RemediationContext:
 
 class RemediationServiceTest(unittest.TestCase):
     def test_returns_patch_bound_to_finding_and_snapshot(self) -> None:
-        result = RemediationService(Generator(patch())).generate(
-            context=context()
-        )
+        result = RemediationService(Generator(patch())).generate(context=context())
         self.assertEqual(result.base_commit_sha, "abc123")
 
     def test_rejects_patch_for_another_commit(self) -> None:
         with self.assertRaises(RemediationContractError):
-            RemediationService(Generator(patch(commit="other"))).generate(
-                context=context()
-            )
+            RemediationService(Generator(patch(commit="other"))).generate(context=context())
