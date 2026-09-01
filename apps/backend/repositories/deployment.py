@@ -45,7 +45,9 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
         ):
             raise TypeError("approval and readiness must be their respective contracts")
         occurred_at = self._now().astimezone(UTC).isoformat().replace("+00:00", "Z")
-        approval_id, event_id = self._new_id("approval"), self._new_id("audit")
+        # One deployment has one approval state.  Keep the approval key
+        # deterministic so retries cannot append a second approval record.
+        approval_id, event_id = f"approval-{approval.deployment_id}", self._new_id("audit")
         pk = f"CUSTOMER#{customer_id}"
         approval_item = {
             "PK": pk,

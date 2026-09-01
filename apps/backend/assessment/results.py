@@ -70,10 +70,17 @@ class DynamoDbEvaluationResultStore(EvaluationResultStore):
                         ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
                     )
             except Exception as error:
-                if _provider_error_code(error) != "ConditionalCheckFailedException":
+                if _provider_error_code(error) not in {
+                    "ConditionalCheckFailedException",
+                    "TransactionCanceledException",
+                }:
                     raise EvaluationResultStoreError("evaluation result write failed") from None
                 if self._existing_item_matches(item):
-                    pass
+                    # A transaction can be cancelled by any conditional Put
+                    # (including the result itself).  An identical immutable
+                    # result is an idempotent replay regardless of provider
+                    # error shape.
+                    continue
                 else:
                     raise ImmutableEvaluationResultConflict(
                         "evaluation result key already contains different content"
@@ -120,23 +127,37 @@ class DynamoDbEvaluationResultStore(EvaluationResultStore):
                     }
                 }
             )
-        writes.append(
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"CUSTOMER#{customer_id}",
-                            "SK": f"ASSESSMENT#{assessment_id}#PLAN",
-                        }
-                    ),
-                    "UpdateExpression": "ADD completed_evaluations :one",
-                    "ConditionExpression": "attribute_exists(PK) AND (attribute_not_exists(completed_evaluations) OR completed_evaluations < planned_evaluations)",
-                    "ExpressionAttributeValues": {":one": marshal_value(1)},
+        if self._plan_has_counter(customer_id, assessment_id):
+            writes.append(
+                {
+                    "Update": {
+                        "TableName": self._table_name,
+                        "Key": marshal_item(
+                            {
+                                "PK": f"CUSTOMER#{customer_id}",
+                                "SK": f"ASSESSMENT#{assessment_id}#PLAN",
+                            }
+                        ),
+                        "UpdateExpression": "ADD completed_evaluations :one",
+                        "ConditionExpression": "attribute_exists(PK) AND completed_evaluations < planned_evaluations",
+                        "ExpressionAttributeValues": {":one": marshal_value(1)},
+                    }
                 }
-            }
-        )
+            )
         self._transaction_client.transact_write_items(TransactItems=writes)
+
+    def _plan_has_counter(self, customer_id: str, assessment_id: str) -> bool:
+        try:
+            item = self._table.get_item(
+                Key={
+                    "PK": f"CUSTOMER#{customer_id}",
+                    "SK": f"ASSESSMENT#{assessment_id}#PLAN",
+                },
+                ConsistentRead=True,
+            ).get("Item")
+        except Exception:
+            raise EvaluationResultStoreError("assessment plan read failed") from None
+        return isinstance(item, Mapping) and "completed_evaluations" in item
 
     def _existing_item_matches(self, expected: dict[str, object]) -> bool:
         try:

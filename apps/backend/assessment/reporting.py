@@ -130,6 +130,7 @@ class DynamoDbAssessmentReportStore:
                     "customer_id": plan.customer_id,
                     "assessment_id": plan.assessment_id,
                     "planned_evaluations": plan.planned_evaluations,
+                    "completed_evaluations": 0,
                 },
                 ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
             )
