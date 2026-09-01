@@ -223,6 +223,7 @@ jobs:
       LAMBDA_CODE_S3_KEY: ${{ needs.prepare-artifact.outputs.lambda_code_s3_key }}
       LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
       LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
+      CHANGE_SET_NAME: m0-foundation-${{ github.run_id }}
       ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
       M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
       M1_ASSESSMENT_SECRET_ARNS: ${{ secrets.M1_ASSESSMENT_SECRET_ARNS }}
@@ -278,6 +279,7 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/m0-foundation.yaml \
             --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}" \
             --role-arn "${CLOUDFORMATION_EXECUTION_ROLE_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
@@ -291,3 +293,21 @@ jobs:
               "M1AssessmentSecretArns=${M1_ASSESSMENT_SECRET_ARNS}" \
               "M1AssessmentReadRoleArns=${M1_ASSESSMENT_READ_ROLE_ARNS}" \
             --no-fail-on-empty-changeset
+
+      - name: Diagnose failed CloudFormation change set
+        if: failure()
+        run: |
+          set +e
+          echo "::group::Change set status"
+          aws cloudformation describe-change-set \
+            --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}" \
+            --query '{Status:Status,ExecutionStatus:ExecutionStatus,StatusReason:StatusReason,Changes:Changes[].ResourceChange.{LogicalResourceId:LogicalResourceId,Action:Action,Replacement:Replacement}}' \
+            --output json
+          echo "::endgroup::"
+          echo "::group::Recent stack failures"
+          aws cloudformation describe-stack-events \
+            --stack-name "${STACK_NAME}" \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+            --output table
+          echo "::endgroup::"

@@ -431,6 +431,16 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
             '"LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}"',
             deploy,
         )
+        self.assertIn('--change-set-name "${CHANGE_SET_NAME}"', deploy)
+
+    def test_failed_changesets_emit_scoped_diagnostics(self) -> None:
+        diagnostic = self.deploy_steps["Diagnose failed CloudFormation change set"]
+        self.assertEqual(diagnostic["if"], "failure()")
+        script = diagnostic["run"]
+        self.assertIn("aws cloudformation describe-change-set", script)
+        self.assertIn("aws cloudformation describe-stack-events", script)
+        self.assertIn('--change-set-name "${CHANGE_SET_NAME}"', script)
+        self.assertNotIn("--include-property-values", script)
 
     def test_audit_metadata_listing_is_account_bound_and_not_paginated(self) -> None:
         self.assertEqual(self.runbook.count("aws s3api list-objects-v2"), 2)
