@@ -166,7 +166,7 @@ ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두
 저장으로 완결 배선됐고, `POST /deployments/{id}/approve`·`GET /deployments/{id}`·
 `GET /deployments/{id}/verification`은 handler에 노출되나 D live plan·검증 데이터를 조립하는 reader
 (승인 plan reader, DeploymentFacts reader, 비교 입력 reader)가 D live adapter 통합에서 오므로 그 전에는
-fail-closed한다. `GET /audit-events`는 아직 미구현이다.
+fail-closed한다. `GET /audit-events`는 Admin 전용 감사 이력 조회로 구현·배선됐다.
 
 | Method | Path | 상태 | Purpose |
 | --- | --- | --- | --- |
@@ -174,7 +174,7 @@ fail-closed한다. `GET /audit-events`는 아직 미구현이다.
 | `GET` | `/deployments/{deploymentId}` | 배선됨(facts reader 대기) | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
 | `GET` | `/deployments/{deploymentId}/verification` | 배선됨(비교 입력 reader 대기) | Post-Deploy Verification의 before/after 비교 projection 조회 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
-| `GET` | `/audit-events` | 대기 | Admin 전용 감사 이력 조회 |
+| `GET` | `/audit-events` | 배선됨 | Admin 전용 감사 이력 조회, 최신순 페이지네이션 |
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
   지정하지 않는다. A는 저장된 `RemediationDecision`이 actionable인지, C Worker 결과가 있는지,
@@ -204,9 +204,18 @@ fail-closed한다. `GET /audit-events`는 아직 미구현이다.
   소관이며, 억제는 재평가나 비교의 계획·Coverage·Readiness에 영향을 주지 않는다(ADR-0020 §6).
 - 검증 결과는 원 Assessment를 덮어쓰지 않는다. Post-Deploy Verification은 `phase`,
   `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
+- `GET /audit-events`는 Admin 전용이며 항상 호출자의 customer scope 안에서만 조회한다. 응답은
+  `events`(최신순 `AuditEventView` 목록)와, 다음 페이지가 있을 때만 나타나는 `next_cursor`다. 각
+  이벤트는 모든 writer가 공유하는 고정 필드(`event_id`/`customer_id`/`event_type`/`occurred_at`)와
+  writer별 도메인 필드(`deployment_id`/`plan_hash`/`reason` 등)를 함께 담고, DynamoDB 내부 저장
+  표식(`PK`/`SK`/`entity_type` 등)은 노출하지 않는다. query allow-list는 `limit`(기본 50, 최대 100),
+  `cursor`, `event_type`이며 알 수 없는 필드나 `event_type` 값은 거부한다. `event_type`은
+  `AuditEventType` 어휘(`DEPLOYMENT_REQUESTED`/`DEPLOYMENT_APPROVED`/`DEPLOYMENT_REJECTED`/
+  `POLICY_SOURCE_APPROVED`/`POLICY_PROFILE_PUBLISHED`/`REMEDIATION_DECIDED`/
+  `REMEDIATION_EXCEPTION_APPROVED`)로 필터한다. 감사 이력은 immutable이라 write 표면이 없다.
 
 경로와 wire shape는 이 A endpoint 구현에서 확정됐다. D live adapter 통합 시 reader 조립기를 붙여
-approve/get/verification의 fail-closed를 해소하고, `/audit-events`는 후속에서 추가한다.
+approve/get/verification의 fail-closed를 해소한다.
 
 ## Error envelope
 

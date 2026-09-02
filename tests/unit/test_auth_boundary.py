@@ -41,6 +41,8 @@ class AuthBoundaryTest(unittest.TestCase):
             authorize(principal, Action.REJECT_DEPLOYMENT)
         with self.assertRaises(AuthorizationDenied):
             authorize(principal, Action.APPROVE_DEPLOYMENT)
+        with self.assertRaises(AuthorizationDenied):
+            authorize(principal, Action.READ_AUDIT_EVENTS)
 
     def test_admin_inherits_current_user_actions_and_can_approve_deployments(self) -> None:
         principal = Principal.from_verified_claims(access_claims("Admin"))
@@ -51,6 +53,7 @@ class AuthBoundaryTest(unittest.TestCase):
         self.assertIsNone(authorize(principal, Action.START_DEPLOYMENT))
         self.assertIsNone(authorize(principal, Action.APPROVE_DEPLOYMENT))
         self.assertIsNone(authorize(principal, Action.REJECT_DEPLOYMENT))
+        self.assertIsNone(authorize(principal, Action.READ_AUDIT_EVENTS))
         self.assertIsNone(authorize(principal, Action.MANAGE_REMEDIATION_EXCEPTIONS))
 
     def test_unknown_cognito_groups_are_ignored_when_a_product_role_remains(self) -> None:
@@ -75,6 +78,7 @@ class AuthBoundaryTest(unittest.TestCase):
                 "READ_JOB",
                 "APPROVE_DEPLOYMENT",
                 "REJECT_DEPLOYMENT",
+                "READ_AUDIT_EVENTS",
                 "MANAGE_REMEDIATION_EXCEPTIONS",
                 "MANAGE_POLICY_SOURCES",
                 "PUBLISH_POLICY_PROFILE",

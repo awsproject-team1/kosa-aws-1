@@ -75,6 +75,7 @@ counter와 materialized score는 이후 storage migration 전에는 Assessment m
 | Base table | `CUSTOMER#{customer_id}` + `ASSESSMENT#{assessment_id}` prefix | Assessment with results/findings |
 | Base table | `CUSTOMER#{customer_id}` + `DEPLOYMENT#{deployment_id}` prefix | Deployment and approval records |
 | Base table | `CUSTOMER#{customer_id}` + `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}` prefix | 고객의 exact Rule version 예외 조회; resource scope는 조회 후 좁힌다 |
+| Base table | `CUSTOMER#{customer_id}` + `AUDIT#` prefix (내림차순) | `GET /audit-events`의 Admin 전용 감사 이력 조회; 최신순, `event_type` filter, cursor 페이지네이션 |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
 | Base table | `CUSTOMER#{customer_id}` + `POLICY_INGESTION#{source_id}#VERSION#{version}` | Processing status of one uploaded Policy Source version |

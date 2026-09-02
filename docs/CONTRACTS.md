@@ -453,6 +453,7 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 | `DeploymentStatus` + `derive_deployment_status()` + `DeploymentFacts` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않고 durable 사실에서 read 시 계산 (ADR-0019 §8) |
 | `Action.START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `AuditEventType.DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 감사 event 정본 필드명은 `event_type` (ADR-0019 §4·§8) |
 | `DeploymentRecord`/`DeploymentRejection` + Deployment 생성/조회/reject endpoint | A | 구현됨. 생성·reject는 durable 배선, 조회·검증조회는 facts/comparison reader 조립기 대기 (ADR-0019 §4·§8, ADR-0020 §7) |
+| `AuditEventView`/`AuditEventPage` + `Action.READ_AUDIT_EVENTS` + `GET /audit-events` | A | 구현됨. Admin 전용 감사 이력 조회. tenant-scoped read-only, 최신순 페이지네이션, immutable (ADR-0019 §8) |
 | `plan_verification_assessment()` + Assessment `phase`/correlation/scope-pin 영속화 + Worker phase 복원 | A | 구현됨. 검증 Assessment를 원 Assessment의 Profile version·planned 집합·Model Profile·rubric에 고정하고 fail-closed로 저장·복원 (ADR-0020 §2·§3) |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
 | `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
@@ -493,6 +494,15 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 일곱이다. apply 실행 단계의 `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
 `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서
 추가한다.
+
+`AuditEventView`/`AuditEventPage`(`packages/contracts/audit.py`)는 `GET /audit-events`(Admin 전용)
+조회 응답의 정본 wire shape이다. `AuditEventView`는 모든 writer가 공유하는 고정 필드
+(`event_id`/`customer_id`/`event_type`/`occurred_at`)만 타입으로 못 박고, writer마다 다른 도메인
+필드는 `attributes` 맵으로 그대로 노출한다. 이렇게 하면 새 `AuditEventType`이 추가돼도 view 타입을
+바꾸지 않고 균일하게 조회된다. DynamoDB 내부 저장 표식(`PK`/`SK`/`GSI*`/`entity_type`/`version`)과
+고정 필드는 `attributes`에서 제외해 view가 payload만 담게 하고, 고정 필드는 `attributes`로 덮어쓸
+수 없다. `AuditEventPage`는 최신순 view 목록과, 다음 페이지가 있을 때만 담기는 `next_cursor`를
+가진다. 조회는 read-only이며 감사 이력은 immutable이라 write 표면이 없다(ADR-0019 §8).
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야
