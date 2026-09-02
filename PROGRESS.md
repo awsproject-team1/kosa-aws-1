@@ -46,6 +46,13 @@
   ·`policy_reader`로 주입했다. 서버가 `source_id`/`source_version`을 발급하므로 client는 저장
   위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`를 `repositories` 패키지에서 export하고,
   배선 성공·버킷 미설정 fail-closed를 검증하는 unit 테스트 2건을 추가했다.
+  이어 `m0-foundation.yaml`에 업로드 세션 라우트 3건(`POST /policy-sources/uploads`,
+  `GET /policy-sources/{sourceId}/versions/{version}`, `POST .../process`, JWT 인가)과
+  `ApiRuntimeFunction`의 `POLICY_SOURCE_BUCKET_NAME`(=ArtifactBucket) 환경변수, `ApiRuntimeRole`의
+  tenant-scoped S3 권한(`s3:PutObject`/`s3:GetObject`를 `customers/*` prefix로만)을 추가해 라우트가
+  배포 Lambda에서 실제 도달 가능해졌다. cfn-lint E-level 0, CloudFormation 보안 테스트 15건 통과.
+  승인(`/approve`)·Profile 게시 라우트는 검토 read(`load_review`/`load_publication`)가 C의 후보
+  추출 결과 저장에 의존하므로 이번 범위에서 제외한다(아래 Blocked 참조).
 
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`

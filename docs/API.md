@@ -26,21 +26,22 @@
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 
-## Planned customer policy ingestion endpoints
+## Customer policy ingestion endpoints
 
-아래 endpoint는 아직 노출되지 않았다. B의 정규화·승인·게시 Contract와 판정은
-`apps/backend/policy/ingestion/`에 구현됐고(`normalize_upload`, `approve_source`,
-`publish_profile`), A의 API/Storage 배선과 C의 AI 추출 품질 Gate가 남아 있다. 상세 workflow와
-인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
+업로드 세션 3개(`uploads`/`process`/status 조회)는 API Gateway 라우트와 Lambda composition
+root(`apps/backend/api/runtime.py`)에 배선돼 노출된다. 승인(`/approve`)과 Profile 게시는 아직
+노출되지 않았다 — write 판정(`approve_source`/`publish_profile`)은 구현됐지만, 그 앞단의 검토 read
+(`load_review`/`load_publication`)가 C의 AI 후보 추출(`RuleCandidate`) 결과 저장에 의존하기
+때문이다. 상세 workflow와 인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
 
-| Method | Planned path | Purpose |
-| --- | --- | --- |
-| `POST` | `/policy-sources/uploads` | JWT-derived customer Scope의 업로드 세션 생성 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 업로드 검증과 비동기 파싱·정규화 시작 |
-| `GET` | `/policy-sources/{sourceId}/versions/{version}` | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 검토된 Source/Control/Rule version 승인 |
-| `POST` | `/policy-profiles` | 승인된 Rule version으로 versioned Policy Profile 게시 |
-| `POST` | `/policy-profiles/{profileId}/versions` | 승인된 Rule version으로 Profile 새 version 게시 |
+| Method | Path | Status | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/policy-sources/uploads` | 배선됨 | JWT-derived customer Scope의 업로드 세션 생성 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
+| `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 대기(C read 의존) | 검토된 Source/Control/Rule version 승인 |
+| `POST` | `/policy-profiles` | 대기(C read 의존) | 승인된 Rule version으로 versioned Policy Profile 게시 |
+| `POST` | `/policy-profiles/{profileId}/versions` | 대기 | 승인된 Rule version으로 Profile 새 version 게시 |
 
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
 그대로 사용하며 스스로 만들지 않는다.
