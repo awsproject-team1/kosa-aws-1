@@ -1,9 +1,15 @@
-"""M2 A deployment approval boundary and M3 D deployment execution worker."""
+"""M2 A deployment approval boundary, M3 D execution worker, and deployment record."""
 
 from apps.backend.deployment.approval import (
     DeploymentApprovalError,
     DeploymentApprovalRepository,
     DeploymentApprovalService,
+    DeploymentConflictError,
+)
+from apps.backend.deployment.record import (
+    DeploymentRecord,
+    DeploymentRecordRepository,
+    DeploymentRejection,
 )
 from apps.backend.deployment.worker import (
     ApplyRunStore,
@@ -23,7 +29,11 @@ __all__ = [
     "DeploymentApprovalError",
     "DeploymentApprovalRepository",
     "DeploymentApprovalService",
+    "DeploymentConflictError",
     "DeploymentPlanStore",
+    "DeploymentRecord",
+    "DeploymentRecordRepository",
+    "DeploymentRejection",
     "DeploymentWork",
     "DeploymentWorker",
     "DeploymentWorkerError",

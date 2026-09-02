@@ -1,6 +1,9 @@
 """AWS-independent persistence ports and injected AWS adapters."""
 
-from apps.backend.repositories.deployment import DynamoDbDeploymentApprovalRepository
+from apps.backend.repositories.deployment import (
+    DynamoDbDeploymentApprovalRepository,
+    DynamoDbDeploymentRepository,
+)
 from apps.backend.repositories.dynamodb import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbJobRepository,
@@ -36,6 +39,7 @@ __all__ = [
     "DuplicateJobError",
     "DynamoDbAssessmentWorkflowRepository",
     "DynamoDbDeploymentApprovalRepository",
+    "DynamoDbDeploymentRepository",
     "DynamoDbPolicyApprovalRepository",
     "DynamoDbRemediationExceptionRepository",
     "DynamoDbRemediationWorkRepository",
