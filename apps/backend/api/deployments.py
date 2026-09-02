@@ -360,6 +360,9 @@ class DeploymentApiService:
             raise TypeError("principal and request are required")
         if self._plans is None:
             raise TypeError("approval plan reader is not configured")
+        # 인가를 plan read보다 먼저 한다. 인가되지 않은 사용자에게 stored plan read의
+        # 부작용이나 오류를 노출하지 않기 위한 fail-closed 순서다(ADR-0019 §4).
+        authorize(principal, Action.APPROVE_DEPLOYMENT)
         plan, readiness = self._plans.get_approval_input(
             customer_id=principal.customer_id, deployment_id=deployment_id
         )
