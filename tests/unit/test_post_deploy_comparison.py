@@ -139,6 +139,30 @@ class PostDeployComparisonTest(unittest.TestCase):
         self.assertEqual(changed.finding_resolutions[0].resolution, FindingResolution.INDETERMINATE)
         self.assertEqual(absent.finding_resolutions[0].resolution, FindingResolution.INDETERMINATE)
 
+    def test_partial_report_is_rejected(self) -> None:
+        for field_name in ("next_cursor", "findings_next_cursor"):
+            with self.subTest(field_name=field_name):
+                complete = assessment("asm-001", (result(EvaluationStatus.FAIL),))
+                report = AssessmentReport(
+                    assessment_id=complete.report.assessment_id,
+                    results=complete.report.results,
+                    findings=complete.report.findings,
+                    coverage=complete.report.coverage,
+                    readiness_score=complete.report.readiness_score,
+                    **{field_name: "opaque-next-page"},
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError, "report must contain complete results and findings"
+                ):
+                    ComparisonAssessment(
+                        assessment_id=complete.assessment_id,
+                        model_profile_id=complete.model_profile_id,
+                        rubric_version=complete.rubric_version,
+                        planned_evaluations=complete.planned_evaluations,
+                        report=report,
+                    )
+
     def test_noncomparable_inputs_hide_delta_with_all_reasons(self) -> None:
         source = assessment("asm-before", (result(EvaluationStatus.FAIL),), score=None)
         verification = assessment(

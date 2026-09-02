@@ -25,6 +25,10 @@
 
 ## Completed
 
+- M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
+  `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
+  delta를 fail-closed로 차단한다.
+
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
   읽어 B policy를 호출하고 actionable decision은 context/Job/Outbox/audit와 원자 저장하며,

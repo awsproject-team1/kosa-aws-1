@@ -61,6 +61,8 @@ class ComparisonAssessment:
             raise TypeError("report must be an AssessmentReport")
         if self.report.assessment_id != self.assessment_id:
             raise ValueError("report assessment_id does not match comparison assessment")
+        if self.report.next_cursor is not None or self.report.findings_next_cursor is not None:
+            raise ValueError("report must contain complete results and findings")
 
 
 def compare_post_deploy_assessments(
