@@ -16,14 +16,17 @@ from packages.contracts.assessments import (
     ScoringMode,
 )
 from packages.contracts.deployments import (
+    ApplyRunReference,
     ArtifactReference,
     ArtifactType,
     AwsResourceOperation,
     AwsResourceQuery,
+    AwsResourceSnapshot,
     DeploymentApproval,
     IaCSnapshot,
     RemediationPatch,
     TerraformPlan,
+    VerifiedRunOutcome,
 )
 from packages.contracts.errors import ApiError, ApiErrorResponse
 from packages.contracts.jobs import (
@@ -87,6 +90,7 @@ __all__ = [
     "ApiError",
     "ApiErrorResponse",
     "APPROVABLE_STATUSES",
+    "ApplyRunReference",
     "ApprovalRejectionCode",
     "ArtifactReference",
     "ArtifactType",
@@ -96,6 +100,7 @@ __all__ = [
     "ComparisonIneligibilityReason",
     "AwsResourceOperation",
     "AwsResourceQuery",
+    "AwsResourceSnapshot",
     "DeploymentApproval",
     "DeploymentReadiness",
     "DeploymentReadinessStatus",
@@ -150,6 +155,7 @@ __all__ = [
     "SUPPORTED_MEDIA_TYPES",
     "TERMINAL_STATUSES",
     "TerraformPlan",
+    "VerifiedRunOutcome",
     "WorkflowCommand",
     "WorkflowTask",
 ]

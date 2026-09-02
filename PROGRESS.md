@@ -21,9 +21,18 @@
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
 - M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
   Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
-  분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
+  분기한다. D는 GitHub write 제안 경계(`ProposedPullRequest`)까지 완료했고, live GitHub/Terraform
+  adapter와 customer runtime 배선, OIDC Terraform Plan(`commit_sha`/`plan_hash`)이 남은 조각이다.
+  Plan 조각은 ADR-0019가 `Proposed`인 동안 착수하지 않는다(아래 Blocked)
 
 ## Completed
+
+- M2 D GitHub write 제안 경계 (ADR-0007 read-only 원칙 유지): 승인된 `RemediationPatch` 하나에서
+  Branch/Commit/PR 좌표를 결정적으로 *제안*하는 `GitHubWriteTool` port와 `ProposedPullRequest`,
+  단일 (customer_id, repository_id) scope 강제(`require_patch_scope`), patch 좌표 기반 결정적
+  branch 유도(`derive_head_branch`), 결정적 Mock 어댑터를 추가했다. 실제 write/commit/PR 생성·
+  apply 표면은 노출하지 않으며(제안만), Terraform Plan(OIDC)·`commit_sha`/`plan_hash` 산출은
+  ADR-0019 서명 이후 다음 조각이다.
 
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
