@@ -137,6 +137,35 @@ class AwsResourceQuery:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class TerraformStateVersion:
+    """The plan-time Terraform state identity re-checked before apply (ADR-0019 §2).
+
+    `serial` alone is insufficient: a re-created state gets a fresh `lineage` and a
+    `serial` reset to a low value, so a different state can coincidentally match a
+    `serial`. Both values are compared as a pair so that case is caught.
+    """
+
+    lineage: str
+    serial: int
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.lineage, "lineage")
+        if isinstance(self.serial, bool) or not isinstance(self.serial, int):
+            raise TypeError("serial must be an integer")
+        if self.serial < 0:
+            raise ValueError("serial must be zero or greater")
+
+    def matches(self, other: object) -> bool:
+        """Return whether two state versions are the same lineage and serial pair."""
+        if not isinstance(other, TerraformStateVersion):
+            raise TypeError("other must be a TerraformStateVersion")
+        return self.lineage == other.lineage and self.serial == other.serial
+
+    def to_dict(self) -> dict[str, object]:
+        return {"lineage": self.lineage, "serial": self.serial}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TerraformPlan:
     deployment_id: str
     commit_sha: str
@@ -159,6 +188,38 @@ class TerraformPlan:
             "commit_sha": self.commit_sha,
             "plan_hash": self.plan_hash,
             "artifact": self.artifact.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PlanExecutionResult:
+    """D's `PlanRequestPort` output: the hashed plan, its saved binary, and state.
+
+    `plan` carries the allow-listed projection whose digest is `plan_hash`.
+    `binary_artifact` is the saved binary plan that `terraform apply` consumes and
+    is never a hash target. `state_version` is the plan-time `(lineage, serial)`
+    re-checked before apply. All three refer to the same deployment (ADR-0019 §1, §2).
+    """
+
+    plan: TerraformPlan
+    binary_artifact: ArtifactReference
+    state_version: TerraformStateVersion
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan, TerraformPlan):
+            raise TypeError("plan must be a TerraformPlan")
+        if not isinstance(self.binary_artifact, ArtifactReference):
+            raise TypeError("binary_artifact must be an ArtifactReference")
+        if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
+            raise ValueError("binary_artifact must be a TERRAFORM_PLAN_BINARY")
+        if not isinstance(self.state_version, TerraformStateVersion):
+            raise TypeError("state_version must be a TerraformStateVersion")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plan": self.plan.to_dict(),
+            "binary_artifact": self.binary_artifact.to_dict(),
+            "state_version": self.state_version.to_dict(),
         }
 
 
@@ -189,4 +250,92 @@ class DeploymentApproval:
             "approved_by": self.approved_by,
             "commit_sha": self.commit_sha,
             "plan_hash": self.plan_hash,
+        }
+
+
+class WorkflowConclusion(StrEnum):
+    """GitHub Actions run conclusion re-read from the run, never trusted from an Event."""
+
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    CANCELLED = "CANCELLED"
+    TIMED_OUT = "TIMED_OUT"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowRunReference:
+    """Locator for one GitHub Actions run tied to a deployment (ADR-0019 §7)."""
+
+    deployment_id: str
+    repository_id: str
+    run_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("deployment_id", "repository_id", "run_id"):
+            require_non_empty_string(getattr(self, name), name)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "repository_id": self.repository_id,
+            "run_id": self.run_id,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowRunFacts:
+    """Facts re-read from an Actions run so D can verify, not trust, an Event.
+
+    D compares `workflow_path` against an allow-list, `repository_id`/`ref` against
+    the approved commit, `conclusion`, and `plan_hash` against the approved plan.
+    Any mismatch routes to MANUAL_REVIEW rather than a retry (ADR-0019 §7).
+    """
+
+    run_id: str
+    repository_id: str
+    workflow_path: str
+    ref: str
+    commit_sha: str
+    conclusion: WorkflowConclusion
+    plan_hash: str
+
+    def __post_init__(self) -> None:
+        for name in ("run_id", "repository_id", "workflow_path", "ref", "commit_sha", "plan_hash"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.conclusion, WorkflowConclusion):
+            raise TypeError("conclusion must be a WorkflowConclusion")
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "run_id": self.run_id,
+            "repository_id": self.repository_id,
+            "workflow_path": self.workflow_path,
+            "ref": self.ref,
+            "commit_sha": self.commit_sha,
+            "conclusion": self.conclusion.value,
+            "plan_hash": self.plan_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ApplyDispatchReceipt:
+    """The `workflow_dispatch` acknowledgment D obtains when it triggers apply.
+
+    A dispatch confirms the run was requested; the authoritative apply facts still
+    come from re-reading the run via `WorkflowRunReader` (ADR-0019 §5, §7).
+    """
+
+    deployment_id: str
+    repository_id: str
+    workflow_path: str
+
+    def __post_init__(self) -> None:
+        for name in ("deployment_id", "repository_id", "workflow_path"):
+            require_non_empty_string(getattr(self, name), name)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "repository_id": self.repository_id,
+            "workflow_path": self.workflow_path,
         }

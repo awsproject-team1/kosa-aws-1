@@ -23,14 +23,20 @@ from packages.contracts.assessments import (
 )
 from packages.contracts.audit import AuditEventType
 from packages.contracts.deployments import (
+    ApplyDispatchReceipt,
     ArtifactReference,
     ArtifactType,
     AwsResourceOperation,
     AwsResourceQuery,
     DeploymentApproval,
     IaCSnapshot,
+    PlanExecutionResult,
     RemediationPatch,
     TerraformPlan,
+    TerraformStateVersion,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
 )
 from packages.contracts.errors import ApiError, ApiErrorResponse
 from packages.contracts.jobs import (
@@ -103,6 +109,7 @@ __all__ = [
     "ApiError",
     "ApiErrorResponse",
     "APPROVABLE_STATUSES",
+    "ApplyDispatchReceipt",
     "ApprovalRejectionCode",
     "ArtifactReference",
     "ArtifactType",
@@ -146,6 +153,7 @@ __all__ = [
     "PolicySourceFormat",
     "PolicySourceKind",
     "PolicySourceUploadRequest",
+    "PlanExecutionResult",
     "PlanProjectionError",
     "PlanReadinessInput",
     "PlannedEvaluation",
@@ -171,7 +179,11 @@ __all__ = [
     "SUPPORTED_MEDIA_TYPES",
     "TERMINAL_STATUSES",
     "TerraformPlan",
+    "TerraformStateVersion",
     "WorkflowCommand",
+    "WorkflowConclusion",
+    "WorkflowRunFacts",
+    "WorkflowRunReference",
     "WorkflowTask",
     "canonical_plan_bytes",
     "compute_plan_hash",
