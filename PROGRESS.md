@@ -37,6 +37,16 @@
 
 ## Completed
 
+- M1 A 정책 원문 업로드 세션 API를 배포 Lambda에 배선: 도메인 코드(`PolicySourceApiService`,
+  `DynamoDbPolicySourceUploadRepository`)는 이미 dev에 있었으나 composition root
+  (`apps/backend/api/runtime.py`)가 이를 `JobHttpHandler`에 주입하지 않아 `POST
+  /policy-sources/uploads`·`GET /policy-sources/{id}/versions/{v}`·`.../process` 라우트가 배포
+  Lambda에서 404를 반환했다. `_policy_source_components()`를 추가해 `POLICY_SOURCE_BUCKET_NAME`
+  버킷과 tenant-scoped 업로드 세션 리포지토리, 정규화 처리용 S3 reader를 구성하고 `policy_sources`
+  ·`policy_reader`로 주입했다. 서버가 `source_id`/`source_version`을 발급하므로 client는 저장
+  위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`를 `repositories` 패키지에서 export하고,
+  배선 성공·버킷 미설정 fail-closed를 검증하는 unit 테스트 2건을 추가했다.
+
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
   에 두고 `AssessmentEvaluationPlan`이 좌표 집합을 가지며 개수는 거기서 파생하므로 둘이 어긋날 수
