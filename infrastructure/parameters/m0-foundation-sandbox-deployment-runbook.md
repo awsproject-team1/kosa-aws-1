@@ -45,8 +45,9 @@ Environment 또는 고객 승인 채널에서만 공유하며, 이 저장소와 
 Stop before dispatch if any item is missing, the revision differs from the reviewed revision, either
 Environment lacks required reviewers or the same valid `EXPECTED_AWS_ACCOUNT_ID`, the deployment
 Environment lacks an explicit `M1_ASSESSMENT_MODE`, live mode lacks any required M1 Secret, the
-artifact bucket is not versioned or owned by that account, or the OIDC trust boundary cannot be
-attested.
+live deployment Region differs from `fixtures/m1/assessment_model_profile.json`, either credential
+Secret ARN set overlaps the other, the artifact bucket is not versioned or owned by that account,
+or the OIDC trust boundary cannot be attested.
 
 ## 2. Workflow inputs
 
@@ -64,7 +65,7 @@ either value manually.
 | `environment` | Protected artifact-preparation GitHub Environment. It is not the CloudFormation `Environment` value. |
 | `stack_environment` | CloudFormation `Environment` value. It is separate from the longer protected GitHub Environment name and must satisfy the template's 2–8 lowercase-character constraint. |
 | `artifact_approval_environment` | A distinct protected GitHub Environment whose reviewers approve the generated commit/key/hash/Version ID before deployment. It must not equal `environment`. |
-| `aws_region` | Customer-approved deployment region. M0 design currently targets `us-east-1` unless an approved exception exists. |
+| `aws_region` | Exact Region pinned by `fixtures/m1/assessment_model_profile.json`; currently `us-east-1`. Live deployment rejects any other Region. |
 | `role_to_assume` | Customer-approved OIDC deployment role ARN. Do not enter an Agent, user, or workload runtime role. |
 | `cloudformation_execution_role_arn` | `FoundationExecutionRoleArn` output from the customer bootstrap. GitHub Actions may pass only this role to CloudFormation. |
 | `lambda_code_s3_bucket` | Versioning-enabled customer-owned deployment-artifact bucket. The workflow checks versioning before upload. |
@@ -73,10 +74,11 @@ either value manually.
 `M1_ASSESSMENT_MODE` is not a workflow input. The second protected Environment
 must define it as `live` or `fixture`. Before customer deployment credentials
 are configured, the deployment job validates the selector/runtime tuple sets,
-protected reference ARN sets, account, Region, and immutable workload commit.
-The separately approved artifact-preparation identity has already created or
-verified the immutable package at this point. The validator prints only field
-names on failure and never the protected values.
+protected reference ARN sets and their credential-role disjointness, account,
+approved Model Profile Region, and immutable workload commit. The separately
+approved artifact-preparation identity has already created or verified the
+immutable package at this point. The validator prints only field names on
+failure and never the protected values.
 
 Before approving the artifact-preparation job, reviewers compare the dispatch inputs and checked-out
 revision with the approval packet. The workflow rejects a role ARN outside `EXPECTED_AWS_ACCOUNT_ID`;

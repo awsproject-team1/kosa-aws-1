@@ -56,6 +56,10 @@ class M1RuntimeConfiguration:
     def __init__(self, targets: tuple[M1AssessmentTarget, ...]) -> None:
         if not targets or not all(isinstance(target, M1AssessmentTarget) for target in targets):
             raise ValueError("targets must contain M1AssessmentTarget values")
+        github_secret_ids = {target.github_token_secret_id for target in targets}
+        external_id_secret_ids = {target.aws_external_id_secret_id for target in targets}
+        if github_secret_ids & external_id_secret_ids:
+            raise ValueError("M1 credential secret roles must be disjoint")
         self._targets = {
             (target.customer_id, target.repository_id, target.policy_profile_id): target
             for target in targets

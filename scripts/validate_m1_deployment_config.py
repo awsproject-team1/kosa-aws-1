@@ -12,7 +12,9 @@ import os
 import re
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
+MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
 TARGET_FIELDS = frozenset(
     {
         "customer_id",
@@ -47,6 +49,10 @@ def validate_environment(environment: Mapping[str, str]) -> str:
     if ACCOUNT_ID.fullmatch(expected_account) is None:
         raise DeploymentConfigurationError("EXPECTED_AWS_ACCOUNT_ID must be 12 digits")
     region = _required(environment.get("AWS_REGION"), "AWS_REGION")
+    if mode == "live" and region != _approved_model_profile_region():
+        raise DeploymentConfigurationError(
+            "AWS_REGION must match the approved M1 Model Profile region"
+        )
     scope = _scope(environment.get("ASSESSMENT_SCOPE_JSON"))
 
     runtime_raw = environment.get("M1_ASSESSMENT_RUNTIME_JSON", "")
@@ -89,7 +95,8 @@ def validate_environment(environment: Mapping[str, str]) -> str:
 
     configured_secret_arns = _csv(secret_arns_raw, "M1_ASSESSMENT_SECRET_ARNS")
     configured_read_roles = _csv(read_role_arns_raw, "M1_ASSESSMENT_READ_ROLE_ARNS")
-    target_secret_arns: set[str] = set()
+    github_secret_arns: set[str] = set()
+    external_id_secret_arns: set[str] = set()
     target_read_roles: set[str] = set()
     for target in targets:
         if COMMIT_SHA.fullmatch(target["commit_sha"]) is None:
@@ -116,11 +123,15 @@ def validate_environment(environment: Mapping[str, str]) -> str:
             raise DeploymentConfigurationError(
                 "github_repository must use the owner/repository form"
             )
-        target_secret_arns.update(
-            {target["github_token_secret_id"], target["aws_external_id_secret_id"]}
-        )
+        github_secret_arns.add(target["github_token_secret_id"])
+        external_id_secret_arns.add(target["aws_external_id_secret_id"])
         target_read_roles.add(target["aws_read_role_arn"])
 
+    if github_secret_arns & external_id_secret_arns:
+        raise DeploymentConfigurationError(
+            "GitHub token and AWS External ID secret ARN sets must be disjoint"
+        )
+    target_secret_arns = github_secret_arns | external_id_secret_arns
     if configured_secret_arns != target_secret_arns:
         raise DeploymentConfigurationError(
             "M1_ASSESSMENT_SECRET_ARNS must match runtime secret references exactly"
@@ -130,6 +141,18 @@ def validate_environment(environment: Mapping[str, str]) -> str:
             "M1_ASSESSMENT_READ_ROLE_ARNS must match runtime read roles exactly"
         )
     return mode
+
+
+def _approved_model_profile_region() -> str:
+    try:
+        profile = json.loads(MODEL_PROFILE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DeploymentConfigurationError(
+            "approved M1 Model Profile fixture is unreadable"
+        ) from error
+    if not isinstance(profile, Mapping):
+        raise DeploymentConfigurationError("approved M1 Model Profile must be an object")
+    return _required(profile.get("region"), "approved M1 Model Profile region")
 
 
 def _scope(raw: object) -> set[tuple[str, str, str]]:

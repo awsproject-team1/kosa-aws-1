@@ -23,7 +23,10 @@ MVP의 가치는 Rule 수가 아니라 실제 AWS 환경에서 `Assessment → F
 ## Target scope
 
 - 대상 리소스: EC2, RDS, ALB, S3
-- 데모: Terraform으로 구성한 WordPress/LAMP 웹 서비스
+- 데모: Terraform으로 구성한 WordPress/LAMP 웹 서비스. 데모 IaC는 이 저장소가 아니라 팀이 소유한
+  별도 고객 sandbox repository에 두고, 저장소에는 참조와 시나리오만 남긴다. 데모도 승인된 고객
+  Repository·GitHub App·OIDC 경계를 그대로 통과해야 apply 경로가 실제로 검증된다
+  (ADR-0021).
 - 사용자: `Admin`, `User`
 - 화면: Login, Policy/Rule/Profile, Assessment, Finding/Report, Remediation Diff, PR/CI/Plan, Approval/Deployment, Audit
 - 정책 입력: 사용자가 고객 Scope 안에서 사내 정책 원문을 업로드하고, 검증·정규화·사람 승인을
@@ -71,7 +74,10 @@ Deployment처럼 비용·상태·변경을 유발할 수 있는 실행은 Backen
   상태에 안전하게 적용 가능한지 검증한다. 이 단계는 drift를 다시 감지해 배포를 막거나
   재수정을 요구할 수 있지만, 직접 변경하지는 않는다.
 - **Post-Deploy Verification**: 승인된 Apply 뒤 실제 AWS에 수정이 반영됐는지 확인하고
-  Actual Compliance와 Drift를 재평가한다.
+  Actual Compliance와 Drift를 재평가한다. 재평가는 원 Assessment를 덮어쓰지 않고 같은 Policy
+  Profile version·Model Profile·rubric으로 같은 평가 계획을 다시 실행한 **새 Assessment**로
+  기록하며, Finding 해소 여부와 점수·Coverage 변화는 AI 판정이 아니라 두 결과의 결정적 비교다
+  (ADR-0020).
 
 이 단계는 Git Branch인 `dev`와 `main`의 의미와 분리된다.
 

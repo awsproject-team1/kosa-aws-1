@@ -73,6 +73,12 @@ Rules:
         AssertDescription: >-
           M1 runtime JSON, secret ARNs, and read-role ARNs must be either all empty
           for fixture mode or all non-empty for live mode.
+  M1AssessmentRegionMatchesModelProfile:
+    RuleCondition: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: >-
+          Live M1 deployment Region must match the approved Assessment Model Profile Region.
 
 Conditions:
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]

@@ -57,7 +57,7 @@ PRs, workflow logs, or repository files.
 | Secret | Value |
 | --- | --- |
 | `M1_ASSESSMENT_RUNTIME_JSON` | JSON array of approved targets shown below |
-| `M1_ASSESSMENT_SECRET_ARNS` | Comma-separated exact ARNs for the two target Secrets |
+| `M1_ASSESSMENT_SECRET_ARNS` | Comma-separated exact union of the target credential Secret ARNs |
 | `M1_ASSESSMENT_READ_ROLE_ARNS` | Comma-separated exact customer AWS read Role ARNs |
 
 For one S3 target, the configuration JSON shape is:
@@ -84,7 +84,9 @@ The GitHub Secret contains a short-lived GitHub App installation token with
 it before expiry through its App-token rotation process; neither a PAT nor the
 GitHub App private key is accepted by this Worker configuration. The External
 ID Secret contains only the random External ID required by the customer read
-Role trust policy.
+Role trust policy. Across the complete target array, the GitHub-token Secret ARN
+set and External-ID Secret ARN set must be disjoint; one Secret can never serve
+both credential roles, including across different targets.
 
 ## Required customer controls
 
@@ -132,7 +134,7 @@ sanitized gate result before customer deployment.
    | `environment` | `customer-sandbox-artifact` or the exact first protected Environment |
    | `stack_environment` | Bootstrap `PlatformEnvironment`, normally `sandbox` |
    | `artifact_approval_environment` | `customer-sandbox-deploy` or the exact distinct second Environment |
-   | `aws_region` | Approved region, currently `us-east-1` |
+   | `aws_region` | Exact Region pinned by `fixtures/m1/assessment_model_profile.json`; currently `us-east-1` |
    | `role_to_assume` | Bootstrap `GitHubActionsDeploymentRoleArn` |
    | `cloudformation_execution_role_arn` | Bootstrap `FoundationExecutionRoleArn` |
    | `lambda_code_s3_bucket` | Bootstrap `LambdaCodeBucketName` |
@@ -140,10 +142,11 @@ sanitized gate result before customer deployment.
 
    Example selector shape: `{"<customer-id>":[{"repository_id":"<product-repository-id>","policy_profile_id":"profile-mvp-baseline"}]}`.
    `M1_ASSESSMENT_MODE` is a protected Environment variable, not a dispatch input.
-   The workflow validates mode, selector equality, exact ARN sets, account, Region,
-   and the lowercase 40-character workload commit before configuring customer
-   deployment credentials. The separately approved artifact-preparation identity
-   has already created or verified the immutable package.
+   The workflow validates mode, selector equality, exact ARN sets and credential-role
+   disjointness, account, the approved Model Profile Region, and the lowercase
+   40-character workload commit before configuring customer deployment credentials.
+   The separately approved artifact-preparation identity has already created or
+   verified the immutable package.
 4. Approve artifact preparation, review its immutable package evidence, then
    approve the separate deployment Environment.
 5. After the foundation succeeds, validate the committed catalog plan from the
