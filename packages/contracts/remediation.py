@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
 from packages.contracts.assessments import Finding
-from packages.contracts.deployments import IaCSnapshot, TerraformPlan, TerraformStateVersion
+from packages.contracts.deployments import IaCSnapshot, TerraformPlan
 from packages.contracts.jobs import JobResponse
 from packages.contracts.remediation_policy import RemediationDecision
 
@@ -121,49 +121,6 @@ class PlanReadinessInput:
             raise TypeError("mapped_resource_ids must be a tuple")
         for resource_id in self.mapped_resource_ids:
             require_non_empty_string(resource_id, "mapped_resource_ids item")
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PlanRequestOutcome:
-    """D `PlanRequestPort.request_plan`의 반환형 (ADR-0019 section 1, section 2).
-
-    D Deployment Worker가 refreshed plan을 만든 뒤 durable하게 기록·전달할 값을 하나로 묶는다.
-    - `plan`은 immutable `TerraformPlan` artifact 참조로, `plan_hash`가 canonical 투영 바이트의
-      digest다(ADR-0019 section 1).
-    - `state_version`은 plan 시점의 state `lineage`·`serial`이며, apply 직전 재검증의 근거다
-      (ADR-0019 section 2). Deployment record에 기록된다.
-    - `readiness_input`은 C의 readiness 평가가 소비하는 bounded plan summary다. `plan`을 공유하며
-      `has_destructive_changes`는 D가 같은 투영 함수로 산출한다.
-
-    이 반환형은 승인·정책 판정을 담지 않는다. 판정은 A(승인)와 B(정책), C(readiness)가 소유한다.
-    """
-
-    plan: TerraformPlan
-    state_version: TerraformStateVersion
-    readiness_input: "PlanReadinessInput"
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.plan, TerraformPlan):
-            raise TypeError("plan must be a TerraformPlan")
-        if not isinstance(self.state_version, TerraformStateVersion):
-            raise TypeError("state_version must be a TerraformStateVersion")
-        if not isinstance(self.readiness_input, PlanReadinessInput):
-            raise TypeError("readiness_input must be a PlanReadinessInput")
-        if self.readiness_input.plan is not self.plan and self.readiness_input.plan != self.plan:
-            # readiness가 다른 plan을 가리키면 승인 재검증과 값이 어긋난다.
-            raise ValueError("readiness_input must describe the same plan")
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "plan": self.plan.to_dict(),
-            "state_version": self.state_version.to_dict(),
-            "readiness_input": {
-                "plan": self.readiness_input.plan.to_dict(),
-                "refreshed": self.readiness_input.refreshed,
-                "has_destructive_changes": self.readiness_input.has_destructive_changes,
-                "mapped_resource_ids": list(self.readiness_input.mapped_resource_ids),
-            },
-        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

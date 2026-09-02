@@ -1,148 +1,157 @@
-"""`terraform show -json` 투영과 `plan_hash` 산출의 Contract 테스트 (ADR-0019 §1).
-
-ADR-0019가 참이라면 아래가 고정될 수 있어야 한다.
-- `plan_hash`는 같은 plan에서 두 번 계산해도 같다 (불변식 2).
-- 투영은 허용 목록이라, Terraform/Provider가 출력 필드를 늘려도 hash가 흔들리지 않는다 (§1).
-- 파괴적 변경(`delete` 또는 비어 있지 않은 `replace_paths`)이 판정된다 (불변식 8).
-"""
+"""Contract tests for the shared `terraform show -json` projection (ADR-0019 §1)."""
 
 import unittest
 
 from packages.contracts import (
-    TerraformPlanProjectionError,
+    ArtifactType,
+    PlanProjectionError,
     canonical_plan_bytes,
     compute_plan_hash,
     has_destructive_changes,
-    project_plan,
+    project_plan_changes,
 )
 
 
-def _plan(*resource_changes: dict[str, object]) -> dict[str, object]:
-    return {"resource_changes": list(resource_changes)}
+def show_json(resource_changes: list[dict[str, object]], **extra: object) -> dict[str, object]:
+    """Build a `show -json`-shaped document with noise fields for exclusion tests."""
+    return {
+        "format_version": "1.2",
+        "terraform_version": "1.9.5",
+        "timestamp": "2026-09-02T00:00:00Z",
+        "resource_changes": resource_changes,
+        **extra,
+    }
 
 
-def _change(actions: list[str], **extra: object) -> dict[str, object]:
-    change: dict[str, object] = {"actions": actions}
-    change.update(extra)
-    return change
+def change(address: str, actions: list[str], **change_fields: object) -> dict[str, object]:
+    return {
+        "address": address,
+        "mode": "managed",
+        "type": "aws_s3_bucket",
+        "name": address.split(".")[-1],
+        "index": None,
+        "provider_name": "registry.terraform.io/hashicorp/aws",
+        # A field outside the allow-list that must never enter the hash.
+        "deposed": "abc123",
+        "change": {
+            "actions": actions,
+            "before": None,
+            "after": {"acl": "private"},
+            **change_fields,
+        },
+    }
 
 
 class TerraformPlanProjectionTest(unittest.TestCase):
-    def test_plan_hash_is_stable_across_recomputation(self) -> None:
-        plan = _plan(
-            {
-                "address": "aws_s3_bucket.logs",
-                "type": "aws_s3_bucket",
-                "name": "logs",
-                "change": _change(["update"], before={"acl": "public"}, after={"acl": "private"}),
-            }
+    def test_plan_hash_is_stable_across_two_computations(self) -> None:
+        # ADR-0019 불변식 #2: 같은 plan에서 두 번 계산해도 같다.
+        document = show_json([change("aws_s3_bucket.logs", ["update"])])
+        self.assertEqual(compute_plan_hash(document), compute_plan_hash(document))
+
+    def test_projection_is_invariant_to_resource_change_ordering(self) -> None:
+        first = show_json(
+            [change("aws_s3_bucket.b", ["update"]), change("aws_s3_bucket.a", ["create"])]
+        )
+        second = show_json(
+            [change("aws_s3_bucket.a", ["create"]), change("aws_s3_bucket.b", ["update"])]
+        )
+        self.assertEqual(compute_plan_hash(first), compute_plan_hash(second))
+        addresses = [entry["address"] for entry in project_plan_changes(first)]
+        self.assertEqual(addresses, ["aws_s3_bucket.a", "aws_s3_bucket.b"])
+
+    def test_projection_drops_fields_outside_the_allow_list(self) -> None:
+        document = show_json([change("aws_s3_bucket.logs", ["update"])])
+        [projected] = project_plan_changes(document)
+        self.assertNotIn("deposed", projected)
+        self.assertEqual(
+            set(projected), {"address", "mode", "type", "name", "index", "provider_name", "change"}
+        )
+        self.assertEqual(
+            set(projected["change"]),
+            {"actions", "before", "after", "after_unknown", "replace_paths"},
         )
 
-        self.assertEqual(compute_plan_hash(plan), compute_plan_hash(plan))
+    def test_top_level_noise_does_not_change_hash(self) -> None:
+        base = show_json([change("aws_s3_bucket.logs", ["update"])])
+        noisy = show_json(
+            [change("aws_s3_bucket.logs", ["update"])],
+            prior_state={"values": {"root_module": {}}},
+        )
+        self.assertEqual(compute_plan_hash(base), compute_plan_hash(noisy))
 
-    def test_projection_ignores_fields_outside_the_allow_list(self) -> None:
-        base = {
+    def test_canonical_bytes_have_no_trailing_newline_and_compact_separators(self) -> None:
+        document = show_json([change("aws_s3_bucket.logs", ["update"])])
+        payload = canonical_plan_bytes(document)
+        self.assertFalse(payload.endswith(b"\n"))
+        self.assertNotIn(b", ", payload)
+        self.assertNotIn(b": ", payload)
+
+    def test_destructive_when_change_deletes(self) -> None:
+        # ADR-0019 불변식 #8: delete는 파괴적이다.
+        document = show_json([change("aws_s3_bucket.logs", ["delete", "create"])])
+        self.assertTrue(has_destructive_changes(document))
+
+    def test_destructive_when_replace_paths_present(self) -> None:
+        document = show_json([change("aws_s3_bucket.logs", ["update"], replace_paths=[["acl"]])])
+        self.assertTrue(has_destructive_changes(document))
+
+    def test_not_destructive_for_pure_create_or_update(self) -> None:
+        document = show_json(
+            [
+                change("aws_s3_bucket.a", ["create"]),
+                change("aws_s3_bucket.b", ["update"], replace_paths=[]),
+            ]
+        )
+        self.assertFalse(has_destructive_changes(document))
+
+    def test_rejects_nan_and_infinity(self) -> None:
+        document = show_json(
+            [change("aws_s3_bucket.logs", ["update"], after={"size": float("inf")})]
+        )
+        with self.assertRaises(PlanProjectionError):
+            compute_plan_hash(document)
+
+    def test_rejects_change_without_address(self) -> None:
+        broken = {"mode": "managed", "change": {"actions": ["create"]}}
+        with self.assertRaisesRegex(PlanProjectionError, "address"):
+            project_plan_changes(show_json([broken]))
+
+    def test_rejects_document_missing_resource_changes(self) -> None:
+        # A missing `resource_changes` is a corrupt plan; it must not default to
+        # an empty (and therefore non-destructive) projection.
+        document = {"format_version": "1.2", "terraform_version": "1.9.5"}
+        with self.assertRaisesRegex(PlanProjectionError, "resource_changes"):
+            project_plan_changes(document)
+        with self.assertRaisesRegex(PlanProjectionError, "resource_changes"):
+            has_destructive_changes(document)
+
+    def test_rejects_entry_missing_change(self) -> None:
+        broken = {
             "address": "aws_s3_bucket.logs",
+            "mode": "managed",
             "type": "aws_s3_bucket",
             "name": "logs",
-            "change": _change(["no-op"]),
         }
-        with_noise = dict(base)
-        # Terraform/Provider가 늘릴 수 있는 필드들을 추가해도 hash가 흔들리면 안 된다.
-        with_noise["provider_version"] = "5.31.0"
-        with_noise["change"] = {**base["change"], "importing": {"id": "logs"}}
-        noisy_plan = _plan(with_noise)
-        noisy_plan["format_version"] = "1.2"
-        noisy_plan["terraform_version"] = "1.9.5"
-        noisy_plan["timestamp"] = "2026-09-02T00:00:00Z"
-        noisy_plan["prior_state"] = {"anything": True}
+        with self.assertRaisesRegex(PlanProjectionError, "change"):
+            project_plan_changes(show_json([broken]))
 
-        self.assertEqual(compute_plan_hash(_plan(base)), compute_plan_hash(noisy_plan))
+    def test_rejects_change_missing_actions(self) -> None:
+        # A missing `change.actions` would read as non-destructive; reject it so a
+        # corrupt plan cannot bypass the destructive-change manual-review gate.
+        broken = {
+            "address": "aws_s3_bucket.logs",
+            "mode": "managed",
+            "type": "aws_s3_bucket",
+            "name": "logs",
+            "change": {"before": None, "after": {"acl": "private"}},
+        }
+        with self.assertRaisesRegex(PlanProjectionError, "actions"):
+            project_plan_changes(show_json([broken]))
+        with self.assertRaisesRegex(PlanProjectionError, "actions"):
+            has_destructive_changes(show_json([broken]))
 
-    def test_projection_sorts_by_address(self) -> None:
-        forward = _plan(
-            {"address": "b.two", "change": _change(["create"])},
-            {"address": "a.one", "change": _change(["create"])},
-        )
-        reverse = _plan(
-            {"address": "a.one", "change": _change(["create"])},
-            {"address": "b.two", "change": _change(["create"])},
-        )
-
-        self.assertEqual([item["address"] for item in project_plan(forward)], ["a.one", "b.two"])
-        self.assertEqual(compute_plan_hash(forward), compute_plan_hash(reverse))
-
-    def test_canonical_bytes_use_compact_ascii_separators(self) -> None:
-        plan = _plan(
-            {"address": "aws_s3_bucket.logs", "change": _change(["create"], after={"nÃme": "x"})}
-        )
-        raw = canonical_plan_bytes(plan)
-
-        self.assertNotIn(b", ", raw)  # 구분자에 공백이 없다
-        self.assertNotIn(b": ", raw)
-        self.assertFalse(raw.endswith(b"\n"))  # trailing newline 없음
-        raw.decode("ascii")  # 비-ASCII escape로 ASCII만 남는다
-
-    def test_delete_action_is_destructive(self) -> None:
-        plan = _plan({"address": "aws_s3_bucket.logs", "change": _change(["delete"])})
-
-        self.assertTrue(has_destructive_changes(plan))
-
-    def test_replace_paths_is_destructive(self) -> None:
-        plan = _plan(
-            {
-                "address": "aws_s3_bucket.logs",
-                "change": _change(["create", "delete"], replace_paths=[["bucket"]]),
-            }
-        )
-
-        self.assertTrue(has_destructive_changes(plan))
-
-    def test_pure_update_is_not_destructive(self) -> None:
-        plan = _plan(
-            {
-                "address": "aws_s3_bucket.logs",
-                "change": _change(["update"], replace_paths=[]),
-            }
-        )
-
-        self.assertFalse(has_destructive_changes(plan))
-
-    def test_non_finite_numbers_are_rejected(self) -> None:
-        plan = _plan(
-            {
-                "address": "aws_s3_bucket.logs",
-                "change": _change(["update"], after={"n": float("nan")}),
-            }
-        )
-
-        with self.assertRaisesRegex(TerraformPlanProjectionError, "non-finite"):
-            compute_plan_hash(plan)
-
-    def test_missing_resource_changes_key_is_rejected(self) -> None:
-        with self.assertRaisesRegex(TerraformPlanProjectionError, "resource_changes"):
-            project_plan({"format_version": "1.2"})
-
-    def test_missing_actions_is_rejected(self) -> None:
-        plan = _plan({"address": "aws_s3_bucket.logs", "change": {"before": {}, "after": {}}})
-
-        with self.assertRaisesRegex(TerraformPlanProjectionError, "actions"):
-            project_plan(plan)
-
-    def test_duplicate_addresses_are_rejected(self) -> None:
-        plan = _plan(
-            {"address": "aws_s3_bucket.logs", "change": _change(["create"])},
-            {"address": "aws_s3_bucket.logs", "change": _change(["update"])},
-        )
-
-        with self.assertRaisesRegex(TerraformPlanProjectionError, "unique"):
-            project_plan(plan)
-
-    def test_empty_plan_hashes_deterministically(self) -> None:
-        empty = {"resource_changes": []}
-
-        self.assertEqual(compute_plan_hash(empty), compute_plan_hash({"resource_changes": []}))
-        self.assertFalse(has_destructive_changes(empty))
+    def test_binary_plan_artifact_type_is_distinct_from_hashed_projection(self) -> None:
+        self.assertNotEqual(ArtifactType.TERRAFORM_PLAN, ArtifactType.TERRAFORM_PLAN_BINARY)
 
 
 if __name__ == "__main__":

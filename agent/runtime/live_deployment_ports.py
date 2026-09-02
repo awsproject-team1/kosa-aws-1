@@ -1,55 +1,59 @@
 """M3 D 실행 port의 live GitHub/AWS 어댑터 (ADR-0019).
 
-`agent/runtime/deployment_ports.py`가 정의한 세 주입 port의 실제 구현이다. Mock과 달리
-실제 GitHub Actions REST API와 read-only AWS Resource Tool을 호출하지만, 어떤 어댑터도
-승인·정책 판정을 하지 않고 승인 경계를 우회하는 write 표면을 노출하지 않는다.
+`apps/backend/deployment/ports.py`가 정의한 정본 port의 실제 구현이다. Mock과 달리 실제
+GitHub Actions REST API와 read-only AWS Resource Tool을 호출하지만, 어떤 어댑터도 승인·정책
+판정을 하지 않고 승인 경계를 우회하는 write 표면을 노출하지 않는다.
 
 - `LiveApplyDispatchPort`: 승인된 approval로 `workflow_dispatch`만 호출한다(ADR-0019 §5·§6).
-  이 dispatch가 D의 유일한 write 표면이다. GitHub App에는 `workflows: write`가 없으므로
-  workflow 파일 자체는 건드리지 않는다. 이중 apply를 막는 정본은 A의 `APPROVED → APPLYING`
-  조건부 전이이며(§5), 이 어댑터는 그 성질을 깨지 않도록 결정적 run 좌표만 만든다.
-- `LiveWorkflowRunReader`: `run_id`로 Actions run을 GET으로 재조회한다(ADR-0019 §7). EventBridge
-  payload를 신뢰하지 않는다. 재조회 실패는 예외가 아니라 실패 결론을 담은 값으로 반환한다.
-- `LiveActualRereadPort`: apply 후 AWS Actual을 M1 read-only Resource Tool로 다시 읽는다
-  (ADR-0007, ADR-0020 §8). write 표면이 없다.
+  이 dispatch가 D의 유일한 write 표면이다. dispatch는 run_id를 주지 않으므로 `ApplyDispatchReceipt`
+  (workflow_path 확인)만 돌려준다. 권위 있는 apply 사실은 `WorkflowRunReader`가 run을 재조회해
+  얻는다(§7). GitHub App에는 `workflows: write`가 없다.
+- `LiveWorkflowRunReader`: `WorkflowRunReference`(deployment_id/repository_id/**실제 GitHub run_id**)
+  로 Actions run을 GET 재조회한다(ADR-0019 §7). EventBridge payload를 신뢰하지 않는다. 재조회
+  실패는 예외가 아니라 실패 결론(`FAILURE`)을 담은 `WorkflowRunFacts`로 반환한다.
+- `LiveActualRereadPort`: apply 후 AWS Actual을 M1 read-only Resource Tool로 다시 읽어 검증
+  Assessment 입력으로 넘긴다(ADR-0007, ADR-0020). 반환값이 없다(정본 port가 `None`).
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from agent.runtime.aws_resource_tool import (
-    AwsResourceTool,
-    AwsResourceToolError,
-    AwsResourceView,
-)
-from agent.runtime.deployment_ports import (
+from agent.runtime.aws_resource_tool import AwsResourceTool, AwsResourceView
+from agent.runtime.github_tool import require_github_repository_full_name
+from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
     WorkflowRunReader,
 )
-from agent.runtime.github_tool import require_github_repository_full_name
 from packages.contracts import (
-    ApplyRunReference,
+    ApplyDispatchReceipt,
     AwsResourceOperation,
     AwsResourceQuery,
-    AwsResourceSnapshot,
     DeploymentApproval,
-    VerifiedRunOutcome,
+    TerraformPlan,
+    TerraformStateVersion,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
 )
+from packages.contracts.remediation import RemediationSyncTarget
 
-# apply run을 트리거하는 workflow 파일 경로. GitHub App은 이 파일을 만들거나 수정할 수
-# 없고(§6, workflows:write 없음), 고객이 1회 설치한 template만 dispatch한다.
+# apply run을 트리거하는 workflow 파일. GitHub App은 이 파일을 만들거나 수정할 수 없고(§6),
+# 고객이 1회 설치한 template만 dispatch한다.
 _APPLY_WORKFLOW_FILE = "terraform-apply.yml"
+_APPLY_WORKFLOW_PATH = ".github/workflows/terraform-apply.yml"
 
-# 완료된 run을 성공으로 인정할 때 workflow path가 반드시 이 allow-list 안이어야 한다(§7).
-_APPLY_WORKFLOW_PATHS = frozenset(
-    {".github/workflows/terraform-apply.yml", ".github/workflows/terraform-apply.yaml"}
-)
+# GitHub Actions conclusion 문자열 → 정본 WorkflowConclusion.
+_CONCLUSION_MAP = {
+    "success": WorkflowConclusion.SUCCESS,
+    "failure": WorkflowConclusion.FAILURE,
+    "cancelled": WorkflowConclusion.CANCELLED,
+    "timed_out": WorkflowConclusion.TIMED_OUT,
+}
 
 
 class LiveDeploymentPortError(RuntimeError):
@@ -65,9 +69,9 @@ def _require_non_empty(value: object, field_name: str) -> str:
 class LiveApplyDispatchPort(ApplyDispatchPort):
     """승인된 approval로 GitHub Actions `workflow_dispatch`만 호출하는 live 어댑터.
 
-    write 표면은 dispatch 하나뿐이다. run 좌표는 (deployment_id, plan_hash)에서 결정적으로
-    유도하므로, at-least-once 재전달로 같은 approval이 두 번 들어와도 같은 run을 가리킨다
-    — 다만 이중 apply의 정본 방어는 A의 조건부 상태 전이다(§5).
+    write 표면은 dispatch 하나뿐이다. dispatch는 run_id를 주지 않으므로 `ApplyDispatchReceipt`
+    (workflow_path 확인)만 돌려준다. 이중 apply의 정본 방어는 A의 `APPROVED → APPLYING`
+    조건부 전이다(§5).
     """
 
     def __init__(
@@ -79,10 +83,8 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         token_provider: Callable[[], str],
         dispatch: Callable[[str, Mapping[str, str], bytes], None] | None = None,
     ) -> None:
-        _require_non_empty(customer_id, "customer_id")
-        _require_non_empty(repository_id, "repository_id")
-        self._customer_id = customer_id
-        self._repository_id = repository_id
+        self._customer_id = _require_non_empty(customer_id, "customer_id")
+        self._repository_id = _require_non_empty(repository_id, "repository_id")
         self._repository_full_name = require_github_repository_full_name(repository_full_name)
         if not callable(token_provider):
             raise TypeError("token_provider must be callable")
@@ -93,21 +95,33 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         self,
         *,
         approval: DeploymentApproval,
-        state_lineage: str,
-        state_serial: int,
-        repository_id: str,
-    ) -> ApplyRunReference:
+        plan: TerraformPlan,
+        state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
+    ) -> ApplyDispatchReceipt:
         if not isinstance(approval, DeploymentApproval):
             raise TypeError("approval must be a DeploymentApproval")
-        _require_non_empty(state_lineage, "state_lineage")
-        if isinstance(state_serial, bool) or not isinstance(state_serial, int):
-            raise TypeError("state_serial must be an int")
-        if repository_id != self._repository_id:
-            raise LiveDeploymentPortError("repository_id is outside the tool scope")
+        if not isinstance(plan, TerraformPlan):
+            raise TypeError("plan must be a TerraformPlan")
+        if not isinstance(state_version, TerraformStateVersion):
+            raise TypeError("state_version must be a TerraformStateVersion")
+        if not isinstance(plan_run, WorkflowRunReference):
+            raise TypeError("plan_run must be a WorkflowRunReference")
+        if not approval.matches(plan):
+            raise LiveDeploymentPortError("approval is not bound to the plan")
+        if plan.artifact.repository_id not in (None, self._repository_id):
+            raise LiveDeploymentPortError("plan is outside the tool scope")
+        # apply는 이 run의 saved plan artifact를 내려받는다(§1). run 좌표가 승인된 배포·저장소
+        # 밖이면 다른 배포의 plan을 적용하게 되므로 dispatch 전에 막는다.
+        if plan_run.deployment_id != approval.deployment_id:
+            raise LiveDeploymentPortError("plan run is not bound to the approved deployment")
+        if plan_run.repository_id != self._repository_id:
+            raise LiveDeploymentPortError("plan run is outside the tool scope")
 
-        # workflow_dispatch input은 deployment_id/commit_sha/plan_hash뿐이다(§5). workflow가
-        # 이 값으로 자신이 적용할 saved plan artifact를 조회·검증한다. state 좌표는 apply job이
-        # 직접 재확인하므로 input으로 넘기지 않는다.
+        # workflow_dispatch input 넷은 apply workflow의 필수 입력과 정확히 일치한다(§5).
+        # `plan_run_id`는 apply가 자기 run이 아니라 plan run의 saved artifact를 내려받기 때문에
+        # 필요하다(§1). 이 값은 durable `PlanExecutionResult.plan_run`에서 와야 하며, 여기서
+        # 만들어내지 않는다 — apply와 plan은 서로 다른 실행이다.
         body = json.dumps(
             {
                 "ref": approval.commit_sha,
@@ -115,6 +129,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
                     "deployment_id": approval.deployment_id,
                     "commit_sha": approval.commit_sha,
                     "plan_hash": approval.plan_hash,
+                    "plan_run_id": plan_run.run_id,
                 },
             },
             ensure_ascii=True,
@@ -124,24 +139,20 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
             f"https://api.github.com/repos/{self._repository_full_name}"
             f"/actions/workflows/{_APPLY_WORKFLOW_FILE}/dispatches"
         )
-        self._dispatch(url, self._headers(), body)
-        # dispatch는 204만 돌려주고 run id를 주지 않는다. run 좌표는 (deployment, plan_hash)에서
-        # 결정적으로 유도해, 재조회 단계가 이 좌표로 run을 찾을 수 있게 한다.
-        return ApplyRunReference(
+        self._dispatch(url, _github_headers(self._token_provider()), body)
+        # dispatch는 204만 돌려주고 run id를 주지 않는다. 권위 있는 사실은 재조회로 얻는다(§7).
+        return ApplyDispatchReceipt(
             deployment_id=approval.deployment_id,
-            repository_id=repository_id,
-            run_id=_dispatch_run_key(approval.deployment_id, approval.plan_hash),
+            repository_id=self._repository_id,
+            workflow_path=_APPLY_WORKFLOW_PATH,
         )
-
-    def _headers(self) -> dict[str, str]:
-        return _github_headers(self._token_provider())
 
 
 class LiveWorkflowRunReader(WorkflowRunReader):
-    """`run_id`로 Actions run을 GET으로 재조회하는 live 어댑터 (ADR-0019 §7).
+    """`WorkflowRunReference`의 실제 run_id로 Actions run을 GET 재조회하는 live 어댑터 (§7).
 
-    EventBridge payload를 신뢰하지 않는다. 재조회 실패(404·형식 오류·네트워크)는 예외가
-    아니라 실패 결론을 담은 `VerifiedRunOutcome`으로 반환해, D Worker가 승인 사실과 대조해
+    EventBridge payload를 신뢰하지 않는다. 재조회 실패(404·형식 오류·미완료)는 예외가 아니라
+    실패 결론(`FAILURE`)을 담은 `WorkflowRunFacts`로 반환해, D Worker가 승인 사실과 대조해
     걸러낸다.
     """
 
@@ -154,43 +165,38 @@ class LiveWorkflowRunReader(WorkflowRunReader):
         token_provider: Callable[[], str],
         request: Callable[[str, Mapping[str, str]], Mapping[str, object]] | None = None,
     ) -> None:
-        _require_non_empty(customer_id, "customer_id")
-        _require_non_empty(repository_id, "repository_id")
-        self._customer_id = customer_id
-        self._repository_id = repository_id
+        self._customer_id = _require_non_empty(customer_id, "customer_id")
+        self._repository_id = _require_non_empty(repository_id, "repository_id")
         self._repository_full_name = require_github_repository_full_name(repository_full_name)
         if not callable(token_provider):
             raise TypeError("token_provider must be callable")
         self._token_provider = token_provider
         self._request = request or _github_get
 
-    def read_run(self, *, customer_id: str, repository_id: str, run_id: str) -> VerifiedRunOutcome:
-        if customer_id != self._customer_id or repository_id != self._repository_id:
-            raise LiveDeploymentPortError("customer_id/repository_id is outside the tool scope")
-        _require_non_empty(run_id, "run_id")
-        url = f"https://api.github.com/repos/{self._repository_full_name}/actions/runs/{run_id}"
+    def read_run(self, reference: WorkflowRunReference) -> WorkflowRunFacts:
+        if not isinstance(reference, WorkflowRunReference):
+            raise TypeError("reference must be a WorkflowRunReference")
+        if reference.repository_id != self._repository_id:
+            raise LiveDeploymentPortError("reference repository_id is outside the tool scope")
+        url = (
+            f"https://api.github.com/repos/{self._repository_full_name}"
+            f"/actions/runs/{reference.run_id}"
+        )
         try:
             payload = self._request(url, _github_headers(self._token_provider()))
-            return _run_outcome_from_payload(run_id, repository_id, payload)
+            return _facts_from_payload(reference, payload)
         except _RunReadFailure:
-            return _not_found_outcome(run_id, repository_id)
-
-    def read_run_by_reference(self, reference: ApplyRunReference) -> VerifiedRunOutcome:
-        """dispatch가 돌려준 참조로 재조회한다(run_id는 결정적 dispatch 좌표)."""
-        if not isinstance(reference, ApplyRunReference):
-            raise TypeError("reference must be an ApplyRunReference")
-        return self.read_run(
-            customer_id=self._customer_id,
-            repository_id=reference.repository_id,
-            run_id=reference.run_id,
-        )
+            return _failure_facts(reference)
 
 
 class LiveActualRereadPort(ActualRereadPort):
     """apply 후 AWS Actual을 M1 read-only Resource Tool로 다시 읽는 live 어댑터.
 
-    새 표면이 아니라 M1 Tool 재사용이며 write 표면이 없다(ADR-0007). 재조회 대상은 planned
-    집합에서 좁혀 온 `resource_ids`다(ADR-0020 §8). 존재하지 않는 리소스는 조용히 건너뛴다.
+    정본 port는 반환값이 없다(`None`) — 재조회한 Actual은 검증 Assessment가 다시 평가한다
+    (ADR-0020). 이 어댑터는 승인된 (customer_id, aws_account_id) scope 안에서 주입된 read-only
+    Resource Tool로 `resource_types`를 `LIST_RESOURCES` 조회하고, 그 결과를 검증 입력으로 넘기는
+    콜백에 전달한다. write 표면이 없다(ADR-0007). 조회 자체가 이 어댑터의 작업이므로 publish
+    콜백 유무와 무관하게 Actual 재조회가 실제로 수행된다.
     """
 
     def __init__(
@@ -199,83 +205,93 @@ class LiveActualRereadPort(ActualRereadPort):
         customer_id: str,
         aws_account_id: str,
         resource_tool: AwsResourceTool,
-        resource_type: str = "AWS::S3::Bucket",
+        resource_types: Sequence[str],
+        publish: (
+            Callable[[str, RemediationSyncTarget, Sequence[AwsResourceView]], None] | None
+        ) = None,
     ) -> None:
-        _require_non_empty(customer_id, "customer_id")
-        _require_non_empty(aws_account_id, "aws_account_id")
-        _require_non_empty(resource_type, "resource_type")
+        self._customer_id = _require_non_empty(customer_id, "customer_id")
+        self._aws_account_id = _require_non_empty(aws_account_id, "aws_account_id")
         if not isinstance(resource_tool, AwsResourceTool):
             raise TypeError("resource_tool must be an AwsResourceTool")
-        self._customer_id = customer_id
-        self._aws_account_id = aws_account_id
+        # 재조회할 resource type이 없으면 조회 자체가 no-op가 되어 apply 후 Actual이 갱신되지
+        # 않는다. 최소 하나의 type을 요구해 이 port가 항상 실제 읽기를 수행하게 강제한다.
+        if isinstance(resource_types, str) or not isinstance(resource_types, Sequence):
+            raise TypeError("resource_types must be a sequence of resource type strings")
+        frozen_types = tuple(
+            _require_non_empty(item, "resource_types item") for item in resource_types
+        )
+        if not frozen_types:
+            raise ValueError("resource_types must not be empty")
         self._resource_tool = resource_tool
-        self._resource_type = resource_type
+        self._resource_types = frozen_types
+        self._publish = publish
 
     def reread_actual(
-        self, *, customer_id: str, aws_account_id: str, resource_ids: tuple[str, ...]
-    ) -> tuple[AwsResourceSnapshot, ...]:
-        if customer_id != self._customer_id or aws_account_id != self._aws_account_id:
-            raise LiveDeploymentPortError("customer_id/aws_account_id is outside the tool scope")
-        if not isinstance(resource_ids, tuple):
-            raise TypeError("resource_ids must be a tuple")
-        snapshots: list[AwsResourceSnapshot] = []
-        for resource_id in resource_ids:
-            _require_non_empty(resource_id, "resource_ids item")
+        self, *, customer_id: str, deployment_id: str, sync_target: RemediationSyncTarget
+    ) -> None:
+        if customer_id != self._customer_id:
+            raise LiveDeploymentPortError("customer_id is outside the tool scope")
+        _require_non_empty(deployment_id, "deployment_id")
+        if not isinstance(sync_target, RemediationSyncTarget):
+            raise TypeError("sync_target must be a RemediationSyncTarget")
+        if sync_target.customer_id != self._customer_id:
+            raise LiveDeploymentPortError("sync_target is outside the tool scope")
+        # 승인된 scope 안에서 실제 Actual을 read-only로 다시 읽는다. 이 조회가 이 어댑터의
+        # 유일한 작업이며, 평가/판정은 하지 않는다(ADR-0007·ADR-0020).
+        views: list[AwsResourceView] = []
+        for resource_type in self._resource_types:
             query = AwsResourceQuery(
                 customer_id=self._customer_id,
                 aws_account_id=self._aws_account_id,
-                operation=AwsResourceOperation.READ_RESOURCE,
-                resource_type=self._resource_type,
-                resource_id=resource_id,
+                operation=AwsResourceOperation.LIST_RESOURCES,
+                resource_type=resource_type,
             )
-            try:
-                view = self._resource_tool.read_resource(query)
-            except AwsResourceToolError:
-                # 재조회는 존재하는 Actual만 돌려준다. 없는 리소스는 건너뛴다(ADR-0020 §8).
-                continue
-            snapshots.append(_snapshot_from_view(self._customer_id, view))
-        return tuple(snapshots)
+            views.extend(self._resource_tool.list_resources(query))
+        # 재조회 결과는 검증 Assessment 입력으로 넘긴다. publish 콜백이 없으면 재조회는 수행되되
+        # 결과가 관측되지 않을 뿐, 조회 자체는 항상 일어난다.
+        if self._publish is not None:
+            self._publish(deployment_id, sync_target, tuple(views))
 
 
 class _RunReadFailure(Exception):
     """내부 신호: run 재조회를 실패 결론 값으로 바꿔야 한다."""
 
 
-def _run_outcome_from_payload(
-    run_id: str, repository_id: str, payload: Mapping[str, object]
-) -> VerifiedRunOutcome:
+def _facts_from_payload(
+    reference: WorkflowRunReference, payload: Mapping[str, object]
+) -> WorkflowRunFacts:
     if not isinstance(payload, Mapping):
         raise _RunReadFailure
     path = payload.get("path")
     head_sha = payload.get("head_sha")
-    conclusion = payload.get("conclusion")
+    raw_conclusion = payload.get("conclusion")
     if not isinstance(path, str) or not path.strip():
         raise _RunReadFailure
     if not isinstance(head_sha, str) or not head_sha.strip():
         raise _RunReadFailure
-    if not isinstance(conclusion, str) or not conclusion.strip():
-        # 아직 완료되지 않은 run(conclusion=null)은 성공도 실패도 아니다. plan_hash를 대조에서
-        # 반드시 어긋나게 하는 sentinel로 두어 D Worker가 진행하지 않게 한다.
+    if not isinstance(raw_conclusion, str):
+        # conclusion=null(진행 중)이면 성공도 실패도 아니다. 실패 값으로 떨어뜨린다.
+        raise _RunReadFailure
+    conclusion = _CONCLUSION_MAP.get(raw_conclusion.lower())
+    if conclusion is None:
         raise _RunReadFailure
     plan_hash = _plan_hash_from_run_name(payload.get("name"))
     if plan_hash is None:
         raise _RunReadFailure
-    return VerifiedRunOutcome(
-        run_id=run_id,
+    return WorkflowRunFacts(
+        run_id=reference.run_id,
+        repository_id=reference.repository_id,
         workflow_path=path,
-        repository_id=repository_id,
         ref=head_sha,
+        commit_sha=head_sha,
         conclusion=conclusion,
         plan_hash=plan_hash,
     )
 
 
 def _plan_hash_from_run_name(value: object) -> str | None:
-    """apply workflow는 run name에 `plan_hash=<hash>`를 담아 승인 사실 대조를 가능케 한다.
-
-    Event를 신뢰하지 않으므로 재조회한 run 자체에서 plan_hash를 얻는다. run name 규약이
-    맞지 않으면 대조가 어긋나도록 None을 돌려준다.
-    """
+    """apply workflow는 run name에 `plan_hash=<hash>`를 담아 승인 사실 대조를 가능케 한다(§7)."""
     if not isinstance(value, str):
         return None
     marker = "plan_hash="
@@ -286,38 +302,16 @@ def _plan_hash_from_run_name(value: object) -> str | None:
     return token or None
 
 
-def _not_found_outcome(run_id: str, repository_id: str) -> VerifiedRunOutcome:
-    return VerifiedRunOutcome(
-        run_id=run_id,
+def _failure_facts(reference: WorkflowRunReference) -> WorkflowRunFacts:
+    return WorkflowRunFacts(
+        run_id=reference.run_id,
+        repository_id=reference.repository_id,
         workflow_path="unknown",
-        repository_id=repository_id,
         ref="unknown",
-        conclusion="not_found",
+        commit_sha="unknown",
+        conclusion=WorkflowConclusion.FAILURE,
         plan_hash="unknown",
     )
-
-
-def _snapshot_from_view(customer_id: str, view: object) -> AwsResourceSnapshot:
-    if not isinstance(view, AwsResourceView):
-        raise LiveDeploymentPortError("resource tool returned an invalid view")
-    # AwsResourceSnapshot의 attributes는 문자열 매핑만 담으므로, 서술적 read 상태를 문자열로
-    # 직렬화한다. write handle이 될 수 있는 값은 애초에 view에 없다(ADR-0007).
-    attributes = {
-        str(key): json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        for key, value in view.to_dict().get("attributes", {}).items()
-    }
-    return AwsResourceSnapshot(
-        customer_id=customer_id,
-        aws_account_id=view.aws_account_id,
-        resource_type=view.resource_type,
-        resource_id=view.resource_id,
-        attributes=attributes,
-    )
-
-
-def _dispatch_run_key(deployment_id: str, plan_hash: str) -> str:
-    seed = "\x1f".join((deployment_id, plan_hash))
-    return "run-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
 def _github_headers(token: object) -> dict[str, str]:
@@ -353,5 +347,7 @@ def _github_post(url: str, headers: Mapping[str, str], body: bytes) -> None:
         raise LiveDeploymentPortError(f"workflow_dispatch returned status {status}")
 
 
-# 재조회 어댑터가 참조하는 apply workflow allow-list를 밖에서도 쓸 수 있게 노출한다.
-APPLY_WORKFLOW_PATHS = _APPLY_WORKFLOW_PATHS
+# apply workflow allow-list를 밖에서도 쓸 수 있게 노출한다(worker가 대조에 재사용).
+APPLY_WORKFLOW_PATHS = frozenset(
+    {".github/workflows/terraform-apply.yml", ".github/workflows/terraform-apply.yaml"}
+)

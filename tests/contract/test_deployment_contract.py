@@ -5,14 +5,20 @@ import unittest
 from pathlib import Path
 
 from packages.contracts import (
+    ApplyDispatchReceipt,
     ArtifactReference,
     ArtifactType,
     AwsResourceOperation,
     AwsResourceQuery,
     DeploymentApproval,
     IaCSnapshot,
+    PlanExecutionResult,
     RemediationPatch,
     TerraformPlan,
+    TerraformStateVersion,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
 )
 
 FIXTURE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "remediation_plan.json"
@@ -110,6 +116,145 @@ class DeploymentContractTest(unittest.TestCase):
                 ),
                 changed_paths=("../outside.tf",),
             )
+
+
+class TerraformStateVersionContractTest(unittest.TestCase):
+    def test_matches_requires_same_lineage_and_serial(self) -> None:
+        version = TerraformStateVersion(lineage="lineage-1", serial=7)
+        self.assertTrue(version.matches(TerraformStateVersion(lineage="lineage-1", serial=7)))
+        # Same serial, different lineage: a re-created state must not match.
+        self.assertFalse(version.matches(TerraformStateVersion(lineage="lineage-2", serial=7)))
+        self.assertFalse(version.matches(TerraformStateVersion(lineage="lineage-1", serial=8)))
+
+    def test_serial_rejects_bool_and_negative(self) -> None:
+        with self.assertRaises(TypeError):
+            TerraformStateVersion(lineage="lineage-1", serial=True)
+        with self.assertRaises(ValueError):
+            TerraformStateVersion(lineage="lineage-1", serial=-1)
+
+
+class PlanExecutionResultContractTest(unittest.TestCase):
+    def _plan(self, *, repository_id: str | None = None) -> TerraformPlan:
+        return TerraformPlan(
+            deployment_id="deployment-001",
+            commit_sha="commit-001",
+            plan_hash="plan-hash-001",
+            artifact=ArtifactReference(
+                artifact_id="art-plan-001",
+                artifact_type=ArtifactType.TERRAFORM_PLAN,
+                content_sha256="plan-hash-001",
+                customer_id="cust-001",
+                repository_id=repository_id,
+            ),
+        )
+
+    def _binary(
+        self,
+        artifact_type: ArtifactType = ArtifactType.TERRAFORM_PLAN_BINARY,
+        *,
+        customer_id: str = "cust-001",
+        repository_id: str | None = None,
+    ) -> ArtifactReference:
+        return ArtifactReference(
+            artifact_id="art-plan-bin-001",
+            artifact_type=artifact_type,
+            content_sha256="binary-digest-001",
+            customer_id=customer_id,
+            repository_id=repository_id,
+        )
+
+    @staticmethod
+    def _plan_run(
+        *, deployment_id: str = "deployment-001", repository_id: str = "repo-001"
+    ) -> WorkflowRunReference:
+        return WorkflowRunReference(
+            deployment_id=deployment_id, repository_id=repository_id, run_id="plan-run-1"
+        )
+
+    def test_bundles_plan_binary_and_state(self) -> None:
+        result = PlanExecutionResult(
+            plan=self._plan(),
+            binary_artifact=self._binary(),
+            state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            plan_run=self._plan_run(),
+        )
+        payload = result.to_dict()
+        self.assertEqual(payload["plan"]["plan_hash"], "plan-hash-001")
+        self.assertEqual(payload["state_version"], {"lineage": "lineage-1", "serial": 3})
+        self.assertEqual(payload["plan_run"]["run_id"], "plan-run-1")
+
+    def test_rejects_a_plan_run_from_a_different_repository(self) -> None:
+        """binary가 저장소를 밝히면 plan run도 같은 저장소여야 한다.
+
+        다르면 apply가 다른 저장소의 run에서 plan artifact를 내려받으면서도 `deployment_id`는
+        일치하는 상태가 된다.
+        """
+        with self.assertRaisesRegex(ValueError, "plan_run repository_id"):
+            PlanExecutionResult(
+                plan=self._plan(repository_id="repo-001"),
+                binary_artifact=self._binary(repository_id="repo-001"),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(repository_id="repo-other"),
+            )
+
+    def test_rejects_a_plan_run_from_a_different_deployment(self) -> None:
+        """apply는 이 run의 artifact를 내려받으므로, 다른 배포의 run이면 다른 plan을 적용한다."""
+        with self.assertRaisesRegex(ValueError, "plan_run deployment_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(deployment_id="dep-other"),
+            )
+
+    def test_rejects_non_binary_artifact_as_the_saved_plan(self) -> None:
+        with self.assertRaisesRegex(ValueError, "TERRAFORM_PLAN_BINARY"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(ArtifactType.TERRAFORM_PLAN),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
+            )
+
+    def test_rejects_binary_from_a_different_customer(self) -> None:
+        with self.assertRaisesRegex(ValueError, "customer_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(customer_id="cust-other"),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
+            )
+
+    def test_rejects_binary_from_a_different_repository(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repository_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(repository_id="repo-other"),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
+            )
+
+
+class WorkflowRunFactsContractTest(unittest.TestCase):
+    def test_run_facts_round_trip_with_conclusion(self) -> None:
+        facts = WorkflowRunFacts(
+            run_id="run-001",
+            repository_id="repo-001",
+            workflow_path=".github/workflows/apply.yml",
+            ref="refs/heads/main",
+            commit_sha="commit-001",
+            conclusion=WorkflowConclusion.SUCCESS,
+            plan_hash="plan-hash-001",
+        )
+        self.assertEqual(facts.to_dict()["conclusion"], "SUCCESS")
+
+    def test_run_reference_and_receipt_require_non_empty_fields(self) -> None:
+        WorkflowRunReference(deployment_id="d-1", repository_id="r-1", run_id="run-1")
+        ApplyDispatchReceipt(
+            deployment_id="d-1", repository_id="r-1", workflow_path=".github/workflows/apply.yml"
+        )
+        with self.assertRaises(ValueError):
+            WorkflowRunReference(deployment_id="", repository_id="r-1", run_id="run-1")
 
 
 if __name__ == "__main__":
