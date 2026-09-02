@@ -2,8 +2,11 @@
 
 ## Current
 
-- PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
-  identity 검증을 통합했고, 후속 PR 검토 대기
+- M1 sandbox readiness 보강 완료: live Worker가 등록된 M1 Model Profile ID를 work에 직접 결합하고,
+  deployment workflow가 명시적 live/fixture mode·selector/ARN/account/40자 commit을 customer
+  deployment credential 설정 전에 fail-closed 검증함. 실제 고객 배포는 아래 Blocked 해소 전 시작하지 않음
+- PR #26 review follow-up은 PR #29로 최신 `dev`에 통합 완료: assessment provenance(commit/time),
+  remediation identity, 미래/누락/mismatch provenance 차단을 A→B 흐름과 persistence에 연결
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.
@@ -20,6 +23,12 @@
   분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
 
 ## Completed
+
+- M1 sandbox readiness hardening: live work를 composition root의 승인 Model Profile에 결합하고,
+  lowercase 40자 commit, explicit live/fixture mode, exact selector/ARN/account/Region preflight,
+  CloudFormation M1 parameter all-or-none·빈 CSV 요소 차단 및 runbook 동기화를 완료. 로컬 검증은
+  Ruff 239 files, Unit 410, Contract 97, Integration 9, Security 72, `cfn-lint` error 0,
+  Assessment 25-call 및 Policy Catalog 11-item dry-run 통과
 
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
@@ -197,7 +206,13 @@
 
 ## Blocked
 
-- 없음
+- M1 actual sandbox validation: 두 protected GitHub Environment에 required reviewer가 없고 deploy
+  Environment의 `M1_ASSESSMENT_MODE` 및 M1 Secret 3개가 미설정이다. 로컬 AWS credential도 없으므로
+  bootstrap/runtime target 생성과 실제 workflow dispatch는 고객 관리자·승인자 작업 대기
+- M1 live Golden quality gate: 6 Rule × 3 perspective case의 artifact resolver와 versioned
+  prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
+  derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
+  generic benchmark 결과를 M1 gate 통과로 간주하지 않음
 
 ## Milestones
 

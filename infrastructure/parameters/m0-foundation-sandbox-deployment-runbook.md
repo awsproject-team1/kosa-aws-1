@@ -36,14 +36,17 @@ Environment 또는 고객 승인 채널에서만 공유하며, 이 저장소와 
 | OIDC deployment role | Customer-managed role ARN and trust-policy attestation | Trust is restricted to this repository and the two approved Environments. Permissions are limited to the M0 stack, CloudTrail/audit destination, artifact-bucket versioning check, conditional `PutObject`, and exact-key `GetObject`/`GetObjectVersion` needed to verify/reuse the approved package. |
 | Lambda artifact bucket | Bucket name and versioning evidence | Customer-owned by the expected account, versioning is `Enabled`, and the OIDC role can conditionally create or read only the commit-qualified workflow key/version. |
 | Lambda artifact binding | Reviewed commit SHA and expected packaging path | Workflow approval evidence must record the commit SHA, ZIP SHA-256, object key, and returned S3 Version ID; every Lambda uses that Version ID. |
-| Assessment scope | Approved selector map | Fail-closed JSON; contains no credentials, policy originals, prompts, or full IaC content. `{}` is valid when no selector is approved. |
+| Assessment scope | Approved selector map | Fail-closed JSON; contains no credentials, policy originals, prompts, or full IaC content. `{}` is valid only for an intentional fixture deployment. |
+| Assessment mode | Protected deployment Environment variable and protected-value name inventory | `M1_ASSESSMENT_MODE` is exactly `live` or `fixture`; live requires all three named M1 Secrets and fixture requires all three to be absent. Values are never copied into the approval packet. |
 | Retention operations | Named customer owner and retention decision | Owner accepts retained metadata/audit resources, CloudTrail data-event cost, audit-log access boundary, and the stack termination-protection decision. |
 | Sandbox test principal | Customer-approved controlled principal and window | May perform only one verification `PutObject` and `GetObject` for the opaque ArtifactBucket key; it is not a Worker runtime identity. |
 | Evidence executor | Customer-approved separate principal and window | May list the approved account/region/day audit prefixes and transiently `GetObject` only for those CloudTrail logs/digests during validation; it cannot write audit artifacts or read other prefixes. |
 
 Stop before dispatch if any item is missing, the revision differs from the reviewed revision, either
-Environment lacks required reviewers or the same valid `EXPECTED_AWS_ACCOUNT_ID`, the artifact bucket
-is not versioned or owned by that account, or the OIDC trust boundary cannot be attested.
+Environment lacks required reviewers or the same valid `EXPECTED_AWS_ACCOUNT_ID`, the deployment
+Environment lacks an explicit `M1_ASSESSMENT_MODE`, live mode lacks any required M1 Secret, the
+artifact bucket is not versioned or owned by that account, or the OIDC trust boundary cannot be
+attested.
 
 ## 2. Workflow inputs
 
@@ -58,7 +61,7 @@ either value manually.
 | --- | --- |
 | `stack_name` | Customer-approved sandbox stack name. It must not identify a production workload. |
 | `project_name` | Same constraints as `ProjectName`: 2–31 lowercase letters, digits, or hyphens; starts with a letter; ends with a letter or digit; avoids reserved S3 prefixes. |
-| `environment` | Protected artifact-preparation GitHub Environment and the CloudFormation `Environment` value; it must satisfy the template's 2–8 lowercase-character constraint. |
+| `environment` | Protected artifact-preparation GitHub Environment. It is not the CloudFormation `Environment` value. |
 | `stack_environment` | CloudFormation `Environment` value. It is separate from the longer protected GitHub Environment name and must satisfy the template's 2–8 lowercase-character constraint. |
 | `artifact_approval_environment` | A distinct protected GitHub Environment whose reviewers approve the generated commit/key/hash/Version ID before deployment. It must not equal `environment`. |
 | `aws_region` | Customer-approved deployment region. M0 design currently targets `us-east-1` unless an approved exception exists. |
@@ -66,6 +69,14 @@ either value manually.
 | `cloudformation_execution_role_arn` | `FoundationExecutionRoleArn` output from the customer bootstrap. GitHub Actions may pass only this role to CloudFormation. |
 | `lambda_code_s3_bucket` | Versioning-enabled customer-owned deployment-artifact bucket. The workflow checks versioning before upload. |
 | `assessment_scope_json` | Approved fail-closed selector JSON. Do not paste sensitive policy or artifact data into the workflow input. |
+
+`M1_ASSESSMENT_MODE` is not a workflow input. The second protected Environment
+must define it as `live` or `fixture`. Before customer deployment credentials
+are configured, the deployment job validates the selector/runtime tuple sets,
+protected reference ARN sets, account, Region, and immutable workload commit.
+The separately approved artifact-preparation identity has already created or
+verified the immutable package at this point. The validator prints only field
+names on failure and never the protected values.
 
 Before approving the artifact-preparation job, reviewers compare the dispatch inputs and checked-out
 revision with the approval packet. The workflow rejects a role ARN outside `EXPECTED_AWS_ACCOUNT_ID`;

@@ -8,6 +8,7 @@ only by the Worker; callers cannot supply them through the public API.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -45,6 +46,8 @@ class M1AssessmentTarget:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        if re.fullmatch(r"[0-9a-f]{40}", self.commit_sha) is None:
+            raise ValueError("commit_sha must be a lowercase 40-character Git SHA")
 
 
 class M1RuntimeConfiguration:
