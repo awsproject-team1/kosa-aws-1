@@ -49,6 +49,16 @@
 
 ## Completed
 
+- M2 A Remediation 예외 등록 API를 배포 Lambda에 배선: `RemediationExceptionApiService`와
+  `DynamoDbRemediationExceptionRepository`는 이미 dev에 있었으나 composition root
+  (`runtime.py`)가 주입하지 않아 `POST /remediation-exceptions`가 배포 Lambda에서 404였다.
+  `_remediation_exception_components()`를 추가해 예외 record와 audit event를 한 transaction으로
+  쓰는 리포지토리(관리자 전용, `(customer_id, rule_id, rule_version)` 바인딩, 만료 필수)를
+  구성·주입했다. 배선 unit 테스트 2건 추가. **RemediationApiService와 DeploymentApiService는
+  이번 범위에서 제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
+  프로덕션 구현이 없고(테스트 fake만), 후자는 `DeploymentPlanReader.get_approval_input` 구현이
+  아예 없으며 D의 plan 저장(ADR-0019 `Proposed`)에 의존한다.
+
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
   에 두고 `AssessmentEvaluationPlan`이 좌표 집합을 가지며 개수는 거기서 파생하므로 둘이 어긋날 수

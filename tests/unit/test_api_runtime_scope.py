@@ -1,12 +1,36 @@
 """Tests for fail-closed Lambda deployment scope configuration."""
 
 import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
-from apps.backend.api.runtime import EnvironmentAssessmentScope
+from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
+from apps.backend.api.runtime import (
+    EnvironmentAssessmentScope,
+    _remediation_exception_components,
+)
 from apps.backend.auth import Principal, Role
 from apps.backend.jobs import AssessmentScopeDenied
+
+
+def _fake_boto3_module() -> types.ModuleType:
+    """`client`/`resource` 호출을 기록만 하는 최소 boto3 대체 모듈을 만든다."""
+    module = types.ModuleType("boto3")
+
+    def client(service_name: str) -> object:
+        return types.SimpleNamespace(service_name=service_name)
+
+    def resource(service_name: str) -> object:
+        return types.SimpleNamespace(
+            service_name=service_name, Table=lambda name: types.SimpleNamespace(name=name)
+        )
+
+    module.client = client  # type: ignore[attr-defined]
+    module.resource = resource  # type: ignore[attr-defined]
+    return module
+
 
 PRINCIPAL = Principal(
     subject="user-001",
@@ -46,3 +70,24 @@ class EnvironmentAssessmentScopeTest(unittest.TestCase):
 
         with self.assertRaises(AssessmentScopeDenied):
             scope.authorize(PRINCIPAL, repository_id="repo-001", policy_profile_id="profile-001")
+
+
+class RemediationExceptionComponentsTest(unittest.TestCase):
+    """Remediation 예외 등록 서비스가 composition root에서 구성되는지 검증한다."""
+
+    def test_builds_service_from_metadata_table(self) -> None:
+        with (
+            patch.dict(sys.modules, {"boto3": _fake_boto3_module()}),
+            patch.dict(os.environ, {"METADATA_TABLE_NAME": "metadata-table"}, clear=True),
+        ):
+            service = _remediation_exception_components()
+
+        self.assertIsInstance(service, RemediationExceptionApiService)
+
+    def test_missing_metadata_table_fails_closed(self) -> None:
+        with (
+            patch.dict(sys.modules, {"boto3": _fake_boto3_module()}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            with self.assertRaises(ValueError):
+                _remediation_exception_components()
