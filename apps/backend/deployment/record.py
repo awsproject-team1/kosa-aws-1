@@ -77,15 +77,26 @@ class DeploymentRecord:
                 raise ValueError("plan_artifact must be a TERRAFORM_PLAN")
             if self.plan_hash != self.plan_artifact.content_sha256:
                 raise ValueError("plan_hash must match the plan artifact digest")
+            self._require_artifact_scope(self.plan_artifact, "plan_artifact")
         if self.binary_artifact is not None:
             if not isinstance(self.binary_artifact, ArtifactReference):
                 raise TypeError("binary_artifact must be an ArtifactReference")
             if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
                 raise ValueError("binary_artifact must be a TERRAFORM_PLAN_BINARY")
+            self._require_artifact_scope(self.binary_artifact, "binary_artifact")
         if self.state_version is not None and not isinstance(
             self.state_version, TerraformStateVersion
         ):
             raise TypeError("state_version must be a TerraformStateVersion")
+
+    def _require_artifact_scope(self, artifact: ArtifactReference, name: str) -> None:
+        # An artifact must belong to the deployment's own customer and repository;
+        # a type-only check would let a plan/binary from another tenant or repo bind
+        # to this deployment (PR #48 review [P1]).
+        if artifact.customer_id != self.customer_id:
+            raise ValueError(f"{name} customer_id must match the deployment customer_id")
+        if artifact.repository_id != self.repository_id:
+            raise ValueError(f"{name} repository_id must match the deployment repository_id")
 
     @property
     def has_plan(self) -> bool:

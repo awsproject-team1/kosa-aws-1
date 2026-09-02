@@ -189,5 +189,43 @@ class DynamoDbDeploymentRepositoryTest(unittest.TestCase):
             repository.get_deployment(customer_id="other", deployment_id=DEPLOYMENT)
 
 
+class DeploymentRecordArtifactScopeTest(unittest.TestCase):
+    def test_binary_artifact_customer_must_match_the_deployment(self) -> None:
+        with self.assertRaisesRegex(ValueError, "binary_artifact customer_id"):
+            _record(
+                binary_artifact=ArtifactReference(
+                    artifact_id="art-plan-binary-001",
+                    artifact_type=ArtifactType.TERRAFORM_PLAN_BINARY,
+                    content_sha256="binary-001",
+                    customer_id="other-customer",
+                    repository_id=REPO,
+                )
+            )
+
+    def test_binary_artifact_repository_must_match_the_deployment(self) -> None:
+        with self.assertRaisesRegex(ValueError, "binary_artifact repository_id"):
+            _record(
+                binary_artifact=ArtifactReference(
+                    artifact_id="art-plan-binary-001",
+                    artifact_type=ArtifactType.TERRAFORM_PLAN_BINARY,
+                    content_sha256="binary-001",
+                    customer_id=CUSTOMER,
+                    repository_id="other-repo",
+                )
+            )
+
+    def test_plan_artifact_customer_must_match_the_deployment(self) -> None:
+        with self.assertRaisesRegex(ValueError, "plan_artifact customer_id"):
+            _record(
+                plan_artifact=ArtifactReference(
+                    artifact_id="art-plan-001",
+                    artifact_type=ArtifactType.TERRAFORM_PLAN,
+                    content_sha256="plan-001",
+                    customer_id="other-customer",
+                    repository_id=REPO,
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
