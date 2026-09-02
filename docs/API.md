@@ -48,8 +48,11 @@ Source를 승인하면 빈 후보로 `EMPTY_PROFILE` 거부가 난다. 상세 wo
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
 그대로 사용하며 스스로 만들지 않는다.
 
-승인과 Profile 게시는 서로 다른 operation이다. `/approve`는 Source/Control/Rule version을
-확정하고, Profile 게시가 그 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
+승인과 Profile 게시는 서로 다른 operation이다. `/approve`는 body로 승인할 Rule 목록
+(`{"approved_rules": [{"rule_id", "version"}, ...]}`)을 받아 그 부분집합만 확정한다 — 리뷰어가
+추출 후보 6건 중 4건만 고를 수 있어야 하므로, AI 후보 전량에 서명을 찍지 않는다
+(`docs/POLICY_INGESTION.md` 인수 조건 4). 목록에 없는 후보는 CANDIDATE로 남는다. Profile 게시가
+그 승인된 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
 참조하거나 승인된 것과 다른 Source version을 가리키는 Profile을 거부한다. 두 단계를 하나의
 operation으로 합치더라도 이 거부 조건과 audit record 기록은 동일하게 적용한다.
 

@@ -43,6 +43,14 @@
 
 ## Completed
 
+- M1 A 승인 API 부분 승인 지원 (PR #44 리뷰 대응 1): `PolicyApprovalApiService.approve`가
+  승인할 `approved_rules`(`(rule_id, version)` 목록)를 받아 `load_review` 후보 중 그 부분집합만
+  골라 `approve_source()`에 넘긴다. 리뷰어가 추출 후보 전량이 아니라 일부만 승인할 수 있어야
+  검토 게이트가 형식으로 남지 않는다(`docs/POLICY_INGESTION.md` 인수 조건 4). handler는
+  `POST .../approve` body(`{"approved_rules": [...]}`)를 파싱하고, 후보에 없는 Rule·빈 목록·중복은
+  거부한다. B 순수 함수(`approve_source`)는 이미 "고른 것만 받는" 형태라 변경하지 않았다.
+  부분 승인·미존재 Rule 거부·빈 선택 거부 unit 테스트 추가. `docs/API.md` 갱신.
+
 - M1 A 승인·게시 API를 배포 Lambda에 배선: `runtime.py`의 `_http_handler`에
   `_policy_approval_components()`를 추가해 `PolicyApprovalApiService`(write는 low-level
   `transaction_client`, read는 resource `table` 주입)를 `policy_approvals`로 주입했다.
