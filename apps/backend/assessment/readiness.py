@@ -4,6 +4,7 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
+    PlannedEvaluation,
     ReadinessScore,
 )
 
@@ -12,9 +13,15 @@ _NON_SCORING_STATUSES = frozenset({EvaluationStatus.OUT_OF_SCOPE, EvaluationStat
 
 
 def calculate_readiness_score(
-    *, results: tuple[EvaluationResult, ...], planned_evaluations: int
+    *,
+    results: tuple[EvaluationResult, ...],
+    planned_evaluations: tuple[PlannedEvaluation, ...],
 ) -> ReadinessScore | None:
     """Return a score only when the immutable plan has fully completed.
+
+    Completion is a set comparison against the planned coordinates, not a count
+    (ADR-0020 §5). Counting alone publishes a score when an unplanned evaluation
+    silently fills the slot of a planned one that never ran.
 
     Evaluation scores are weighted by the policy Rule severity. OUT_OF_SCOPE has
     no readiness meaning and EXECUTION_ERROR prevents publication via Coverage.
@@ -27,17 +34,26 @@ def calculate_readiness_score(
     """
     if not isinstance(results, tuple):
         raise TypeError("results must be a tuple")
-    if isinstance(planned_evaluations, bool) or not isinstance(planned_evaluations, int):
-        raise TypeError("planned_evaluations must be an integer")
-    if planned_evaluations <= 0:
-        raise ValueError("planned_evaluations must be greater than zero")
+    if not isinstance(planned_evaluations, tuple):
+        raise TypeError("planned_evaluations must be a tuple")
+    if not all(isinstance(value, PlannedEvaluation) for value in planned_evaluations):
+        raise TypeError("planned_evaluations must contain PlannedEvaluation values")
+    planned = set(planned_evaluations)
+    if not planned:
+        raise ValueError("planned_evaluations must not be empty")
+    if len(planned) != len(planned_evaluations):
+        raise ValueError("planned_evaluations must not contain duplicates")
     completed = {
-        (result.resource_id, result.rule_id, result.perspective.value)
+        PlannedEvaluation(
+            resource_id=result.resource_id,
+            rule_id=result.rule_id,
+            perspective=result.perspective,
+        )
         for result in results
         if isinstance(result, EvaluationResult)
         and result.status is not EvaluationStatus.EXECUTION_ERROR
     }
-    if len(completed) != planned_evaluations:
+    if completed != planned:
         return None
     scoring_results = tuple(
         result

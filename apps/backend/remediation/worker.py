@@ -12,6 +12,7 @@ from packages.contracts import (
     RemediationContext,
     RemediationDecision,
     RemediationPatch,
+    RemediationSyncTarget,
     WorkflowCommand,
     WorkflowTask,
 )
@@ -52,22 +53,6 @@ class RemediationWork:
         if self.context.snapshot.customer_id != self.customer_id:
             raise ValueError("context customer scope does not match work")
         _require_decision_binding(self.context, self.decision)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RemediationSyncTarget:
-    """Validated current IaC commit that D may use as a later Plan input."""
-
-    finding_id: str
-    customer_id: str
-    repository_id: str
-    commit_sha: str
-
-    def __post_init__(self) -> None:
-        for name in ("finding_id", "customer_id", "repository_id", "commit_sha"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must be a non-empty string")
 
 
 class RemediationWorkRepository(Protocol):

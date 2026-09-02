@@ -427,20 +427,27 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
 ```
 
-`AuditEventType`은 감사 event의 **종류**를 담는 enum이고 정본 필드명은 `event_type`이다.
-`action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가 한 item에서 `event_type`
-(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고 있어, `action`으로
-통일하면 두 값이 같은 키를 다툰다. 이관 대상은 현재 `action` 필드명을 쓰는 세 곳
+`AuditEventType`(`packages/contracts/audit.py`)은 감사 event의 **종류**를 담는 StrEnum이고 정본
+필드명은 `event_type`이다. `action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가
+한 item에서 `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고
+있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. `action`을 종류 필드로 쓰던 세 곳
 (`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
-`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)이며, 이미 `event_type`을 쓰는
-`REMEDIATION_DECIDED`·`REMEDIATION_EXCEPTION_APPROVED`는 그대로 둔다. 읽는 코드가 없어 write-only
-변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. M3에서 `DEPLOYMENT_REQUESTED`,
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)을 `event_type`으로 개명해, 다섯 writer가 모두
+같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
+`REMEDIATION_EXCEPTION_APPROVED`를 더한 다섯이며, M3의 `DEPLOYMENT_REQUESTED`,
 `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가되므로 값이 늘기 전에 선행한다.
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 합의와 함께 추가한다.
 
-`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
-역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
-옮긴다.
+`PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
+단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야
+`INDETERMINATE`를 표현할 수 있다(ADR-0020 §4). `AssessmentEvaluationPlan`은 이 좌표의 **집합**을
+갖고 개수는 집합에서 파생하므로 둘이 어긋날 수 없다. `calculate_readiness_score`는 개수가 아니라
+이 집합을 받아 완료 집합과 비교한다 — 개수 비교는 계획에 없던 평가가 누락된 평가의 자리를 채운
+경우를 통과시킨다. `AssessmentCoverage`의 개수 필드는 그대로다.
+
+`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형이므로 C의 앱 모듈이 아니라
+`packages/contracts/remediation.py`에 있다. 역할 경계를 넘는 타입이 한 역할의 앱 코드에 있으면
+다른 역할이 그 내부 모듈을 import해야 한다. `apps.backend.remediation`의 재노출은 유지한다.
 
 `AssessmentComparison`은 두 immutable Assessment의 Coverage/Readiness와 Finding Resolution을
 읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,

@@ -2,6 +2,9 @@
 
 ## Current
 
+- ADR-0020 파생 Contract를 동결했다. Assessment 계획이 개수가 아니라
+  `(resource_id, rule_id, perspective)` **집합**으로 저장되므로 C의 비교 경계를 실제로 배선할 수
+  있다. `AuditEventType`과 `RemediationSyncTarget` 위치도 같은 변경에서 정리했다. 후속 PR 검토 대기
 - ADR-0020(Post-Deploy Verification과 before/after 비교)·ADR-0021(Demo·Release readiness gate)을
   `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
   before/after projection을 구현했고 18개(6 Rule × 3 perspective) Golden fixture gate를 확인했다.
@@ -28,6 +31,20 @@
 
 ## Completed
 
+- M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
+  `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
+  에 두고 `AssessmentEvaluationPlan`이 좌표 집합을 가지며 개수는 거기서 파생하므로 둘이 어긋날 수
+  없다. `ASSESSMENT#{assessment_id}#PLAN` item에 `planned_coordinates` 속성이 늘고
+  (write 수는 그대로), `get_planned_evaluations()`가 비교 경계에 그 집합을 돌려준다.
+  `calculate_readiness_score`는 개수 대신 집합을 받아 완료 집합과 비교한다 — 개수 비교는 계획에
+  없던 평가가 누락된 평가의 자리를 채운 경우를 통과시켰다(회귀 테스트로 고정). 집합이 없는 옛
+  plan은 재구성하지 않고 readiness `null`·조회 거부로 fail-closed한다. 다중 리소스 Assessment는
+  `AssessmentResourceWork.planned_coordinates`로 집합을 주입하고, 단일 리소스는 Worker가 Rule ×
+  관점으로 파생한다. 함께: 감사 event 종류 필드를 `event_type` 하나로 통일하고 값 어휘를
+  `AuditEventType`(`packages/contracts/audit.py`)으로 고정했으며(`action`은 `RemediationAction`
+  payload 전용으로 남는다), D의 `SyncAction` 반환형 `RemediationSyncTarget`을
+  `packages/contracts/remediation.py`로 옮겼다
+
 - M1 sandbox readiness hardening: live work를 composition root의 승인 Model Profile에 결합하고,
   lowercase 40자 commit, explicit live/fixture mode, exact selector/ARN/account/Profile Region preflight,
   credential Secret 역할 분리와 canonical GitHub `owner/repository` identity 검증, CloudFormation M1
@@ -35,6 +52,7 @@
   preflight·runtime config·최종 REST adapter에서 같은 fail-closed guard를 재사용한다. 최신 `dev` 통합 후
   Ruff 247 files, Unit 430, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
   Assessment 25-call·Policy Catalog 11-item dry-run 통과
+
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
   delta를 fail-closed로 차단한다.
@@ -63,8 +81,8 @@
   본문과 AWS Actual을 각각 평가한 뒤 `DRIFT`를 Code로 결정적으로 파생한다. Drift는 두 판정의
   불일치이며 AI 판정이 아니고, score 정합 100 / 이탈 0에 evidence는 두 관점의 합집합이다.
   Coverage 분모는 `Resource × Rule × Perspective`이고, 다중 관점 Assessment는
-  `AssessmentResourceWork.planned_evaluations`로 서버가 계획을 고정해 첫 task가 분모를
-  결정하지 못하게 한다. Readiness Score는 정합 여부가 준수 수준이 아니므로 `DRIFT`를 제외한다
+  `AssessmentResourceWork.planned_coordinates`(ADR-0020 이후 개수가 아니라 집합)로 서버가 계획을
+  고정해 첫 task가 분모를 결정하지 못하게 한다. Readiness Score는 정합 여부가 준수 수준이 아니므로 `DRIFT`를 제외한다
 - M1 D IAC 관점용 read-only Terraform 본문 read 추가: `IaCSnapshot`은 Artifact reference라
   IaC 준수 판정에 부족하므로 `IaCDocument`와 `IaCDocumentReader` port를 추가하고 GitHub REST
   adapter(`git/blobs`, GET only, 1MB 상한)와 Mock에 구현했다. 본문 read는
@@ -180,13 +198,12 @@
 - **M3 A/D 합의 선행 (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 PR에 A·D가 approve하는
   것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과 근거가 모두 들어 있다. approve가
   모이면 같은 PR에서 상태를 `Accepted`로 바꾼다.
-- **M3 Contract 동결 — ADR-0020 파생분(지금 착수 가능):** ADR-0020이 `Accepted`이므로 아래는
-  ADR-0019 합의를 기다리지 않는다.
-  1. `ASSESSMENT#{assessment_id}#PLAN` item에 planned `(resource_id, rule_id, perspective)` **집합**
-     속성 추가 (A). **이것 없이는 C의 비교 경계를 실제로 배선할 수 없다.**
-  2. `calculate_readiness_score`가 개수 대신 planned 집합을 받도록 변경 (A·C)
-  3. `AuditEventType` StrEnum 신설 + `action`을 종류 필드로 쓰는 3건 개명 (A, 아래 현존 결함)
-  4. `RemediationSyncTarget`을 `packages/contracts/`로 이관 (C→공용)
+- **M3 A (ADR-0020 파생분의 남은 절반):** planned 집합은 저장되지만 검증 Assessment의 선택자는
+  아직 없다. Assessment item에 `phase`/`source_assessment_id`/`deployment_id`를 영속화하고
+  `apps/backend/assessment/runtime.py`의 `AssessmentPhase.INITIAL` 하드코딩을 인자로 바꾼 뒤,
+  `GET /deployments/{deploymentId}/verification`을 `compare_post_deploy_assessments()`에 배선한다
+  (ADR-0020 §1·§7). 계획 집합 주입은 `DynamoDbAssessmentReportStore.get_planned_evaluations()`로
+  이미 가능하다
 - **M3 Contract 동결 — ADR-0019 파생분(합의 이후):** `DeploymentStatus` enum과
   `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
   `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
@@ -194,13 +211,8 @@
   (`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`, `ActualRereadPort`)과 그 반환형.
   **port 시그니처를 맨 앞에 둔다** — 확정되는 순간 A·C가 Protocol + fixture로 병렬 진입한다.
   M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
-- **M2 A (현존 결함):** audit event의 종류 필드가 `action`(`repositories/deployment.py`,
-  `repositories/policy_approval.py` 2곳)과 `event_type`(`repositories/dynamodb.py`,
-  `repositories/remediation.py`)으로 갈려 있어 균일 조회가 불가능하다. 정본 필드명은 `event_type`
-  이다 — `dynamodb.py`가 같은 item에서 `action`을 `RemediationAction` 값으로 이미 쓰고 있어
-  `action`으로 통일하면 두 값이 같은 키를 다툰다. 읽는 코드가 없어 write-only 변경이고 함께 바뀌는
-  것은 단위 테스트 assertion 4건이다. Admin `GET /audit-events`를 만들기 전에, 그리고 M3에서 값이
-  7개 더 늘기 전에 선행한다.
+- **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
+  `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase Golden Case가 0건이다. 재평가 품질 Gate를 돌리려면 이
   phase의 Case를 추가해야 하며, 원 Assessment와 같은 `model_profile_id`·`rubric_version`을 써야
   비교가 성립한다 (ADR-0020 §3).
@@ -261,10 +273,9 @@
   `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
   `(resource_id, rule_id, perspective)` **집합**의 durable 저장·조회와 endpoint 배선을, D는 apply
   완료 뒤 Actual 재조회 입력을 제공해야 한다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
-  **planned 집합은 현재 어디에도 저장되지 않고 조회 시 재구성도 불가능하다** (리소스 목록이 시간에
-  따라 달라지고, 결과에서 거꾸로 세면 누락된 평가가 보이지 않는다). `ASSESSMENT#{id}#PLAN` item에
-  속성으로 추가하는 것이 선행 조건이며, 그 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
-  동작한다.
+  **planned 집합 저장은 해소됐다** — `ASSESSMENT#{id}#PLAN` item의 `planned_coordinates` 속성과
+  `DynamoDbAssessmentReportStore.get_planned_evaluations()` 조회가 들어갔다. 남은 차단 요인은
+  `phase`/`source_assessment_id`/`deployment_id` 영속화와 D의 apply 후 Actual 재조회 입력이다.
   *Owner:* A + D (+ B exception read). *Blocks:* live M3 verification endpoint와 M4 customer runtime report,
   C의 mock/contract implementation은 차단하지 않는다.
 

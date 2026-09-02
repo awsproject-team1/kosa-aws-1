@@ -5,10 +5,16 @@ import unittest
 from apps.backend.assessment import (
     AssessmentEvaluationPlan,
     AssessmentReportNotFoundError,
+    AssessmentReportStoreError,
     DynamoDbAssessmentReportStore,
     DynamoDbEvaluationResultStore,
 )
-from packages.contracts import EvaluationPerspective, EvaluationResult, EvaluationStatus
+from packages.contracts import (
+    EvaluationPerspective,
+    EvaluationResult,
+    EvaluationStatus,
+    PlannedEvaluation,
+)
 
 
 class Table:
@@ -79,15 +85,26 @@ def result(
     )
 
 
+def plan(*resource_ids: str, assessment_id: str = "asm-001") -> AssessmentEvaluationPlan:
+    return AssessmentEvaluationPlan(
+        customer_id="cust-001",
+        assessment_id=assessment_id,
+        planned_coordinates=tuple(
+            PlannedEvaluation(
+                resource_id=resource_id,
+                rule_id="S3-001",
+                perspective=EvaluationPerspective.IAC,
+            )
+            for resource_id in resource_ids
+        ),
+    )
+
+
 class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
     def test_reads_results_and_coverage_from_the_immutable_plan(self) -> None:
         table = Table()
         report_store = DynamoDbAssessmentReportStore(table)
-        report_store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
-            )
-        )
+        report_store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
         DynamoDbEvaluationResultStore(table).put_if_absent(
             customer_id="cust-001", assessment_id="asm-001", results=(result(),)
         )
@@ -107,11 +124,7 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
     def test_returns_an_opaque_result_cursor_with_full_assessment_coverage(self) -> None:
         table = Table()
         report_store = DynamoDbAssessmentReportStore(table)
-        report_store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
-            )
-        )
+        report_store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
         DynamoDbEvaluationResultStore(table).put_if_absent(
             customer_id="cust-001",
             assessment_id="asm-001",
@@ -134,11 +147,7 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
     def test_report_exposes_derived_findings_and_weighted_readiness_when_complete(self) -> None:
         table = Table()
         report_store = DynamoDbAssessmentReportStore(table)
-        report_store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
-            )
-        )
+        report_store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
         DynamoDbEvaluationResultStore(table).put_if_absent(
             customer_id="cust-001",
             assessment_id="asm-001",
@@ -159,11 +168,7 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
     def test_readiness_score_is_unavailable_until_the_full_plan_is_covered(self) -> None:
         table = Table()
         report_store = DynamoDbAssessmentReportStore(table)
-        report_store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
-            )
-        )
+        report_store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
         DynamoDbEvaluationResultStore(table).put_if_absent(
             customer_id="cust-001", assessment_id="asm-001", results=(result(),)
         )
@@ -175,11 +180,7 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
     def test_pages_findings_with_an_independent_cursor(self) -> None:
         table = Table()
         store = DynamoDbAssessmentReportStore(table)
-        store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=2
-            )
-        )
+        store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
         DynamoDbEvaluationResultStore(table).put_if_absent(
             customer_id="cust-001",
             assessment_id="asm-001",
@@ -202,14 +203,69 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
         self.assertEqual(len(second.findings), 1)
         self.assertIsNone(second.findings_next_cursor)
 
+    def test_readiness_needs_the_planned_set_not_a_matching_count(self) -> None:
+        table = Table()
+        report_store = DynamoDbAssessmentReportStore(table)
+        report_store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001",
+            assessment_id="asm-001",
+            results=(result(), result(resource_id="bucket-003")),
+        )
+
+        report = report_store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(report.coverage.completed_evaluations, 2)
+        self.assertIsNone(report.readiness_score)
+
+    def test_exposes_the_planned_set_for_the_comparison_boundary(self) -> None:
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
+
+        planned = store.get_planned_evaluations(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(
+            set(planned),
+            {
+                PlannedEvaluation(
+                    resource_id=resource_id,
+                    rule_id="S3-001",
+                    perspective=EvaluationPerspective.IAC,
+                )
+                for resource_id in ("bucket-001", "bucket-002")
+            },
+        )
+
+    def test_a_plan_without_a_stored_set_is_neither_scored_nor_reconstructed(self) -> None:
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(plan("bucket-001"))
+        del table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001#PLAN")]["planned_coordinates"]
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001", assessment_id="asm-001", results=(result(),)
+        )
+
+        report = store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(report.coverage.completed_evaluations, 1)
+        self.assertIsNone(report.readiness_score)
+        with self.assertRaises(AssessmentReportNotFoundError):
+            store.get_planned_evaluations(customer_id="cust-001", assessment_id="asm-001")
+
+    def test_rejects_a_plan_whose_count_disagrees_with_its_coordinates(self) -> None:
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(plan("bucket-001", "bucket-002"))
+        table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001#PLAN")]["planned_evaluations"] = 3
+
+        with self.assertRaises(AssessmentReportStoreError):
+            store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
     def test_incomplete_counter_avoids_full_result_scan_for_a_page(self) -> None:
         table = Table()
         store = DynamoDbAssessmentReportStore(table)
-        store.put_plan_if_absent(
-            AssessmentEvaluationPlan(
-                customer_id="cust-001", assessment_id="asm-001", planned_evaluations=3
-            )
-        )
+        store.put_plan_if_absent(plan("bucket-001", "bucket-002", "bucket-003"))
         table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001#PLAN")]["completed_evaluations"] = 1
 
         page = store.get_report_page(customer_id="cust-001", assessment_id="asm-001", limit=1)
