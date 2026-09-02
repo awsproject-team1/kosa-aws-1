@@ -19,6 +19,14 @@
   검증이 남은 건 `_live_plan_outputs_fetcher`의 GitHub plan run I/O(dispatch·폴링·artifact 파싱)로,
   이는 실제 sandbox 자격 증명·네트워크가 있어야 동작·검증되며 그전까지 호출 시 명시적으로 막는다.
   A가 공유 계약대로 `#EVENT` 예약 write를 붙이고 sandbox 자격 증명이 준비되면 live E2E가 열린다.
+- M4 B/C release-readiness 구현: Demo Policy Coverage manifest/validator가 승인 Profile의 6 Rule,
+  5 Control, 12 version-pinned policy locator와 Initial/Post-Deploy 36 Golden 좌표를 교차 검증한다.
+  M4 C live gate는 customer-sandbox Post-Deploy 18 Case를 5회 반복한 60 Bedrock IAC/Actual 결과와
+  같은 run에서 Code로 파생한 DRIFT 30개를 strict하게 검증하고 aggregate-only report를 만든다.
+  Initial FAIL/FAIL Golden DRIFT 기대값도 ADR-0011에 맞춰 PASS/100으로 교정했다. A/D handoff와
+  private observation/sanitized report 경계는 ADR-0022(`Accepted`) 및 두 M4 runbook에 기록했다.
+  실제 protected sandbox observation·관측/비용·demo run은 외부 승인 대기이며 fixture/dry-run을
+  release evidence로 표시하지 않는다.
 - M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
   `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
   `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule
@@ -135,6 +143,15 @@
   M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
+
+- M4 B/C repository release gate 준비 완료: `fixtures/m4/demo_policy_coverage.json`과 strict validator/
+  CLI로 Demo의 version-pinned Rule·Control·근거·36 Coverage 좌표를 고정하고, Post-Deploy 18 Case ×
+  5 run customer observation gate(60 Bedrock + 30 Code-derived DRIFT)를 추가했다. Case/perspective/전체
+  90% 기준, score spread 10 이하, 실행 오류 0, exact approved Profile/artifact/run binding을
+  fail-closed로 검증하며 공개 report는 민감 원문 없이 aggregate/digest만 가진다. 실제 customer
+  evidence는 ADR-0022 handoff에 따라 A/D protected run이 제공할 때만 생성한다. 모든 Bedrock 호출이
+  실패한 완전한 입력은 p95 `null`인 품질 FAIL(exit 1)로 보고한다. 전체 검증: Unit 639,
+  Contract 136, Security 74, Integration 9, Ruff 275 files.
 
 - M4 D 데모 IaC 참조·시나리오와 폐루프 runbook 문서 완결 (ADR-0021 §1·§3): 데모 Terraform은 별도
   고객 sandbox repository에 두고 이 저장소에는 참조만 남긴다는 결정에 따라, `docs/M4-DEMO-IAC-REFERENCE.md`
@@ -531,9 +548,12 @@
 - M1 A/C: 대규모 Assessment 페이지 조회 비용을 줄이기 위해 immutable 결과 저장과 같은
   DynamoDB transaction에서 Assessment plan의 completed counter를 갱신하는 storage migration.
   같은 작업에서 `findings`도 페이지네이션한다 (현재는 페이지마다 전체 Finding을 반환한다)
-- M4 C: customer sandbox/Demo IaC가 준비되면 18개 Golden Case의 실제 Bedrock 반복 평가 리포트를
-  생성해 ADR-0021 release gate 증적으로 첨부한다. fixture gate는 완료됐지만 protected runtime 없는
-  mock 결과는 릴리스 근거가 아니다.
+- M4 C external evidence: A/D가 protected customer sandbox의 Post-Deploy artifact set과 실제 Demo
+  실행을 제공하면 `docs/M4-GOLDEN-RELEASE-GATE.md` 절차로 18 Case × 5 run private observation
+  bundle을 만들고 `scripts/evaluate_m4_golden_release_gate.py --observations ...`로 sanitized report를
+  생성한다. Dry-run의 `EXTERNAL_EVIDENCE_REQUIRED`나 fixture 결과는 release 통과 근거가 아니다.
+  같은 `execution_id`와 repository/deployment/artifact digest로 A 관측·비용, D plan/apply 증적을
+  결합한다 (ADR-0022).
 - M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
   ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
   선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
@@ -557,10 +577,11 @@
 - M1 actual sandbox validation: 두 protected GitHub Environment에 required reviewer가 없고 deploy
   Environment의 `M1_ASSESSMENT_MODE` 및 M1 Secret 3개가 미설정이다. 로컬 AWS credential도 없으므로
   bootstrap/runtime target 생성과 실제 workflow dispatch는 고객 관리자·승인자 작업 대기
-- M1 live Golden quality gate: 6 Rule × 3 perspective case의 artifact resolver와 versioned
-  prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
-  derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
-  generic benchmark 결과를 M1 gate 통과로 간주하지 않음
+- M1/M4 live Golden quality evidence: Initial FAIL/FAIL pair의 DRIFT 기대값은 ADR-0011에 맞춰
+  PASS/100으로 교정했고, Post-Deploy 18 Case의 profile/case/run/artifact-bound M4 gate도 구현했다.
+  남은 차단은 customer artifact resolver/exporter, protected customer runtime·Demo repository,
+  AWS/GitHub 승인과 실제 observation bundle이다. 이 입력 전에는 generic benchmark, fixture evaluator,
+  synthetic observation을 M1/M4 release gate 통과로 간주하지 않는다.
 - ~~**M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`)**~~ **해소됨
   (2026-09-02): ADR-0019 `Accepted`.** A·D·Security가 서명 PR 리뷰 approve로 서명했다. 이로써
   M2 A audit 정본화, M2/M3 D live plan/apply, M3 A Deployment 생성·상태 API가 구현 가능해졌다.
@@ -673,10 +694,17 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
 
 - [ ] **A — Platform/Backend:** 배포/운영 점검, 오류·성능·비용 관측 검증 *(통과 기준은 값의 존재로
   정의한다 — ADR-0021 §3)*
-- [ ] **B — Policy/Governance Boundary:** Demo Policy/Rule/근거와 Coverage 설명 검증
-- [x] **C — AI Evaluation:** Golden Dataset 품질 목표의 executable fixture gate 완료
-  *(6 Rule × IAC/AWS_ACTUAL/DRIFT, 총 18개 Case. customer Bedrock 반복 실행 리포트는 release 증적으로
-  A/D sandbox 준비 뒤 생성하며, 미달 시 목표를 낮추지 않는다 — ADR-0021 §2)*
+- [x] **B — Policy/Governance Boundary:** Demo Policy/Rule/근거와 Coverage 설명 검증
+  *(`m4-demo-policy-coverage-v1` manifest와 strict validator/CLI가 `profile-mvp-baseline@v2`의
+  6 Rule, 5 Control, 12 version-pinned Rule/Control locator, Initial/Post-Deploy × 3 perspective
+  36 Golden case를 Registry/fixture와 교차 검증한다. 외부 Demo repository는 여섯 semantic
+  `demo_toggle`을 D runbook에서 매핑하며 실제 repository/IaC/credential은 manifest에 넣지 않는다)*
+- [x] **C — AI Evaluation:** Golden Dataset 품질 목표의 executable fixture/customer-observation
+  gate 완료 *(Initial/Post-Deploy 각 6 Rule × IAC/AWS_ACTUAL/DRIFT의 36-case fixture gate와,
+  Post-Deploy 18 Case × 5 run의 customer-sandbox observation gate 구현. live gate는 60 Bedrock
+  IAC/Actual과 같은 run의 30 Code-derived DRIFT, exact Profile/rubric/artifact binding, per-case/
+  perspective/overall threshold를 검증하고 sanitized report만 출력한다. 실제 protected run report는
+  A/D sandbox 준비 뒤 release 증적으로 생성하며 dry-run/fixture는 근거가 아니다 — ADR-0021/0022)*
 - [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인 *(데모 IaC는 별도
   고객 sandbox repository — ADR-0021 §1. **문서 몫 완료:** `docs/M4-DEMO-IAC-REFERENCE.md`(별도
   데모 저장소 식별자·전제조건·6개 S3 Rule 1:1 위반 토글 매핑·세 관점 재현), `docs/M4-DEMO-RUNBOOK.md`
