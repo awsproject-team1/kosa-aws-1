@@ -211,6 +211,7 @@ zip 한도로는 잡히지 않는다 — 증폭이 압축 해제 이후 Parser �
 | --- | --- |
 | `RuleLifecycle` | `CANDIDATE`/`APPROVED`/`REJECTED`/`SUPERSEDED`. `docs/DATABASE.md`의 Rule metadata가 담는 lifecycle |
 | `RuleCandidate` | 승인 전 Rule. frozen이며 `approved()`가 새 값을 만든다 |
+| `PolicyCandidateExtraction` | C가 exact `READY` 정규화 문서에서 만든 immutable 후보 묶음. 문서 metadata, 후보와 extractor ID/version만 담고 원문·정규화 text는 담지 않는다. A는 이 결과를 저장해 review/publication read port에서 같은 문서 판본과 함께 복원한다. |
 | `PolicySourceApproval` | `(source_id, source_version, artifact_id, s3_version_id, content_sha256)`을 인용하는 immutable 승인 record |
 | `ApprovalRejectionCode` | 승인·게시 거부 사유. 자유 문장이 아니다 |
 
