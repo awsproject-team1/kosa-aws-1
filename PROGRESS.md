@@ -2,6 +2,13 @@
 
 ## Current
 
+- M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
+  `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
+  `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule
+  위반 토글 1:1 매핑이 `fixtures/rules/remediation.json` eligibility(AUTOMATIC=PUBLIC/ACL/TLS, MANUAL_ONLY=
+  POLICY/ENCRYPT/LOGGING)·`rules.s3.json` version `2026-08-31`과 일치. PR #49 리팩터링(D port 파일 이동)은 문서
+  참조 파일을 바꾸지 않아 문서 수정 불필요. 검증: ruff 256 files, Unit 538 / Contract 135 / Integration 9 /
+  Security 72 OK. 남은 D 조각(customer runtime 배선)은 A Deployment 생성·상태 endpoint의 `dev` 병합 뒤 착수한다.
 - `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
   그 run 좌표가 필요한데(ADR-0019 §1), 정본 port에 실을 자리가 없어 live apply dispatch가
   GitHub API 422로 거부되던 상태였다. `PlanExecutionResult.plan_run`(`WorkflowRunReference`)을
