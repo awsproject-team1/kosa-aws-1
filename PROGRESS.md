@@ -25,6 +25,11 @@
 - M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
   Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
   분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
+- **2026-09-02 일정 단축 운영 합의(M4의 `dev` 병합까지):** 남은 범위는 M2 통합 PR → M3 통합 PR →
+  M4 통합 PR 순서로 진행하고, 각 브랜치는 앞 마일스톤이 `dev`에 병합된 뒤 최신 `dev`에서 만든다.
+  통합 PR 안에서는 기능·Contract·문서·검증 관심사별 Conventional Commit을 보존하고 squash 없이
+  merge commit으로 병합한다. 기존 Owner 승인·ADR/Contract checkpoint·필수 CI를 생략하지 않으며,
+  M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
 
@@ -177,30 +182,41 @@
 
 ## Next
 
-- **M3 A/D 합의 선행 (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 PR에 A·D가 approve하는
-  것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과 근거가 모두 들어 있다. approve가
-  모이면 같은 PR에서 상태를 `Accepted`로 바꾼다.
-- **M3 Contract 동결 — ADR-0020 파생분(지금 착수 가능):** ADR-0020이 `Accepted`이므로 아래는
-  ADR-0019 합의를 기다리지 않는다.
+- **M2 → M3 → M4 순차 통합 PR (M4의 `dev` 병합까지 한시 적용):**
+  1. M2 PR은 `AuditEventType` 신설과 audit `event_type` 정규화, D의 live GitHub
+     branch/commit/PR·refreshed plan/runtime 배선, Shared Approval·Security·Patch/Plan 통합 검증을
+     묶는다. ADR-0019가 막는 live plan 구현 전 이 PR을 열어 A·D·Security approve를 받고 `Accepted`
+     상태·관련 정본 동기화 커밋을 먼저 완료하며, 이후 구현 커밋을 추가한 뒤 전체 PR을 다시
+     Review·검증한다.
+  2. M3 PR은 M2가 `dev`에 병합된 뒤 시작한다. Contract 커밋은 Producer/Consumer Owner가 먼저
+     동결하고, planned 집합 저장과 A/B/C/D/Shared 통합을 세부 커밋으로 이어 붙인 뒤 전체 검증한다.
+  3. M4 PR은 M3가 `dev`에 병합되고 M0–M3 Exit criteria가 충족된 뒤 시작한다. protected sandbox의
+     Demo·Golden·관측·비용·E2E 증적과 문서 Freshness를 확인해 `dev`에 병합한다. 이후 Release gate
+     증적을 첨부한 별도 `dev → main` PR은 사람이 생성한다.
+- **M2 PR 내부 선행 checkpoint (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 M2 PR에
+  A·D·Security가 approve하는 것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과
+  근거가 모두 들어 있다. 세 Owner의 approve가 모이면 같은 PR에서 상태를 `Accepted`로 바꾸고,
+  차단됐던 audit 정본화·live plan 구현 커밋은 그 이후에만 시작한다.
+- **M3 Contract 동결 — ADR-0020 파생분(M2의 `dev` 병합 이후):** ADR-0020은 `Accepted`이며 아래
+  Contract부터 Producer/Consumer Owner checkpoint를 거쳐 순차 구현한다.
   1. `ASSESSMENT#{assessment_id}#PLAN` item에 planned `(resource_id, rule_id, perspective)` **집합**
      속성 추가 (A). **이것 없이는 C의 비교 경계를 실제로 배선할 수 없다.**
   2. `calculate_readiness_score`가 개수 대신 planned 집합을 받도록 변경 (A·C)
-  3. `AuditEventType` StrEnum 신설 + `action`을 종류 필드로 쓰는 3건 개명 (A, 아래 현존 결함)
-  4. `RemediationSyncTarget`을 `packages/contracts/`로 이관 (C→공용)
-- **M3 Contract 동결 — ADR-0019 파생분(합의 이후):** `DeploymentStatus` enum과
+  3. `RemediationSyncTarget`을 `packages/contracts/`로 이관 (C→공용)
+- **M3 Contract 동결 — ADR-0019 Accepted 이후:** `DeploymentStatus` enum과
   `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
   `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
   `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin 전용), D 실행 port 시그니처 4종
   (`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`, `ActualRereadPort`)과 그 반환형.
   **port 시그니처를 맨 앞에 둔다** — 확정되는 순간 A·C가 Protocol + fixture로 병렬 진입한다.
   M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
-- **M2 A (현존 결함):** audit event의 종류 필드가 `action`(`repositories/deployment.py`,
+- **M2 A (현존 결함):** `AuditEventType` StrEnum을 신설하고 audit event의 종류 필드를
+  `event_type`으로 통일한다. 현재 `action`(`repositories/deployment.py`,
   `repositories/policy_approval.py` 2곳)과 `event_type`(`repositories/dynamodb.py`,
-  `repositories/remediation.py`)으로 갈려 있어 균일 조회가 불가능하다. 정본 필드명은 `event_type`
-  이다 — `dynamodb.py`가 같은 item에서 `action`을 `RemediationAction` 값으로 이미 쓰고 있어
-  `action`으로 통일하면 두 값이 같은 키를 다툰다. 읽는 코드가 없어 write-only 변경이고 함께 바뀌는
-  것은 단위 테스트 assertion 4건이다. Admin `GET /audit-events`를 만들기 전에, 그리고 M3에서 값이
-  7개 더 늘기 전에 선행한다.
+  `repositories/remediation.py`)으로 갈려 있어 균일 조회가 불가능하다. `dynamodb.py`가 같은 item에서
+  `action`을 `RemediationAction` 값으로 이미 쓰므로 `action`으로 통일하면 두 값이 같은 키를 다툰다.
+  읽는 코드가 없어 write-only 변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. Admin
+  `GET /audit-events`를 만들기 전에, 그리고 M3에서 값이 7개 더 늘기 전에 선행한다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase Golden Case가 0건이다. 재평가 품질 Gate를 돌리려면 이
   phase의 Case를 추가해야 하며, 원 Assessment와 같은 `model_profile_id`·`rubric_version`을 써야
   비교가 성립한다 (ADR-0020 §3).
@@ -250,12 +266,14 @@
   prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
   derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
   generic benchmark 결과를 M1 gate 통과로 간주하지 않음
-- **M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이 모두 채워져 있다. 남은 것은
-  A·D의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의 리뷰 approve**로 받는다 (CONTRIBUTING:
-  Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). 서명 전에는 D가 live plan/apply 경로를,
-  A가 Deployment 생성·후속 전이를 구현하지 않는다.
-  *Owner:* D + A + Security. *Blocks:* M3 D(plan/apply 실행), M3 A(Deployment 생성·상태 API),
-  M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract 작업은 막지 않는다.**
+- **M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이
+  모두 채워져 있다. 남은 것은 A·D·Security의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의
+  리뷰 approve**로 받는다 (CONTRIBUTING: Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다).
+  서명 전에는 M2 A가 `AuditEventType`/기존 audit 필드를 정규화하거나 D가 live plan/apply 경로를,
+  M3 A가 Deployment 생성·후속 전이를 구현하지 않는다.
+  *Owner:* D + A + Security. *Blocks:* M2 A(audit 정본화), M2 D(live plan), M3 D(plan/apply 실행),
+  M3 A(Deployment 생성·상태 API), M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract는
+  이 ADR 자체가 막지 않지만 한시적 순서에 따라 M2의 `dev` 병합 후 시작한다.**
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
   input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A는
   `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
