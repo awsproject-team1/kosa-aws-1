@@ -93,27 +93,23 @@ class VerificationSource:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class VerificationAssessmentScope:
-    """The verification Assessment plus the scope its evaluation must be pinned to.
+    """The verification Assessment plus the plan its evaluation must reuse.
 
-    The plan is returned beside the Assessment because a reused plan cannot be
-    derived by the Worker: derivation only knows the Rule set of the task that
-    happens to run, while the comparison requires the source's exact set
-    (ADR-0020 §5).
+    The Profile version, Model Profile, and rubric pin lives on the Assessment
+    itself because it has to survive until the re-read (ADR-0020 §3). The plan is
+    returned beside it because a reused plan cannot be derived by the Worker:
+    derivation only knows the Rule set of the task that happens to run, while the
+    comparison requires the source's exact set (ADR-0020 §5).
     """
 
     assessment: Assessment
     planned_coordinates: tuple[PlannedEvaluation, ...]
-    policy_profile_version: str
-    model_profile_id: str
-    rubric_version: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.assessment, Assessment):
             raise TypeError("assessment must be an Assessment")
         if self.assessment.phase is not AssessmentPhase.POST_DEPLOY_VERIFICATION:
             raise ValueError("verification scope requires a POST_DEPLOY_VERIFICATION assessment")
-        for name in ("policy_profile_version", "model_profile_id", "rubric_version"):
-            _require_non_empty_string(getattr(self, name), name)
         _require_planned_coordinates(self.planned_coordinates)
 
 
@@ -177,13 +173,13 @@ def plan_verification_assessment(
         phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
         source_assessment_id=source.assessment_id,
         deployment_id=deployment_id,
+        model_profile_id=source.model_profile_id,
+        rubric_version=source.rubric_version,
+        policy_profile_version=source.policy_profile_version,
     )
     return VerificationAssessmentScope(
         assessment=assessment,
         planned_coordinates=source.planned_coordinates,
-        policy_profile_version=source.policy_profile_version,
-        model_profile_id=source.model_profile_id,
-        rubric_version=source.rubric_version,
     )
 
 

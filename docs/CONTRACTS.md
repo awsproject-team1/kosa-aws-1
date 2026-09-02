@@ -468,6 +468,15 @@ six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 �
 `INITIAL`로 읽는다. 이 경계는 검증 Assessment의 저장·복원을 위한 것이며 Deployment 생성 endpoint나
 Actual 재조회 실행을 열지 않는다.
 
+검증 Assessment는 재사용할 평가 범위도 함께 고정한다. `plan_verification_assessment()`가 원
+Assessment의 Repository·`policy_profile_id`·Profile version·planned 좌표 집합·`model_profile_id`·
+`rubric_version`을 그대로 옮기고, 그중 `model_profile_id`/`rubric_version`/`policy_profile_version`은
+검증 Assessment selector에 저장된다(셋 다 있거나 셋 다 없다). 재사용할 Rule이
+`POST_DEPLOY_VERIFICATION`에 적용 불가하거나 Profile version이 교체된 경우는 검증을 만들지 않고
+`VerificationRejectionCode`를 가진 거부를 돌려준다 — 후자는 새 Initial Assessment로 라우팅한다.
+이 코드 어휘는 아직 `packages/contracts/`에 올리지 않았다. 이를 렌더링할 endpoint가 ADR-0019
+서명에 묶여 있어, 확정 전 API 어휘를 Contract에 새기지 않는다.
+
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
 M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를

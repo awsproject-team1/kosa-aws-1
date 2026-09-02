@@ -6,6 +6,14 @@
   `POST_DEPLOY_VERIFICATION`에만 `source_assessment_id`/`deployment_id`를 묶으며, fixture/live Worker가
   `AssessmentPhase.INITIAL` 하드코딩 대신 저장된 phase를 복원한다. 누락·부분 correlation과 자기
   참조는 fail-closed이고, correlation이 전혀 없는 옛 record만 `INITIAL`로 읽는다. 후속 PR 검토 대기
+- 검증 Assessment의 평가 범위를 원 Assessment에 고정했다(ADR-0020 §2·§3).
+  `plan_verification_assessment()`가 Repository·Profile version·planned 좌표 집합·Model Profile·
+  rubric을 그대로 재사용하고, 재사용할 Rule이 `POST_DEPLOY_VERIFICATION`에 적용 불가면 검증을
+  만들지 않는다(덮을 수 없는 계획은 비교 가능한 점수를 낼 수 없다). Profile version이 교체된
+  경우는 실패가 아니라 코드를 가진 거부이며 새 Initial Assessment로 라우팅한다. pin
+  (`model_profile_id`/`rubric_version`/`policy_profile_version`)은 검증 Assessment item에 durable하게
+  저장되고 세 값은 셋 다 있거나 셋 다 없다. 남은 것은 저장된 pin·planned 집합을 Worker runtime에
+  주입·대조하는 일과 endpoint 배선이다. 후속 PR 검토 대기
 - ADR-0020 파생 Contract를 동결했다. Assessment 계획이 개수가 아니라
   `(resource_id, rule_id, perspective)` **집합**으로 저장되므로 C의 비교 경계를 실제로 배선할 수
   있다. `AuditEventType`과 `RemediationSyncTarget` 위치도 같은 변경에서 정리했다 (PR #38 병합 완료)
@@ -243,8 +251,10 @@
   차단됐던 live plan 구현 커밋은 그 이후에만 시작한다.
 - **M3 A (ADR-0020 파생분의 남은 절반):** planned 집합과 검증 Assessment의 선택자
   (`phase`/`source_assessment_id`/`deployment_id`)는 저장되고 Worker가 저장된 phase를 복원한다.
-  남은 것은 검증 Assessment 생성 경로(원 Assessment의 Profile/rubric과 planned 집합을 그대로
-  재사용)와 `GET /deployments/{deploymentId}/verification`을
+  검증 생성 경로의 범위 고정도 끝났다 — `plan_verification_assessment()`가 원 Assessment의
+  Profile version·planned 집합·Model Profile·rubric을 재사용하고 그 pin이 item에 저장된다.
+  남은 것은 (a) 저장된 pin과 planned 집합을 Worker runtime work에 주입하고 실제 평가 Profile과
+  대조해 다르면 거부하는 일, (b) `GET /deployments/{deploymentId}/verification`을
   `compare_post_deploy_assessments()`에 배선하는 일이다 (ADR-0020 §1·§7). endpoint는 Deployment
   record를 전제하므로 ADR-0019 서명 뒤에 시작한다. 계획 집합 주입은
   `DynamoDbAssessmentReportStore.get_planned_evaluations()`로 이미 가능하다
@@ -320,8 +330,9 @@
   `phase`/`source_assessment_id`/`deployment_id` durable 저장과 fixture/live runtime phase 복원,
   그리고 planned `(resource_id, rule_id, perspective)` **집합**의 durable 저장·조회는 모두
   구현됐다 (`ASSESSMENT#{id}#PLAN` item의 `planned_coordinates` 속성과
-  `DynamoDbAssessmentReportStore.get_planned_evaluations()`). 남은 A/D 통합은 원 Assessment의
-  profile/rubric 고정, 검증 생성·조회 endpoint 배선, D의 apply 완료 뒤 Actual 재조회
+  `DynamoDbAssessmentReportStore.get_planned_evaluations()`). 원 Assessment의 profile/rubric 고정도
+  검증 생성 경계와 item pin으로 구현됐다. 남은 A/D 통합은 그 pin·planned 집합의 Worker runtime
+  주입과 대조, 검증 생성·조회 endpoint 배선, D의 apply 완료 뒤 Actual 재조회
   입력이다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
   *Owner:* A + D (+ B exception read). *Blocks:* live M3 verification endpoint와 M4 customer runtime report,
   C의 mock/contract implementation은 차단하지 않는다.

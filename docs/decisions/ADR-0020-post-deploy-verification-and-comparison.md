@@ -3,8 +3,11 @@
 > **상태: Accepted (2026-09-02)** — M3 C 구현은 이 결정을 따른다. C의 비교 projection과
 > Contract는 구현됐고, 5번의 선행 작업(PLAN item의 planned 집합 저장과 집합을 받는
 > `calculate_readiness_score`)도 반영됐다. 검증 Assessment의 `phase`·`source_assessment_id`·
-> `deployment_id` durable 저장과 fixture/live runtime phase 복원도 구현됐으며, 검증 생성·조회 API
-> 배선과 동일 Profile/rubric 고정, D의 apply 후 Actual 재조회 입력은 A/D 통합 작업으로 남는다.
+> `deployment_id` durable 저장과 fixture/live runtime phase 복원도 구현됐다. 2·3번의 범위 고정도
+> 구현됐다 — `plan_verification_assessment()`가 원 Assessment의 Repository·Profile version·planned
+> 집합·Model Profile·rubric을 그대로 재사용하고, 그 pin이 검증 Assessment item에 durable하게 저장된다.
+> 남은 것은 저장된 pin과 planned 집합을 Worker runtime에 주입·대조하는 일, 검증 조회 endpoint 배선,
+> D의 apply 완료 뒤 Actual 재조회 입력이다.
 >
 > **결정 대상:** 재평가 결과를 어디에 저장하는지, 무엇을 다시 평가하는지, 어떤 Model Profile로
 > 평가하는지, "Finding이 해소됐다"를 어떤 값으로 표현하는지, 점수·Coverage 변화를 언제 비교

@@ -50,7 +50,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
-| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment selectors, phase, optional verification provenance; report projection exposes score and coverage |
+| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment selectors, phase, optional verification provenance and reused-scope pin; report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
@@ -106,9 +106,10 @@ Backend가 발급한다.
 ## M3 planned deployment and verification storage
 
 ADR-0020은 `Accepted`이고 C 비교 Contract가 구현됐으며, 검증 Assessment의 phase/correlation
-저장과 runtime 복원도 구현됐다. 아래 Deployment durable 저장과 endpoint 배선은 아직 구현되지
-않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment 상태 기계는
-계속 `Proposed`다.
+저장과 runtime 복원, 그리고 재사용 범위 pin의 저장도 구현됐다. pin을 Worker runtime에서 대조하는
+경계(저장된 Model Profile·rubric과 실제 평가 Profile이 다르면 거부)와 아래 Deployment durable 저장·
+endpoint 배선은 아직 구현되지 않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다.
+ADR-0019의 Deployment 상태 기계는 계속 `Proposed`다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -134,6 +135,12 @@ ADR-0020은 `Accepted`이고 C 비교 Contract가 구현됐으며, 검증 Assess
   없을 때만 `INITIAL`로 복원하며, verification의 correlation 누락·부분 값·자기 참조는 fail-closed한다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
   충돌한다.
+- 검증 Assessment item은 재사용할 평가 범위를 함께 **고정 저장**한다: `model_profile_id`,
+  `rubric_version`, `policy_profile_version`. 세 값은 correlation과 마찬가지로
+  `POST_DEPLOY_VERIFICATION`에만 존재하며 셋 다 있거나 셋 다 없다 (부분 저장은 `ValueError`).
+  Initial Assessment는 이 pin을 갖지 않는다 — 그 Model Profile은 생성 경계가 아니라 승인된 Worker
+  설정이 고른다. apply와 재조회 사이에 Profile이 교체되면 pin 없이는 다른 rubric으로 평가된 결과가
+  조용히 비교 불가가 되므로, 값이 durable해야 한다 (ADR-0020 §2·§3).
 - 비교 결과(Finding Resolution, 점수·Coverage delta)는 별도 item으로 저장하지 않는다. 두 immutable
   Assessment에서 읽을 때 계산하는 projection이다. 억제 여부도 저장하지 않고 조회 시 유효한 예외를
   join해 표시만 한다. 예외는 만료되므로 저장하면 만료 후 과거 결과가 사실과 달라진다.

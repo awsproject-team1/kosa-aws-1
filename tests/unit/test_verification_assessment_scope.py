@@ -116,9 +116,9 @@ class VerificationScopeReuseTest(unittest.TestCase):
         scope = _plan()
 
         self.assertEqual(scope.planned_coordinates, PLANNED)
-        self.assertEqual(scope.policy_profile_version, "v2")
-        self.assertEqual(scope.model_profile_id, "assessment-nova-lite-m1-v2")
-        self.assertEqual(scope.rubric_version, "m1-v2")
+        self.assertEqual(scope.assessment.policy_profile_version, "v2")
+        self.assertEqual(scope.assessment.model_profile_id, "assessment-nova-lite-m1-v2")
+        self.assertEqual(scope.assessment.rubric_version, "m1-v2")
 
     def test_a_verification_can_verify_an_earlier_verification(self) -> None:
         scope = _plan(
@@ -217,6 +217,9 @@ class VerificationScopeValueTest(unittest.TestCase):
             phase=AssessmentPhase.INITIAL,
             source_assessment_id=None,
             deployment_id=None,
+            model_profile_id=None,
+            rubric_version=None,
+            policy_profile_version=None,
         )
 
         with self.assertRaisesRegex(ValueError, "requires a POST_DEPLOY_VERIFICATION assessment"):

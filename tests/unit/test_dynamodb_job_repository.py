@@ -106,6 +106,9 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         self.assertEqual(item["phase"], "INITIAL")
         self.assertNotIn("source_assessment_id", item)
         self.assertNotIn("deployment_id", item)
+        self.assertNotIn("model_profile_id", item)
+        self.assertNotIn("rubric_version", item)
+        self.assertNotIn("policy_profile_version", item)
         self.assertIn(("CUSTOMER#cust-001", "JOB#job-001"), table.items)
         outbox = table.items[("CUSTOMER#cust-001", "OUTBOX#JOB#job-001")]
         self.assertEqual(outbox["GSI2PK"], "OUTBOX#PENDING")
@@ -124,6 +127,9 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
             phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
             source_assessment_id="asm-001",
             deployment_id="dep-001",
+            model_profile_id="assessment-nova-lite-m1-v2",
+            rubric_version="m1-v2",
+            policy_profile_version="v2",
         )
         job = create_job(
             job_id="job-002",
@@ -150,6 +156,9 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         self.assertEqual(item["phase"], "POST_DEPLOY_VERIFICATION")
         self.assertEqual(item["source_assessment_id"], "asm-001")
         self.assertEqual(item["deployment_id"], "dep-001")
+        self.assertEqual(item["model_profile_id"], "assessment-nova-lite-m1-v2")
+        self.assertEqual(item["rubric_version"], "m1-v2")
+        self.assertEqual(item["policy_profile_version"], "v2")
 
 
 if __name__ == "__main__":

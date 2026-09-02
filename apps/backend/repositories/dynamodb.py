@@ -470,6 +470,12 @@ def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
         item["source_assessment_id"] = assessment.source_assessment_id
     if assessment.deployment_id is not None:
         item["deployment_id"] = assessment.deployment_id
+    # Only a verification pins its evaluation scope; an Initial Assessment resolves
+    # the Model Profile from the approved Worker configuration (ADR-0020 §3).
+    for name in ("model_profile_id", "rubric_version", "policy_profile_version"):
+        value = getattr(assessment, name)
+        if value is not None:
+            item[name] = value
     return item
 
 

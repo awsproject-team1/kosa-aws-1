@@ -27,6 +27,14 @@ SNAPSHOT = {
     "perspective": "AWS_ACTUAL",
 }
 
+# ADR-0020 §3: a verification pins the scope it reuses, so these travel with the
+# correlation on every POST_DEPLOY_VERIFICATION Assessment.
+PINS = {
+    "model_profile_id": "assessment-nova-lite-m1-v2",
+    "rubric_version": "m1-v2",
+    "policy_profile_version": "v2",
+}
+
 
 class StubTable:
     """Return one Job row and the stored Assessment item under test."""
@@ -75,6 +83,9 @@ class AssessmentProvenanceTest(unittest.TestCase):
         self.assertIs(assessment.phase, AssessmentPhase.INITIAL)
         self.assertIsNone(assessment.source_assessment_id)
         self.assertIsNone(assessment.deployment_id)
+        self.assertIsNone(assessment.model_profile_id)
+        self.assertIsNone(assessment.rubric_version)
+        self.assertIsNone(assessment.policy_profile_version)
 
     def test_verification_assessment_carries_both_correlation_values(self) -> None:
         assessment = Assessment(
@@ -86,15 +97,21 @@ class AssessmentProvenanceTest(unittest.TestCase):
             phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
             source_assessment_id="asm-001",
             deployment_id="dep-001",
+            **PINS,
         )
 
         self.assertEqual(assessment.source_assessment_id, "asm-001")
         self.assertEqual(assessment.deployment_id, "dep-001")
+        self.assertEqual(assessment.model_profile_id, "assessment-nova-lite-m1-v2")
+        self.assertEqual(assessment.rubric_version, "m1-v2")
+        self.assertEqual(assessment.policy_profile_version, "v2")
 
     def test_verification_requires_a_complete_correlation(self) -> None:
         for correlation in ({"source_assessment_id": "asm-001"}, {"deployment_id": "dep-001"}, {}):
             with self.subTest(correlation=sorted(correlation)):
-                with self.assertRaisesRegex(ValueError, "POST_DEPLOY_VERIFICATION requires"):
+                with self.assertRaisesRegex(
+                    ValueError, "requires source_assessment_id and deployment_id"
+                ):
                     Assessment(
                         assessment_id="asm-002",
                         customer_id="cust-001",
@@ -102,8 +119,45 @@ class AssessmentProvenanceTest(unittest.TestCase):
                         repository_id="repo-001",
                         policy_profile_id="profile-001",
                         phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
+                        **PINS,
                         **correlation,
                     )
+
+    def test_verification_requires_the_reused_scope_pin(self) -> None:
+        for omitted in PINS:
+            with self.subTest(omitted=omitted):
+                pins = {name: value for name, value in PINS.items() if name != omitted}
+                with self.assertRaisesRegex(
+                    ValueError, "POST_DEPLOY_VERIFICATION requires the source"
+                ):
+                    Assessment(
+                        assessment_id="asm-002",
+                        customer_id="cust-001",
+                        job_id="job-002",
+                        repository_id="repo-001",
+                        policy_profile_id="profile-001",
+                        phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
+                        source_assessment_id="asm-001",
+                        deployment_id="dep-001",
+                        **pins,
+                    )
+
+    def test_other_phases_cannot_carry_the_reused_scope_pin(self) -> None:
+        for phase in (AssessmentPhase.INITIAL, AssessmentPhase.DEPLOYMENT_READINESS):
+            for pinned in PINS:
+                with self.subTest(phase=phase, pinned=pinned):
+                    with self.assertRaisesRegex(
+                        ValueError, "only valid for post-deploy verification"
+                    ):
+                        Assessment(
+                            assessment_id="asm-002",
+                            customer_id="cust-001",
+                            job_id="job-002",
+                            repository_id="repo-001",
+                            policy_profile_id="profile-001",
+                            phase=phase,
+                            **{pinned: PINS[pinned]},
+                        )
 
     def test_verification_cannot_reference_itself(self) -> None:
         with self.assertRaisesRegex(ValueError, "must differ from source assessment"):
@@ -116,6 +170,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                 phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                 source_assessment_id="asm-002",
                 deployment_id="dep-001",
+                **PINS,
             )
 
     def test_other_phases_cannot_carry_verification_correlation(self) -> None:
@@ -155,7 +210,25 @@ class AssessmentProvenanceTest(unittest.TestCase):
                 phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                 source_assessment_id="  ",
                 deployment_id="dep-001",
+                **PINS,
             )
+
+    def test_blank_pinned_scope_values_are_rejected(self) -> None:
+        for pinned in PINS:
+            with self.subTest(pinned=pinned):
+                pins = {**PINS, pinned: "   "}
+                with self.assertRaisesRegex(ValueError, f"{pinned} must be a non-empty string"):
+                    Assessment(
+                        assessment_id="asm-002",
+                        customer_id="cust-001",
+                        job_id="job-002",
+                        repository_id="repo-001",
+                        policy_profile_id="profile-001",
+                        phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
+                        source_assessment_id="asm-001",
+                        deployment_id="dep-001",
+                        **pins,
+                    )
 
 
 class StoredAssessmentPhaseTest(unittest.TestCase):
