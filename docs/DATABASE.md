@@ -108,12 +108,12 @@ Backend가 발급한다.
 
 ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. ADR-0019의 Deployment 상태 기계도
 `Accepted`이며 아래 정의대로 구현한다. A의 Deployment 생성·조회·거절과 D Worker의 plan/apply/verify
-store가 구현됐다. 아직 구현되지 않은 조각은 apply 완료 Event 저장(EventBridge가 `#EVENT#{run_id}`에
-`run_id`를 쓰는 경로)과 live plan 어댑터이며, A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다.
+store가 구현됐다. apply 완료 Event 경계는 아래 "완료 Event 경계(A/D 공유 계약)"로 확정한다 —
+A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 어댑터는 아직 구현되지 않았다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
-| Deployment workflow event | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` | 재조회로 검증된 apply run 사실(`WorkflowRunFacts`). 같은 `run_id`는 한 번만 기록된다 |
+| Deployment workflow event | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` | 하나의 apply run에 대한 item. `status`로 두 단계를 구분한다: `PENDING_VERIFICATION`(A/EventBridge가 완료 Event 수신 시 `run_id`만 담아 write) → `VERIFIED`(D Worker가 재조회로 검증한 `WorkflowRunFacts`로 확정). 같은 `run_id`는 한 번만 기록된다 |
 | Deployment apply dispatch | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#DISPATCH` | apply `workflow_dispatch` 확인(`ApplyDispatchReceipt`). 결정적 키라 중복 dispatch가 두 번째 record를 만들지 않는다 |
 
 - `DEPLOYMENT#{deployment_id}` item은 대상 `commit_sha`, `plan_hash`, 투영된 canonical JSON plan과
@@ -141,15 +141,28 @@ store가 구현됐다. 아직 구현되지 않은 조각은 apply 완료 Event �
 - 거절은 결정적 키 `DEPLOYMENT#{deployment_id}#REJECTION` item과 `DEPLOYMENT_REJECTED` audit,
   Job의 `CANCELLED` 전이를 한 transaction으로 쓴다. 결정적 키가 재거절과 같은 `plan_hash` 재승인을
   막는다 (ADR-0019 §8).
-- Plan/Apply 완료 Event는 Queue payload에 값을 싣지 않는다. Queue에는 계속 `job_id`,
-  `expected_revision`, `command`만 흐른다. D Worker가 `APPLY_COMPLETED`에서 apply를 재dispatch하지
-  않고 저장된 `run_reference`(실제 GitHub run_id)로 GitHub Actions run을 다시 읽어(`WorkflowRunReader`)
-  승인 사실과 대조하며, 성공·일치한 결과만 `DeploymentVerificationStore`가 `#EVENT#{run_id}` item에
-  기록하고 그 사실만 Deployment 상태로 전이된다. GitHub Actions에는 DynamoDB write 권한을 주지 않는다.
-  **미구현 조각:** apply 완료 Event를 받아 `run_reference`(run_id)를 durable하게 남기는 EventBridge
-  경로가 아직 없어, D Worker는 `run_reference`가 없으면 `APPLY_COMPLETED`를 fail-closed한다. live
-  plan 어댑터(`PlanRequestPort`)도 아직 없어 live `RUN_DEPLOYMENT`는 명시적 오류로 멈춘다. fixture
-  경로(Mock 어댑터)는 세 command를 모두 구동한다.
+#### 완료 Event 경계 (A/D 공유 계약, ADR-0019 §7)
+
+apply 완료 Event를 처리하는 책임을 A(인프라/EventBridge)와 D(Worker)로 나눈다. 이 계약은 A PR과
+D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
+
+- **Queue payload는 여전히 최소다:** `job_id`, `expected_revision`, `command`만 흐른다. `run_id`는
+  큐에 싣지 않는다(payload 불신 원칙, ADR-0019 §7).
+- **A / EventBridge (writer):** GitHub Actions apply run 완료 Event를 받으면, 그 event에서 얻은
+  `run_id`로 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을 `status=PENDING_VERIFICATION`으로
+  write하고(담는 값은 `run_id`뿐, run의 conclusion/facts는 담지 않는다 — 신뢰 대상이 아니므로),
+  같은 deployment의 Job을 다음 revision으로 올리며 `APPLY_COMPLETED` task를 Deployment Queue에 넣는다.
+  이 예약 item은 "재조회할 run 좌표 포인터"이지 사실 기록이 아니다. GitHub Actions에는 DynamoDB
+  write 권한을 주지 않는다.
+- **D Worker (reader → verifier):** `APPLY_COMPLETED`를 소비하면 `(job_id, revision)`으로 work를
+  다시 읽고, 그 deployment의 `PENDING_VERIFICATION` EVENT item에서 `run_id`를 읽어 `run_reference`를
+  만든다. 그 `run_id`로 GitHub Actions run을 재조회(`WorkflowRunReader`)해 승인 사실
+  (repository/workflow_path/ref/commit/plan_hash/conclusion)과 대조하고, 성공·일치한 결과만
+  `DeploymentVerificationStore`가 같은 `#EVENT#{run_id}` item을 검증된 `WorkflowRunFacts`로
+  `status=VERIFIED`로 확정한다. 하나라도 다르면 재시도 없이 차단한다(MANUAL_REVIEW로 파생).
+  예약 item이 없으면(`run_reference` 부재) Worker는 `APPLY_COMPLETED`를 fail-closed한다.
+- **미구현 조각:** live plan 어댑터(`PlanRequestPort`)는 아직 없어 live `RUN_DEPLOYMENT`는 명시적
+  오류로 멈춘다. fixture 경로(Mock 어댑터)는 세 command를 모두 구동한다.
 - Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
   `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
