@@ -126,6 +126,9 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   (`next_cursor`/`findings_next_cursor`), 첫 페이지만 넘기면 누락된 좌표가 조용히
   `INDETERMINATE`가 되고 delta도 부분 집합 기준이 되어 **예외 없이 잘못된 리포트**가 나온다.
   비교 경계는 cursor가 남은 report를 fail-closed로 거부한다.
+- cursor가 없더라도 report의 결과 좌표 집합은 immutable planned 집합과 **정확히 같아야** 하며,
+  Coverage의 planned/completed count도 그 집합 및 `EXECUTION_ERROR`를 제외한 완료 좌표와 일치해야
+  한다. 따라서 잘못된 조회 구현이나 손상된 projection이 누락 좌표를 정상 score로 위장할 수 없다.
 
 **선행 작업 — 이것 없이는 2번 조건을 판정할 수 없다.**
 
@@ -254,7 +257,8 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   `FindingResolution`/`AssessmentComparison` Contract와 complete immutable input을 받는 결정적
   projection을 구현했다. 계획 집합은 단순 count가 아니라 `(resource_id, rule_id, perspective)`
   전체로 비교하고, 매칭 키도 같은 세 값이며 `rule_version`은 동등성 검사 대상이다. 부분 report는
-  비교 입력으로 거부된다. A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와
+  비교 입력으로 거부되고, 결과 좌표와 Coverage가 immutable plan과 정확히 일치하지 않아도 거부된다.
+  A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와
   `ASSESSMENT#{assessment_id}#PLAN` item의 planned 집합 저장·조회를, D는 apply 완료 뒤의 Actual
   재조회 입력을 제공한다. **planned 집합 저장(5번 선행 작업)이 들어가기 전까지 C의 비교 경계는
   실제 배선이 불가능하다.**

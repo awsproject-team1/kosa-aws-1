@@ -51,6 +51,11 @@
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
   delta를 fail-closed로 차단한다.
 
+- M3 C post-deploy comparison complete-plan hardening: pagination이 끝난 report라도 결과 좌표가
+  immutable planned `Resource × Rule × Perspective` 집합과 정확히 같고 Coverage count가 일치해야만
+  비교 입력으로 받는다. 누락/계획 밖 결과 또는 손상된 Coverage로 정상 delta를 위장하는 경로를
+  fail-closed로 차단했다.
+
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
   읽어 B policy를 호출하고 actionable decision은 context/Job/Outbox/audit와 원자 저장하며,

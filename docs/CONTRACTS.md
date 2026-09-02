@@ -444,7 +444,9 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
 `model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
 `ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
-비교 가능 근거가 아니다.
+비교 가능 근거가 아니다. 비교 입력 report는 pagination cursor가 없어야 하고, 결과 좌표 집합과
+Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불완전하거나 손상된 projection은
+비교 전에 fail-closed로 거부한다.
 
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
