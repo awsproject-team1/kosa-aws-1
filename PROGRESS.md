@@ -49,6 +49,13 @@
 
 ## Completed
 
+- M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
+  low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
+  쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
+  쓰도록 고치고, 단위 테스트 기대값을 AttributeValue 형식으로 갱신했으며, 모든 write item 값이
+  AttributeValue로 직렬화되는지 확인하는 회귀 테스트를 추가했다. (query 경로는 resource table의
+  auto-marshal이라 무관)
+
 - M2 A Remediation 예외 등록 API를 배포 Lambda에 배선: `RemediationExceptionApiService`와
   `DynamoDbRemediationExceptionRepository`는 이미 dev에 있었으나 composition root
   (`runtime.py`)가 주입하지 않아 `POST /remediation-exceptions`가 배포 Lambda에서 404였다.

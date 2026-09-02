@@ -76,11 +76,29 @@ class RemediationExceptionRepositoryTest(unittest.TestCase):
         self.assertEqual(len(puts), 2)
         exception_item = puts[0]["Put"]["Item"]
         audit_item = puts[1]["Put"]["Item"]
-        self.assertEqual(exception_item["customer_id"], "cust-001")
-        self.assertEqual(exception_item["expires_at"], "2026-09-02T08:00:00+00:00")
+        # transact_write_items는 low-level API라 Item이 AttributeValue 형식으로 직렬화돼야 한다.
+        self.assertEqual(exception_item["customer_id"], {"S": "cust-001"})
+        self.assertEqual(exception_item["expires_at"], {"S": "2026-09-02T08:00:00+00:00"})
         self.assertIn("attribute_not_exists", puts[0]["Put"]["ConditionExpression"])
-        self.assertEqual(audit_item["event_type"], "REMEDIATION_EXCEPTION_APPROVED")
+        self.assertEqual(audit_item["event_type"], {"S": "REMEDIATION_EXCEPTION_APPROVED"})
         self.assertNotIn("ticket_reference", audit_item)
+
+    def test_transaction_items_are_serialized_as_attribute_values(self):
+        # 회귀 방지: 모든 write item 값이 AttributeValue({타입: 값}) 형식이어야 low-level
+        # transact_write_items가 받아들인다. plain dict를 그대로 넘기면 실제 AWS 호출이 깨진다.
+        transactions = Transactions()
+        repository = DynamoDbRemediationExceptionRepository(
+            Table(), table_name="metadata", transaction_client=transactions
+        )
+
+        repository.create_exception(exception())
+
+        puts = transactions.calls[0]["TransactItems"]
+        for put in puts:
+            for value in put["Put"]["Item"].values():
+                self.assertIsInstance(value, dict)
+                self.assertEqual(len(value), 1)
+                self.assertIn(next(iter(value)), {"S", "N", "BOOL", "NULL", "L", "M"})
 
     def test_list_uses_customer_partition_and_exact_rule_version_prefix(self):
         global_exception = exception(resource_id=None).to_dict() | {"PK": "CUSTOMER#cust-001"}
