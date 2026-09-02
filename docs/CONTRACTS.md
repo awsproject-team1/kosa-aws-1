@@ -288,9 +288,14 @@ S3 Artifact로 관리한다. Model/Prompt/Rule/Rubric/Policy/Tool 변경 때 C�
 - `RemediationPatch`: Finding의 base commit, `REMEDIATION_PATCH`, repository-relative
   changed path 목록
 - `AwsResourceQuery`: `READ_RESOURCE`/`LIST_RESOURCES`만 허용하는 Read-Only Tool 요청
-- `TerraformPlan`: Deployment/commit/plan hash에 묶인 `TERRAFORM_PLAN`
+- `TerraformPlan`: Deployment/commit/plan hash에 묶인 `TERRAFORM_PLAN`. `plan_hash`는
+  `TERRAFORM_PLAN` artifact digest와 같으며 그 정의는 아래 M3 절의 허용 목록 투영이다
 - `DeploymentApproval`: Apply 직전에 `TerraformPlan`의 deployment ID, commit SHA,
   plan hash가 모두 일치하는지 확인한다.
+
+M3 Deployment 실행 값 타입(`TERRAFORM_PLAN_BINARY` artifact, `TerraformStateVersion`,
+`PlanExecutionResult`, `WorkflowRunReference`/`WorkflowRunFacts`/`WorkflowConclusion`,
+`ApplyDispatchReceipt`, `DeploymentStatus`)은 아래 "M3 contract additions"에서 다룬다.
 
 IaC 변경이 필요한 Drift Finding은 IaC를 원하는 안전한 상태로 변경하는 Patch를 만든다.
 IaC가 이미 안전하고 Actual만 drift된 경우에는 Patch 없이 해당 IaC Snapshot/commit으로
@@ -431,20 +436,29 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 ## M3 contract additions
 
 ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019도
-`Accepted`가 됐으므로 아래 A/D-owned Contract를 구현할 수 있다(서명 직후이며 구현 커밋은 이어서
-추가한다). 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은 개념이 두 곳에 생기면 ADR-0018이
-제거한 "판정 정본이 둘"인 구조가 재발한다.
+`Accepted`가 됐으므로 아래 A/D-owned Contract를 **M3 Contract 동결에서 구현했다.** 역할마다 같은
+의미의 값을 따로 만들지 않는다 — 같은 개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인
+구조가 재발한다.
 
 | 추가 | 소유 | 의미 |
 | --- | --- | --- |
-| `DeploymentStatus` + `derive_deployment_status()` | A | Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
-| `AuditEventType` | A | 감사 event **종류** 어휘. 정본 필드명은 `event_type`이다 |
+| `DeploymentStatus` + `derive_deployment_status()` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
+| `AuditEventType`에 `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 정본 필드명은 `event_type`이다 |
+| `Action`에 `START_DEPLOYMENT`(User)/`REJECT_DEPLOYMENT`(Admin) | A | 구현됨 (ADR-0019 §4, §8) |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
 | `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
+| `plan_hash` 투영 + `has_destructive_changes` (`packages/contracts/terraform_plan.py`) | Contract | 구현됨. `show -json`의 허용 목록 투영을 A/C/D가 같은 함수로 계산 (ADR-0019 §1) |
 | `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | 구현됨. apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
-| `project_plan`/`compute_plan_hash`/`has_destructive_changes` (`terraform_plan.py`) | D | 구현됨. `show -json`을 허용 목록으로 투영한 canonical 바이트의 SHA-256이 `plan_hash`이고, `delete`/비어 있지 않은 `replace_paths`가 destructive다. A 승인·C readiness·D apply가 같은 함수를 부른다 (ADR-0019 §1) |
-| `PlanRequestOutcome` + `TerraformStateVersion` | D | 구현됨. `PlanRequestPort`의 반환형. plan + state `lineage`·`serial` 쌍 + `PlanReadinessInput`을 묶는다 (ADR-0019 §1·§2) |
+| D 실행 port 4종 + 반환형 | D | 구현됨. `apps/backend/deployment/ports.py` (아래 절 참조) |
 | `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
+
+`plan_hash`는 `terraform show -json` 출력의 `resource_changes[]`를 허용 목록(11개 필드)으로 투영해
+`address` 기준 정렬·key 정렬·compact separators·비-ASCII escape·no trailing newline·NaN/Infinity
+금지의 canonical UTF-8 바이트로 만든 뒤 그 SHA-256이다. 제외 목록이 아니라 허용 목록인 이유는
+Terraform/Provider가 출력 필드를 늘려도 조용히 hash에 들어오지 않게 닫힌 집합으로 두기 위해서다.
+`has_destructive_changes`는 같은 투영에서 `change.actions`에 `delete`가 있거나 `change.replace_paths`가
+비어 있지 않으면 `True`다. A 승인 검증·C readiness 바인딩·D apply 직전 재검증이 **같은 함수**를
+호출한다 (ADR-0019 §1).
 
 `DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
 순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
@@ -460,14 +474,13 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 `AuditEventType`(`packages/contracts/audit.py`)은 감사 event의 **종류**를 담는 StrEnum이고 정본
 필드명은 `event_type`이다. `action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가
 한 item에서 `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고
-있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. `action`을 종류 필드로 쓰던 세 곳
-(`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
-`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)을 `event_type`으로 개명해, 다섯 writer가 모두
-같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
-`REMEDIATION_EXCEPTION_APPROVED`를 더한 다섯이며, M3의 `DEPLOYMENT_REQUESTED`,
-`DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 서명(`Accepted`)에 따라 M3
-구현 커밋에서 추가한다.
+있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. 현재 값은 `DEPLOYMENT_REQUESTED`,
+`DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `POLICY_SOURCE_APPROVED`, `POLICY_PROFILE_PUBLISHED`,
+`REMEDIATION_DECIDED`, `REMEDIATION_EXCEPTION_APPROVED`의 일곱이다. M3 Contract 동결에서
+`DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 추가했다(생성 endpoint의 `DEPLOYMENT_REQUESTED` write와
+reject endpoint의 `DEPLOYMENT_REJECTED` write는 A의 후속 endpoint 배선에서 이 어휘를 사용한다).
+apply 실행 단계의 `APPLY_DISPATCHED`·`APPLY_COMPLETED`·`APPLY_FAILED`·`POST_DEPLOY_VERIFIED`·
+`MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서 추가한다.
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야
@@ -494,32 +507,43 @@ Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불
 six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
 정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
 
-### D 실행 port 시그니처 (M3 병렬 개발 전제)
+### D 실행 port 시그니처 (M3 병렬 개발 전제, 구현됨)
 
-M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
-먼저 고정해야 한다. 아래 표의 네 port는 모두 D가 소유한다. 이 중 A/C가 주입받아 Fixture/Mock으로
-병렬 구현하는 것은 `ApplyDispatchPort`·`WorkflowRunReader`·`ActualRereadPort` **세 개**이며
-(`Mockable` 의존성), `PlanRequestPort`는 D Worker 내부 호출이라 주입 대상이 아니어서 시그니처
-확정에서 제외한다(절 끝의 근거 참조). 따라서 아래 확정 시그니처와 반환형은 세 port 기준이다.
+M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려고 구현보다 port 시그니처를
+먼저 고정했다. 네 port는 모두 D가 소유하며 `apps/backend/deployment/ports.py`에
+`@runtime_checkable` Protocol로 정의된다. 각 port는 승인·정책 판정을 하지 않는다(판정은 A 승인·B
+정책 소유). 반환형은 모두 `packages/contracts`의 값 타입이라 역할이 서로의 앱 모듈을 import하지
+않는다.
 
 | Port | 호출자 | 입력 → 출력 |
 | --- | --- | --- |
-| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state `lineage`·`serial` + `PlanReadinessInput` |
-| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` → dispatched run reference (idempotent) |
-| `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
-| `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
+| `PlanRequestPort` | D Deployment Worker 내부 | `customer_id`/`deployment_id`/`repository_id`/`commit_sha` → `PlanExecutionResult` (`TerraformPlan` + `TERRAFORM_PLAN_BINARY` artifact + `TerraformStateVersion`) |
+| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` + `TerraformStateVersion` → `ApplyDispatchReceipt` |
+| `WorkflowRunReader` | D Deployment Worker | `WorkflowRunReference`(`run_id` 등) → `WorkflowRunFacts` (workflow path, repository, `ref`, `commit_sha`, `conclusion`, `plan_hash`) |
+| `ActualRereadPort` | C 검증 경계 | `customer_id`/`deployment_id`/`RemediationSyncTarget` → (void, 기존 read-only Tool로 Actual 재조회) |
 
-- 표의 네 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
 - `ApplyDispatchPort`는 같은 approval로 두 번 호출돼도 새 run을 만들지 않아야 한다. 중복 방지의
-  정본은 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
+  정본은 Queue가 아니라 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
+- `WorkflowRunReader`는 EventBridge payload를 신뢰하지 않고 `run_id`로 run을 재조회해
+  `WorkflowRunFacts`를 만든다. 실패도 예외가 아니라 `conclusion` 값으로 표현한다 (ADR-0019 §7,
+  ADR-0017·0018의 규율).
 - `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다. 검증 단계에서
   write 표면이 생기지 않는다.
-
-확정 대상 시그니처는 다음과 같다. 반환형 세 개(`ApplyRunReference`, `VerifiedRunOutcome`,
-`AwsResourceSnapshot`)도 같은 결정에서 `packages/contracts/`에 정의한다 — 역할 경계를 넘는 타입을
-앱 모듈에 두면 `RemediationSyncTarget`과 같은 이관 작업이 다시 생긴다.
+- `TerraformStateVersion`은 `(lineage, serial)` 쌍이다. `serial` 단독으로는 state 재생성을 잡지
+  못하므로 apply 직전 재검증은 두 값을 함께 대조한다 (ADR-0019 §2).
+- `PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않지만, 반환형 `PlanExecutionResult`가
+  `plan_hash`·binary·state를 한데 묶어 A 승인·D apply 재검증의 공용 입력이 되므로 시그니처를 함께
+  고정했다.
 
 ```python
+@runtime_checkable
+class PlanRequestPort(Protocol):
+    def request_plan(
+        self, *, customer_id: str, deployment_id: str, repository_id: str, commit_sha: str
+    ) -> PlanExecutionResult: ...
+
+
+@runtime_checkable
 class ApplyDispatchPort(Protocol):
     """승인된 approval로 apply run을 dispatch한다. 이미 있는 run은 다시 만들지 않는다."""
 
@@ -527,48 +551,26 @@ class ApplyDispatchPort(Protocol):
         self,
         *,
         approval: DeploymentApproval,
-        state_lineage: str,
-        state_serial: int,
-        repository_id: str,
-    ) -> ApplyRunReference: ...
+        plan: TerraformPlan,
+        state_version: TerraformStateVersion,
+    ) -> ApplyDispatchReceipt: ...
 
 
+@runtime_checkable
 class WorkflowRunReader(Protocol):
-    """run_id로 Actions run을 재조회해 권위 있는 완료 사실을 만든다.
+    """run_id로 Actions run을 재조회해 권위 있는 완료 사실을 만든다 (ADR-0019 §7)."""
 
-    EventBridge payload를 신뢰하지 않는다 (ADR-0019 §7).
-    """
-
-    def read_run(
-        self, *, customer_id: str, repository_id: str, run_id: str
-    ) -> VerifiedRunOutcome: ...
+    def read_run(self, reference: WorkflowRunReference) -> WorkflowRunFacts: ...
 
 
+@runtime_checkable
 class ActualRereadPort(Protocol):
-    """apply 후 AWS Actual을 다시 읽는다. 읽기 전용이며 write 표면이 없다."""
+    """apply 후 AWS Actual을 다시 읽는다. 읽기 전용이며 write 표면이 없다 (ADR-0020)."""
 
     def reread_actual(
-        self, *, customer_id: str, aws_account_id: str, resource_ids: tuple[str, ...]
-    ) -> tuple[AwsResourceSnapshot, ...]: ...
+        self, *, customer_id: str, deployment_id: str, sync_target: RemediationSyncTarget
+    ) -> None: ...
 ```
-
-시그니처에서 합의할 점 세 가지.
-
-- `dispatch_apply`가 `state_lineage`·`state_serial`을 받는 이유 — apply 직전 재검증을 D 안에서
-  끝내고 A가 그 값을 해석할 필요를 없앤다. `serial` 단독으로는 state 재생성을 잡지 못한다
-  (ADR-0019 §2).
-- `read_run`이 예외를 던지지 않고 `VerifiedRunOutcome`을 돌려주는 이유 — 실패도 값이다
-  (ADR-0017·0018의 규율).
-- `reread_actual`이 `resource_ids`를 받는 이유 — 전체 재평가가 기본이어도(ADR-0020 §2) 읽기 대상은
-  planned 집합에서 나오고, 재조회는 불일치한 리소스로 좁힌다 (ADR-0020 §8).
-
-위에서 예고한 대로 `PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않는다. 그래서
-시그니처 확정 대상에서 제외했지만, 소유·구현은 D이므로 ADR-0019 `Accepted` 이후
-`agent/runtime/deployment_ports.py`에 정의했고 반환형 `PlanRequestOutcome`
-(`packages/contracts/remediation.py`)과 결정적 Mock(`MockPlanRequestPort`)을 함께 구현했다.
-확정된 세 port(`ApplyDispatchPort`·`WorkflowRunReader`·`ActualRereadPort`)도 같은 모듈에 있으며,
-`apps/backend/deployment/worker.py`의 `DeploymentWorker`가 세 deployment command를 command당
-하나의 injected port로 분기한다.
 
 ## Contract change review
 

@@ -5,14 +5,20 @@ import unittest
 from pathlib import Path
 
 from packages.contracts import (
+    ApplyDispatchReceipt,
     ArtifactReference,
     ArtifactType,
     AwsResourceOperation,
     AwsResourceQuery,
     DeploymentApproval,
     IaCSnapshot,
+    PlanExecutionResult,
     RemediationPatch,
     TerraformPlan,
+    TerraformStateVersion,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
 )
 
 FIXTURE_PATH = Path(__file__).parents[2] / "fixtures" / "m0" / "remediation_plan.json"
@@ -110,6 +116,86 @@ class DeploymentContractTest(unittest.TestCase):
                 ),
                 changed_paths=("../outside.tf",),
             )
+
+
+class TerraformStateVersionContractTest(unittest.TestCase):
+    def test_matches_requires_same_lineage_and_serial(self) -> None:
+        version = TerraformStateVersion(lineage="lineage-1", serial=7)
+        self.assertTrue(version.matches(TerraformStateVersion(lineage="lineage-1", serial=7)))
+        # Same serial, different lineage: a re-created state must not match.
+        self.assertFalse(version.matches(TerraformStateVersion(lineage="lineage-2", serial=7)))
+        self.assertFalse(version.matches(TerraformStateVersion(lineage="lineage-1", serial=8)))
+
+    def test_serial_rejects_bool_and_negative(self) -> None:
+        with self.assertRaises(TypeError):
+            TerraformStateVersion(lineage="lineage-1", serial=True)
+        with self.assertRaises(ValueError):
+            TerraformStateVersion(lineage="lineage-1", serial=-1)
+
+
+class PlanExecutionResultContractTest(unittest.TestCase):
+    def _plan(self) -> TerraformPlan:
+        return TerraformPlan(
+            deployment_id="deployment-001",
+            commit_sha="commit-001",
+            plan_hash="plan-hash-001",
+            artifact=ArtifactReference(
+                artifact_id="art-plan-001",
+                artifact_type=ArtifactType.TERRAFORM_PLAN,
+                content_sha256="plan-hash-001",
+                customer_id="cust-001",
+            ),
+        )
+
+    def _binary(
+        self, artifact_type: ArtifactType = ArtifactType.TERRAFORM_PLAN_BINARY
+    ) -> ArtifactReference:
+        return ArtifactReference(
+            artifact_id="art-plan-bin-001",
+            artifact_type=artifact_type,
+            content_sha256="binary-digest-001",
+            customer_id="cust-001",
+        )
+
+    def test_bundles_plan_binary_and_state(self) -> None:
+        result = PlanExecutionResult(
+            plan=self._plan(),
+            binary_artifact=self._binary(),
+            state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+        )
+        payload = result.to_dict()
+        self.assertEqual(payload["plan"]["plan_hash"], "plan-hash-001")
+        self.assertEqual(payload["state_version"], {"lineage": "lineage-1", "serial": 3})
+
+    def test_rejects_non_binary_artifact_as_the_saved_plan(self) -> None:
+        with self.assertRaisesRegex(ValueError, "TERRAFORM_PLAN_BINARY"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(ArtifactType.TERRAFORM_PLAN),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            )
+
+
+class WorkflowRunFactsContractTest(unittest.TestCase):
+    def test_run_facts_round_trip_with_conclusion(self) -> None:
+        facts = WorkflowRunFacts(
+            run_id="run-001",
+            repository_id="repo-001",
+            workflow_path=".github/workflows/apply.yml",
+            ref="refs/heads/main",
+            commit_sha="commit-001",
+            conclusion=WorkflowConclusion.SUCCESS,
+            plan_hash="plan-hash-001",
+        )
+        self.assertEqual(facts.to_dict()["conclusion"], "SUCCESS")
+
+    def test_run_reference_and_receipt_require_non_empty_fields(self) -> None:
+        WorkflowRunReference(deployment_id="d-1", repository_id="r-1", run_id="run-1")
+        ApplyDispatchReceipt(
+            deployment_id="d-1", repository_id="r-1", workflow_path=".github/workflows/apply.yml"
+        )
+        with self.assertRaises(ValueError):
+            WorkflowRunReference(deployment_id="", repository_id="r-1", run_id="run-1")
 
 
 if __name__ == "__main__":

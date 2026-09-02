@@ -107,6 +107,19 @@
   apply 표면은 노출하지 않으며(제안만), Terraform Plan(OIDC)·`commit_sha`/`plan_hash` 산출은
   ADR-0019 서명 이후 다음 조각이다.
 
+- M3 Contract 동결 (ADR-0019 파생 공용 Contract): ADR-0019가 `Accepted`가 되어 열린 A/D-owned
+  Contract를 기능별 커밋으로 구현했다. (1) `plan_hash`를 `terraform show -json`의 `resource_changes[]`
+  허용 목록(11개 필드) 투영의 SHA-256으로 정의하고(`packages/contracts/terraform_plan.py`),
+  A 승인·C readiness·D apply 재검증이 같은 함수를 호출해 값이 어긋날 수 없게 했다.
+  `has_destructive_changes`도 같은 투영에서 파생하고 `TERRAFORM_PLAN_BINARY` ArtifactType을 더했다.
+  (2) D 실행 port 4종(`PlanRequestPort`/`ApplyDispatchPort`/`WorkflowRunReader`/`ActualRereadPort`)을
+  `@runtime_checkable` Protocol로 고정하고 반환형(`PlanExecutionResult`, `ApplyDispatchReceipt`,
+  `WorkflowRunFacts`)과 `TerraformStateVersion`(lineage+serial 쌍)을 Contract에 두어 A/C가 fixture로
+  병렬 진입할 수 있게 했다. (3) `DeploymentStatus`를 저장하지 않고 durable 사실에서 read 시 계산하는
+  순수 함수 `derive_deployment_status()`(`DeploymentFacts` 입력)로 구현했다(ADR-0019 §8, 불변식 #9).
+  (4) `Action`에 `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin), `AuditEventType`에
+  `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더했다. `docs/CONTRACTS.md`를 구현에 맞춰 동기화했고
+  ruff·Unit·Contract·Security·Integration 검증을 통과했다. A endpoint 배선은 Next다. 후속 PR 검토 대기
 - M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
   low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
   쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
@@ -402,13 +415,12 @@
   `GET /deployments/{deploymentId}/verification`을 `compare_post_deploy_assessments()`에 배선한다
   (ADR-0020 §1·§7). 계획 집합 주입은 `DynamoDbAssessmentReportStore.get_planned_evaluations()`로
   이미 가능하다
-- **M3 Contract 동결 — ADR-0019 Accepted 이후:** `DeploymentStatus` enum과
-  `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
-  `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
-  `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin 전용), D 실행 port 시그니처 4종
-  (`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`, `ActualRereadPort`)과 그 반환형.
-  **port 시그니처를 맨 앞에 둔다** — 확정되는 순간 A·C가 Protocol + fixture로 병렬 진입한다.
-  M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
+- **M3 A endpoint 배선 (Contract 동결 이후):** Deployment 생성 `POST /remediations/{id}/deployments`,
+  `GET /deployments/{id}`, `GET /deployments/{id}/verification`, `POST /deployments/{id}/reject`를
+  방금 동결한 Contract(`DeploymentStatus`/`derive_deployment_status()`, D port, `plan_hash` 투영,
+  `START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED`) 위에 올린다.
+  검증 조회는 `compare_post_deploy_assessments()`에 complete `ComparisonAssessment` 두 개를
+  fail-closed로 배선한다 (ADR-0019 §4·§8, ADR-0020 §1·§7).
 - **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
   `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.

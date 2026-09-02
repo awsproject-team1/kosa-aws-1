@@ -5,44 +5,49 @@ injected D port per command. It never authorizes a deployment and never decides 
 approval is an A-owned fact reloaded here and cross-checked, not produced. Every value the
 ports return is re-validated against the reloaded approval before the flow advances.
 
-Command → port (ADR-0019):
-- `RUN_DEPLOYMENT`  → `PlanRequestPort.request_plan`      (refreshed plan, section 1/2/3)
-- `PLAN_COMPLETED`  → `ApplyDispatchPort.dispatch_apply`  (idempotent apply run, section 5)
-- `APPLY_COMPLETED` → `WorkflowRunReader.read_run` then    (authoritative run fact, section 7)
-                       `ActualRereadPort.reread_actual`    (post-apply Actual reread, ADR-0020)
+Command -> port (ADR-0019, canonical ports in apps/backend/deployment/ports.py):
+- RUN_DEPLOYMENT  -> PlanRequestPort.request_plan     (refreshed plan, section 1/2/3)
+- PLAN_COMPLETED  -> ApplyDispatchPort.dispatch_apply (workflow_dispatch only, section 5)
+- APPLY_COMPLETED -> WorkflowRunReader.read_run then   (authoritative run facts, section 7)
+                     ActualRereadPort.reread_actual    (post-apply Actual reread, ADR-0020)
 
-Two facts are never trusted as state and are always re-derived here:
-- the queue payload (`WorkflowTask`) — durable work is reloaded by `(job_id, revision)`
+Two facts are never trusted as state:
+- the queue payload (WorkflowTask) - durable work is reloaded by (job_id, revision)
   (ADR-0013, mirrors the C Remediation Worker).
-- the completion Event — the run is re-read by `run_id` and its `plan_hash`/`repository_id`/
-  `ref`/`workflow_path` are matched against the approved plan (ADR-0019 section 7).
+- the completion Event - the run is re-read by the stored WorkflowRunReference (real GitHub
+  run_id) and its plan_hash/repository_id/ref/workflow_path are matched against the approved
+  plan (ADR-0019 section 7). The worker never re-dispatches apply to obtain a run id.
 """
 
 from dataclasses import dataclass
 from typing import Protocol
 
-from agent.runtime.deployment_ports import (
+from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
     PlanRequestPort,
     WorkflowRunReader,
 )
-from agent.runtime.live_deployment_ports import APPLY_WORKFLOW_PATHS
 from packages.contracts import (
-    ApplyRunReference,
-    AwsResourceSnapshot,
+    ApplyDispatchReceipt,
     DeploymentApproval,
-    PlanRequestOutcome,
+    PlanExecutionResult,
     TerraformPlan,
     TerraformStateVersion,
-    VerifiedRunOutcome,
     WorkflowCommand,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
     WorkflowTask,
 )
+from packages.contracts.remediation import RemediationSyncTarget
 
 # apply run을 성공으로 인정할 때 workflow path가 반드시 이 allow-list 안이어야 한다
-# (ADR-0019 section 7). 정본은 live 어댑터가 노출하는 `APPLY_WORKFLOW_PATHS` 하나이며,
-# worker와 어댑터가 다른 경로를 대조하지 않도록 같은 상수를 재사용한다.
+# (ADR-0019 section 7). 고객이 자기 repo에 설치하는 apply workflow의 정본 경로다.
+# live 어댑터도 같은 경로를 쓰지만, 순환 import를 피하려고 worker가 정본으로 둔다.
+APPLY_WORKFLOW_PATHS = frozenset(
+    {".github/workflows/terraform-apply.yml", ".github/workflows/terraform-apply.yaml"}
+)
 _APPLY_WORKFLOW_PATHS = APPLY_WORKFLOW_PATHS
 
 
@@ -67,7 +72,10 @@ class DeploymentWork:
     """Authoritative A-owned deployment work reloaded by D for one exact revision.
 
     D는 이 값을 만들지 않고 다시 읽어 검증만 한다. `approval`은 A가 이미 record한 사실이며,
-    `RUN_DEPLOYMENT` 단계(plan 생성 전)에는 아직 없으므로 optional이다.
+    `RUN_DEPLOYMENT` 단계(plan 생성 전)에는 아직 없으므로 optional이다. `run_reference`는
+    apply dispatch 후 EventBridge가 실어 온 실제 GitHub `run_id`로 A가 durable하게 기록하며,
+    `APPLY_COMPLETED` 단계에서 D가 그것으로 run을 재조회한다(§7). `sync_target`은 apply 후
+    Actual 재조회 대상 commit이다(ADR-0020).
     """
 
     customer_id: str
@@ -77,10 +85,11 @@ class DeploymentWork:
     job_id: str
     revision: int
     commit_sha: str
-    mapped_resource_ids: tuple[str, ...] = ()
     plan: TerraformPlan | None = None
     state_version: TerraformStateVersion | None = None
     approval: DeploymentApproval | None = None
+    run_reference: WorkflowRunReference | None = None
+    sync_target: RemediationSyncTarget | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -98,11 +107,6 @@ class DeploymentWork:
             raise TypeError("revision must be an integer")
         if self.revision < 0:
             raise ValueError("revision must be non-negative")
-        if not isinstance(self.mapped_resource_ids, tuple):
-            raise TypeError("mapped_resource_ids must be a tuple")
-        for resource_id in self.mapped_resource_ids:
-            if not isinstance(resource_id, str) or not resource_id.strip():
-                raise ValueError("mapped_resource_ids item must be a non-empty string")
         if self.plan is not None:
             if not isinstance(self.plan, TerraformPlan):
                 raise TypeError("plan must be a TerraformPlan or None")
@@ -121,6 +125,19 @@ class DeploymentWork:
                 raise TypeError("approval must be a DeploymentApproval or None")
             if self.approval.deployment_id != self.deployment_id:
                 raise ValueError("approval deployment_id does not match work")
+        if self.run_reference is not None:
+            if not isinstance(self.run_reference, WorkflowRunReference):
+                raise TypeError("run_reference must be a WorkflowRunReference or None")
+            if (
+                self.run_reference.deployment_id != self.deployment_id
+                or self.run_reference.repository_id != self.repository_id
+            ):
+                raise ValueError("run_reference does not match work")
+        if self.sync_target is not None:
+            if not isinstance(self.sync_target, RemediationSyncTarget):
+                raise TypeError("sync_target must be a RemediationSyncTarget or None")
+            if self.sync_target.customer_id != self.customer_id:
+                raise ValueError("sync_target customer scope does not match work")
 
 
 class DeploymentWorkRepository(Protocol):
@@ -128,26 +145,24 @@ class DeploymentWorkRepository(Protocol):
 
 
 class DeploymentPlanStore(Protocol):
-    """Persist a refreshed plan outcome once; retries at the same revision are absorbed."""
+    """Persist a refreshed plan execution result once; retries at the same revision absorb."""
 
-    def put_plan_if_absent(self, *, work: DeploymentWork, outcome: PlanRequestOutcome) -> None: ...
-
-
-class ApplyRunStore(Protocol):
-    """Persist a dispatched apply run reference once; idempotent per deployment."""
-
-    def put_run_if_absent(self, *, work: DeploymentWork, reference: ApplyRunReference) -> None: ...
+    def put_plan_if_absent(self, *, work: DeploymentWork, result: PlanExecutionResult) -> None: ...
 
 
-class VerifiedActualStore(Protocol):
-    """Persist the authoritative run outcome and post-apply Actual once."""
+class DeploymentRunStore(Protocol):
+    """Persist a dispatched apply run receipt once; idempotent per deployment."""
+
+    def put_receipt_if_absent(
+        self, *, work: DeploymentWork, receipt: ApplyDispatchReceipt
+    ) -> None: ...
+
+
+class DeploymentVerificationStore(Protocol):
+    """Persist the authoritative verified run facts once."""
 
     def put_verification_if_absent(
-        self,
-        *,
-        work: DeploymentWork,
-        outcome: VerifiedRunOutcome,
-        actual: tuple[AwsResourceSnapshot, ...],
+        self, *, work: DeploymentWork, facts: WorkflowRunFacts
     ) -> None: ...
 
 
@@ -163,8 +178,8 @@ class DeploymentWorker:
         run_reader: WorkflowRunReader,
         actual_port: ActualRereadPort,
         plan_store: DeploymentPlanStore,
-        run_store: ApplyRunStore,
-        verification_store: VerifiedActualStore,
+        run_store: DeploymentRunStore,
+        verification_store: DeploymentVerificationStore,
     ) -> None:
         dependencies = (
             work_repository,
@@ -189,7 +204,7 @@ class DeploymentWorker:
 
     def handle(
         self, task: WorkflowTask
-    ) -> PlanRequestOutcome | ApplyRunReference | VerifiedRunOutcome:
+    ) -> PlanExecutionResult | ApplyDispatchReceipt | WorkflowRunFacts:
         if not isinstance(task, WorkflowTask):
             raise TypeError("task must be a WorkflowTask")
         work = self._reload_work(task)
@@ -215,86 +230,67 @@ class DeploymentWorker:
             raise DeploymentWorkerError("deployment work does not match the task")
         return work
 
-    def _run_plan(self, work: DeploymentWork) -> PlanRequestOutcome:
-        outcome = self._plan_port.request_plan(
+    def _run_plan(self, work: DeploymentWork) -> PlanExecutionResult:
+        result = self._plan_port.request_plan(
             customer_id=work.customer_id,
             deployment_id=work.deployment_id,
             repository_id=work.repository_id,
             commit_sha=work.commit_sha,
         )
-        if not isinstance(outcome, PlanRequestOutcome):
-            raise DeploymentWorkerError("plan port must return a PlanRequestOutcome")
-        plan = outcome.plan
+        if not isinstance(result, PlanExecutionResult):
+            raise DeploymentWorkerError("plan port must return a PlanExecutionResult")
+        plan = result.plan
         if plan.deployment_id != work.deployment_id or plan.commit_sha != work.commit_sha:
             raise DeploymentWorkerError("plan is outside the deployment work")
         if plan.artifact.customer_id != work.customer_id:
             raise DeploymentWorkerError("plan is outside the customer scope")
         if plan.artifact.repository_id not in (None, work.repository_id):
             raise DeploymentWorkerError("plan is outside the repository scope")
-        self._plan_store.put_plan_if_absent(work=work, outcome=outcome)
-        return outcome
+        self._plan_store.put_plan_if_absent(work=work, result=result)
+        return result
 
-    def _dispatch_apply(self, work: DeploymentWork) -> ApplyRunReference:
-        approval = self._require_approved_plan(work)
-        assert work.state_version is not None  # _require_approved_plan guarantees it
-        reference = self._apply_port.dispatch_apply(
-            approval=approval,
-            state_lineage=work.state_version.lineage,
-            state_serial=work.state_version.serial,
-            repository_id=work.repository_id,
+    def _dispatch_apply(self, work: DeploymentWork) -> ApplyDispatchReceipt:
+        approval, plan, state_version = self._require_approved_plan(work)
+        receipt = self._apply_port.dispatch_apply(
+            approval=approval, plan=plan, state_version=state_version
         )
-        if not isinstance(reference, ApplyRunReference):
-            raise DeploymentWorkerError("apply port must return an ApplyRunReference")
+        if not isinstance(receipt, ApplyDispatchReceipt):
+            raise DeploymentWorkerError("apply port must return an ApplyDispatchReceipt")
         if (
-            reference.deployment_id != work.deployment_id
-            or reference.repository_id != work.repository_id
+            receipt.deployment_id != work.deployment_id
+            or receipt.repository_id != work.repository_id
         ):
-            raise DeploymentWorkerError("apply run reference is outside the deployment work")
-        self._run_store.put_run_if_absent(work=work, reference=reference)
-        return reference
+            raise DeploymentWorkerError("apply dispatch receipt is outside the deployment work")
+        if receipt.workflow_path not in _APPLY_WORKFLOW_PATHS:
+            raise DeploymentWorkerError("apply dispatch receipt workflow path is not allow-listed")
+        self._run_store.put_receipt_if_absent(work=work, receipt=receipt)
+        return receipt
 
-    def _verify_apply(self, work: DeploymentWork) -> VerifiedRunOutcome:
-        approval = self._require_approved_plan(work)
-        assert work.state_version is not None  # _require_approved_plan guarantees it
-        # dispatch는 idempotent하므로 재호출해도 새 run을 만들지 않고 같은 run_id를 돌려준다
-        # (ADR-0019 section 5). 이 값으로 run을 재조회한다.
-        reference = self._apply_port.dispatch_apply(
-            approval=approval,
-            state_lineage=work.state_version.lineage,
-            state_serial=work.state_version.serial,
-            repository_id=work.repository_id,
-        )
-        outcome = self._run_reader.read_run(
-            customer_id=work.customer_id,
-            repository_id=work.repository_id,
-            run_id=reference.run_id,
-        )
-        if not isinstance(outcome, VerifiedRunOutcome):
-            raise DeploymentWorkerError("run reader must return a VerifiedRunOutcome")
-        self._require_run_matches_approval(work, approval, outcome)
+    def _verify_apply(self, work: DeploymentWork) -> WorkflowRunFacts:
+        approval, _plan, _state = self._require_approved_plan(work)
+        if work.run_reference is None:
+            # 재조회할 run 좌표가 없으면 진행하지 않는다. run_id는 A가 완료 Event에서 durable하게
+            # 기록한 실제 GitHub run id다 — 여기서 새 apply를 dispatch해 만들지 않는다(§5·§7).
+            raise DeploymentWorkerError("deployment work has no run reference to verify")
+        if work.sync_target is None:
+            raise DeploymentWorkerError("deployment work has no sync target for reread")
+        facts = self._run_reader.read_run(work.run_reference)
+        if not isinstance(facts, WorkflowRunFacts):
+            raise DeploymentWorkerError("run reader must return WorkflowRunFacts")
+        self._require_run_matches_approval(work, approval, facts)
         # 승인 사실과 완전히 일치하고 성공한 run만 apply 후 Actual을 재조회한다(ADR-0020).
-        actual = self._actual_port.reread_actual(
+        self._actual_port.reread_actual(
             customer_id=work.customer_id,
-            aws_account_id=work.aws_account_id,
-            resource_ids=self._mapped_resource_ids(work),
+            deployment_id=work.deployment_id,
+            sync_target=work.sync_target,
         )
-        if not isinstance(actual, tuple):
-            raise DeploymentWorkerError("actual port must return a tuple")
-        for snapshot in actual:
-            if not isinstance(snapshot, AwsResourceSnapshot):
-                raise DeploymentWorkerError("actual reread returned a non-snapshot value")
-            if (
-                snapshot.customer_id != work.customer_id
-                or snapshot.aws_account_id != work.aws_account_id
-            ):
-                raise DeploymentWorkerError("actual snapshot is outside the deployment scope")
-        self._verification_store.put_verification_if_absent(
-            work=work, outcome=outcome, actual=actual
-        )
-        return outcome
+        self._verification_store.put_verification_if_absent(work=work, facts=facts)
+        return facts
 
     @staticmethod
-    def _require_approved_plan(work: DeploymentWork) -> DeploymentApproval:
+    def _require_approved_plan(
+        work: DeploymentWork,
+    ) -> tuple[DeploymentApproval, TerraformPlan, TerraformStateVersion]:
         """apply 계열 command는 stored plan/approval/state가 정확히 바인딩됐을 때만 진행한다."""
         if work.plan is None or work.approval is None or work.state_version is None:
             raise DeploymentWorkerError("deployment work is not approved for apply")
@@ -303,28 +299,19 @@ class DeploymentWorker:
             raise DeploymentWorkerError("stored plan digest is not exact")
         if not work.approval.matches(plan):
             raise DeploymentWorkerError("approval is not bound to the stored plan")
-        return work.approval
+        return work.approval, plan, work.state_version
 
     def _require_run_matches_approval(
-        self, work: DeploymentWork, approval: DeploymentApproval, outcome: VerifiedRunOutcome
+        self, work: DeploymentWork, approval: DeploymentApproval, facts: WorkflowRunFacts
     ) -> None:
         """재조회한 run이 승인 사실과 하나라도 다르면 apply를 진행하지 않는다(ADR-0019 section 7)."""
-        if outcome.repository_id != work.repository_id:
+        if facts.repository_id != work.repository_id:
             raise DeploymentApplyBlockedError("verified run repository is not the approved one")
-        if outcome.workflow_path not in _APPLY_WORKFLOW_PATHS:
+        if facts.workflow_path not in _APPLY_WORKFLOW_PATHS:
             raise DeploymentApplyBlockedError("verified run workflow path is not allow-listed")
-        if outcome.ref != approval.commit_sha:
-            raise DeploymentApplyBlockedError("verified run ref is not the approved commit")
-        if outcome.plan_hash != approval.plan_hash:
+        if facts.ref != approval.commit_sha or facts.commit_sha != approval.commit_sha:
+            raise DeploymentApplyBlockedError("verified run commit is not the approved commit")
+        if facts.plan_hash != approval.plan_hash:
             raise DeploymentApplyBlockedError("verified run plan_hash is not the approved plan")
-        if not outcome.succeeded:
+        if facts.conclusion is not WorkflowConclusion.SUCCESS:
             raise DeploymentApplyBlockedError("verified run did not conclude successfully")
-
-    @staticmethod
-    def _mapped_resource_ids(work: DeploymentWork) -> tuple[str, ...]:
-        """재조회 대상을 planned 집합(readiness에 매핑된 리소스)으로 좁힌다(ADR-0020 section 8).
-
-        전체 재평가가 기본이어도 읽기 대상은 planned 집합에서 나온다. work의
-        `mapped_resource_ids`가 그 durable한 근거이며, D는 여기서 read-only scope만 강제한다.
-        """
-        return work.mapped_resource_ids

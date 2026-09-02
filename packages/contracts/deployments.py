@@ -1,11 +1,10 @@
 """GitHub, read-only AWS, and approved Terraform deployment contracts."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
 
 from packages.contracts._validation import require_non_empty_string
+from packages.contracts.jobs import JobCurrentStep, JobStatus
 
 
 class ArtifactType(StrEnum):
@@ -13,9 +12,10 @@ class ArtifactType(StrEnum):
     TERRAFORM_SNAPSHOT = "TERRAFORM_SNAPSHOT"
     AWS_SNAPSHOT = "AWS_SNAPSHOT"
     REMEDIATION_PATCH = "REMEDIATION_PATCH"
+    # The `show -json` allow-list projection whose SHA-256 is `plan_hash` (ADR-0019 §1).
     TERRAFORM_PLAN = "TERRAFORM_PLAN"
-    # apply가 사용하는 binary saved plan. Terraform이 바이트 안정성을 보장하지 않으므로
-    # hash 대상이 아니다 (ADR-0019 §1).
+    # The saved binary plan `terraform apply` consumes; never a hash target because
+    # Terraform does not guarantee its byte stability (ADR-0019 §1).
     TERRAFORM_PLAN_BINARY = "TERRAFORM_PLAN_BINARY"
     GOLDEN_DATASET = "GOLDEN_DATASET"
 
@@ -138,6 +138,35 @@ class AwsResourceQuery:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class TerraformStateVersion:
+    """The plan-time Terraform state identity re-checked before apply (ADR-0019 §2).
+
+    `serial` alone is insufficient: a re-created state gets a fresh `lineage` and a
+    `serial` reset to a low value, so a different state can coincidentally match a
+    `serial`. Both values are compared as a pair so that case is caught.
+    """
+
+    lineage: str
+    serial: int
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.lineage, "lineage")
+        if isinstance(self.serial, bool) or not isinstance(self.serial, int):
+            raise TypeError("serial must be an integer")
+        if self.serial < 0:
+            raise ValueError("serial must be zero or greater")
+
+    def matches(self, other: object) -> bool:
+        """Return whether two state versions are the same lineage and serial pair."""
+        if not isinstance(other, TerraformStateVersion):
+            raise TypeError("other must be a TerraformStateVersion")
+        return self.lineage == other.lineage and self.serial == other.serial
+
+    def to_dict(self) -> dict[str, object]:
+        return {"lineage": self.lineage, "serial": self.serial}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TerraformPlan:
     deployment_id: str
     commit_sha: str
@@ -160,6 +189,38 @@ class TerraformPlan:
             "commit_sha": self.commit_sha,
             "plan_hash": self.plan_hash,
             "artifact": self.artifact.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PlanExecutionResult:
+    """D's `PlanRequestPort` output: the hashed plan, its saved binary, and state.
+
+    `plan` carries the allow-listed projection whose digest is `plan_hash`.
+    `binary_artifact` is the saved binary plan that `terraform apply` consumes and
+    is never a hash target. `state_version` is the plan-time `(lineage, serial)`
+    re-checked before apply. All three refer to the same deployment (ADR-0019 §1, §2).
+    """
+
+    plan: TerraformPlan
+    binary_artifact: ArtifactReference
+    state_version: TerraformStateVersion
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan, TerraformPlan):
+            raise TypeError("plan must be a TerraformPlan")
+        if not isinstance(self.binary_artifact, ArtifactReference):
+            raise TypeError("binary_artifact must be an ArtifactReference")
+        if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
+            raise ValueError("binary_artifact must be a TERRAFORM_PLAN_BINARY")
+        if not isinstance(self.state_version, TerraformStateVersion):
+            raise TypeError("state_version must be a TerraformStateVersion")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plan": self.plan.to_dict(),
+            "binary_artifact": self.binary_artifact.to_dict(),
+            "state_version": self.state_version.to_dict(),
         }
 
 
@@ -193,44 +254,18 @@ class DeploymentApproval:
         }
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TerraformStateVersion:
-    """plan 시점의 Terraform state 정체성 (ADR-0019 section 2).
+class WorkflowConclusion(StrEnum):
+    """GitHub Actions run conclusion re-read from the run, never trusted from an Event."""
 
-    `lineage`와 `serial`을 쌍으로 묶는다. apply job은 dispatch 직전과 실행 시작 시 두 값이
-    **모두** 일치할 때만 실행한다. `serial` 단독으로는 state 재생성을 잡지 못한다 — state가
-    재생성되면 `lineage`가 새로 발급되고 `serial`이 낮은 값으로 초기화되므로, 다른 state가
-    우연히 같은 `serial`로 통과할 수 있다.
-    """
-
-    lineage: str
-    serial: int
-
-    def __post_init__(self) -> None:
-        require_non_empty_string(self.lineage, "lineage")
-        if not isinstance(self.serial, int) or isinstance(self.serial, bool):
-            raise TypeError("serial must be an int")
-        if self.serial < 0:
-            raise ValueError("serial must be non-negative")
-
-    def matches(self, other: "TerraformStateVersion") -> bool:
-        """두 state 정체성이 같은 lineage와 serial을 갖는지 반환한다."""
-        if not isinstance(other, TerraformStateVersion):
-            raise TypeError("other must be a TerraformStateVersion")
-        return self.lineage == other.lineage and self.serial == other.serial
-
-    def to_dict(self) -> dict[str, object]:
-        return {"lineage": self.lineage, "serial": self.serial}
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    CANCELLED = "CANCELLED"
+    TIMED_OUT = "TIMED_OUT"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ApplyRunReference:
-    """`ApplyDispatchPort.dispatch_apply`가 반환하는 dispatch된 apply run 참조.
-
-    승인된 approval 하나로 dispatch된 GitHub Actions run을 가리킨다. 같은 approval로
-    두 번 dispatch돼도 같은 run을 가리켜야 하므로(ADR-0019 §5), 이 값은 dispatch 자체가
-    아니라 dispatch된 run의 좌표만 서술한다. 실제 실행/apply 표면은 담지 않는다.
-    """
+class WorkflowRunReference:
+    """Locator for one GitHub Actions run tied to a deployment (ADR-0019 §7)."""
 
     deployment_id: str
     repository_id: str
@@ -249,74 +284,209 @@ class ApplyRunReference:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class VerifiedRunOutcome:
-    """`WorkflowRunReader.read_run`이 반환하는 권위 있는 run 완료 사실.
+class WorkflowRunFacts:
+    """Facts re-read from an Actions run so D can verify, not trust, an Event.
 
-    EventBridge payload를 신뢰하지 않고 `run_id`로 Actions run을 다시 읽어 만든 값이다
-    (ADR-0019 §7). 실패도 값이므로(ADR-0017·0018) 재조회 실패나 mismatch는 예외가 아니라
-    `conclusion`으로 표현한다. D Worker는 이 값의 `workflow_path`/`repository_id`/`ref`/
-    `plan_hash`를 승인 사실과 대조한 뒤에만 상태를 진행한다.
+    D compares `workflow_path` against an allow-list, `repository_id`/`ref` against
+    the approved commit, `conclusion`, and `plan_hash` against the approved plan.
+    Any mismatch routes to MANUAL_REVIEW rather than a retry (ADR-0019 §7).
     """
 
     run_id: str
-    workflow_path: str
     repository_id: str
+    workflow_path: str
     ref: str
-    conclusion: str
+    commit_sha: str
+    conclusion: WorkflowConclusion
     plan_hash: str
 
     def __post_init__(self) -> None:
-        for name in ("run_id", "workflow_path", "repository_id", "ref", "conclusion", "plan_hash"):
+        for name in ("run_id", "repository_id", "workflow_path", "ref", "commit_sha", "plan_hash"):
             require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.conclusion, WorkflowConclusion):
+            raise TypeError("conclusion must be a WorkflowConclusion")
 
-    @property
-    def succeeded(self) -> bool:
-        """GitHub Actions 규약대로 성공 결론만 참으로 본다."""
-        return self.conclusion == "success"
-
-    def to_dict(self) -> dict[str, object]:
+    def to_dict(self) -> dict[str, str]:
         return {
             "run_id": self.run_id,
-            "workflow_path": self.workflow_path,
             "repository_id": self.repository_id,
+            "workflow_path": self.workflow_path,
             "ref": self.ref,
-            "conclusion": self.conclusion,
+            "commit_sha": self.commit_sha,
+            "conclusion": self.conclusion.value,
             "plan_hash": self.plan_hash,
         }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class AwsResourceSnapshot:
-    """`ActualRereadPort.reread_actual`가 반환하는 apply 후 단일 리소스 Actual.
+class ApplyDispatchReceipt:
+    """The `workflow_dispatch` acknowledgment D obtains when it triggers apply.
 
-    M1 read-only AWS Resource Tool 재사용이며 write 표면이 없다(ADR-0007). `attributes`는
-    서술적 read 상태일 뿐 리소스를 변경할 수 있는 handle/token을 담지 않는다. Contract가
-    앱 모듈의 freeze 유틸에 의존하지 않도록 값은 문자열 매핑으로 제한하고 최상위를
-    read-only로 감싼다.
+    A dispatch confirms the run was requested; the authoritative apply facts still
+    come from re-reading the run via `WorkflowRunReader` (ADR-0019 §5, §7).
     """
 
-    customer_id: str
-    aws_account_id: str
-    resource_type: str
-    resource_id: str
-    attributes: Mapping[str, str]
+    deployment_id: str
+    repository_id: str
+    workflow_path: str
 
     def __post_init__(self) -> None:
-        for name in ("customer_id", "aws_account_id", "resource_type", "resource_id"):
+        for name in ("deployment_id", "repository_id", "workflow_path"):
             require_non_empty_string(getattr(self, name), name)
-        if not isinstance(self.attributes, Mapping):
-            raise TypeError("attributes must be a mapping")
-        for key, value in self.attributes.items():
-            require_non_empty_string(key, "attributes key")
-            if not isinstance(value, str):
-                raise TypeError("attributes values must be strings")
-        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
 
-    def to_dict(self) -> dict[str, object]:
+    def to_dict(self) -> dict[str, str]:
         return {
-            "customer_id": self.customer_id,
-            "aws_account_id": self.aws_account_id,
-            "resource_type": self.resource_type,
-            "resource_id": self.resource_id,
-            "attributes": dict(self.attributes),
+            "deployment_id": self.deployment_id,
+            "repository_id": self.repository_id,
+            "workflow_path": self.workflow_path,
         }
+
+
+class DeploymentStatus(StrEnum):
+    """Presentation-only deployment lifecycle position (ADR-0019 §8).
+
+    Never persisted. `derive_deployment_status()` computes it at read time from
+    facts that are already durable (Job status/step, approval, rejection, apply
+    run conclusion, verification result), so there is no second copy that can
+    drift. Gates re-check facts directly; this value is for API/UI shape only.
+    """
+
+    PLAN_REQUESTED = "PLAN_REQUESTED"
+    PLAN_COMPLETED = "PLAN_COMPLETED"
+    READINESS_EVALUATED = "READINESS_EVALUATED"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    APPROVED = "APPROVED"
+    APPLYING = "APPLYING"
+    APPLIED = "APPLIED"
+    VERIFYING = "VERIFYING"
+    VERIFIED = "VERIFIED"
+    # Branches.
+    BLOCKED = "BLOCKED"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    REJECTED = "REJECTED"
+    VERIFICATION_INDETERMINATE = "VERIFICATION_INDETERMINATE"
+
+
+class DeploymentRejectionReason(StrEnum):
+    """Enumerated reject reasons; free text is disallowed (ADR-0019 §8)."""
+
+    NOT_APPROVED_BY_POLICY = "NOT_APPROVED_BY_POLICY"
+    PLAN_OUTDATED = "PLAN_OUTDATED"
+    RISK_TOO_HIGH = "RISK_TOO_HIGH"
+    SUPERSEDED = "SUPERSEDED"
+    OTHER = "OTHER"
+
+
+class DeploymentReadinessSignal(StrEnum):
+    """C readiness verdict as seen by the status derivation.
+
+    Values match `DeploymentReadinessStatus` so a caller can pass its verdict
+    through without this pure function importing across the C role boundary
+    (which would create a contracts import cycle).
+    """
+
+    READY_FOR_APPROVAL = "READY_FOR_APPROVAL"
+    BLOCKED = "BLOCKED"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+class ApplyOutcome(StrEnum):
+    """Apply run outcome as re-read from the Actions run (ADR-0019 §5, §7)."""
+
+    NOT_STARTED = "NOT_STARTED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class VerificationOutcome(StrEnum):
+    """Post-Deploy Verification outcome as a status signal (ADR-0020)."""
+
+    NOT_STARTED = "NOT_STARTED"
+    RUNNING = "RUNNING"
+    COMPARABLE = "COMPARABLE"
+    INDETERMINATE = "INDETERMINATE"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DeploymentFacts:
+    """The durable facts a deployment's status is derived from (ADR-0019 §8).
+
+    None of these is a stored `DeploymentStatus`; they are the Job status/step,
+    approval/rejection existence, the apply run outcome, and the verification
+    outcome that already exist independently.
+    """
+
+    job_status: JobStatus
+    current_step: JobCurrentStep
+    readiness: DeploymentReadinessSignal | None = None
+    is_approved: bool = False
+    is_rejected: bool = False
+    apply_outcome: ApplyOutcome = ApplyOutcome.NOT_STARTED
+    verification_outcome: VerificationOutcome = VerificationOutcome.NOT_STARTED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.job_status, JobStatus):
+            raise TypeError("job_status must be a JobStatus")
+        if not isinstance(self.current_step, JobCurrentStep):
+            raise TypeError("current_step must be a JobCurrentStep")
+        if self.readiness is not None and not isinstance(self.readiness, DeploymentReadinessSignal):
+            raise TypeError("readiness must be a DeploymentReadinessSignal or None")
+        for name in ("is_approved", "is_rejected"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool")
+        if not isinstance(self.apply_outcome, ApplyOutcome):
+            raise TypeError("apply_outcome must be an ApplyOutcome")
+        if not isinstance(self.verification_outcome, VerificationOutcome):
+            raise TypeError("verification_outcome must be a VerificationOutcome")
+        if self.is_approved and self.is_rejected:
+            raise ValueError("a deployment cannot be both approved and rejected")
+
+
+def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
+    """Return the presentation status derived from durable deployment facts.
+
+    Precedence follows ADR-0019 §8: terminal reject first, then readiness
+    branches, then the apply/verify progression. Gates never read this value.
+    """
+    if not isinstance(facts, DeploymentFacts):
+        raise TypeError("facts must be a DeploymentFacts")
+
+    # Terminal reject wins over everything else.
+    if facts.is_rejected:
+        return DeploymentStatus.REJECTED
+
+    # Verification stage (only reached after a successful apply).
+    if facts.apply_outcome is ApplyOutcome.SUCCEEDED:
+        if facts.verification_outcome is VerificationOutcome.INDETERMINATE:
+            return DeploymentStatus.VERIFICATION_INDETERMINATE
+        if facts.verification_outcome is VerificationOutcome.COMPARABLE:
+            return DeploymentStatus.VERIFIED
+        if facts.verification_outcome is VerificationOutcome.RUNNING:
+            return DeploymentStatus.VERIFYING
+        return DeploymentStatus.APPLIED
+
+    # Apply failed or was ambiguous: never auto-retried (ADR-0019 §8).
+    if facts.apply_outcome is ApplyOutcome.FAILED:
+        return DeploymentStatus.MANUAL_REVIEW
+    if facts.apply_outcome is ApplyOutcome.RUNNING:
+        return DeploymentStatus.APPLYING
+
+    # Approval granted but apply not yet started.
+    if facts.is_approved:
+        return DeploymentStatus.APPROVED
+
+    # Readiness branches decide whether approval is even offered.
+    if facts.readiness is DeploymentReadinessSignal.BLOCKED:
+        return DeploymentStatus.BLOCKED
+    if facts.readiness is DeploymentReadinessSignal.MANUAL_REVIEW:
+        return DeploymentStatus.MANUAL_REVIEW
+    if facts.readiness is DeploymentReadinessSignal.READY_FOR_APPROVAL:
+        return DeploymentStatus.WAITING_APPROVAL
+
+    # Pre-readiness progression is read from the Job's current step.
+    if facts.current_step is JobCurrentStep.TERRAFORM_PLAN:
+        return DeploymentStatus.PLAN_REQUESTED
+    if facts.current_step is JobCurrentStep.PRE_DEPLOY_VALIDATION:
+        return DeploymentStatus.READINESS_EVALUATED
+    return DeploymentStatus.PLAN_COMPLETED

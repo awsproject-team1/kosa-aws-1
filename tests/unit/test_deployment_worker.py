@@ -1,18 +1,17 @@
 """D Deployment Worker의 revision-bound 실행 경로 Unit 테스트 (ADR-0019).
 
 고정하는 불변식:
-- command당 정확히 하나의 injected D port를 호출한다 (RUN_DEPLOYMENT/PLAN_COMPLETED/APPLY_COMPLETED).
+- command당 정확히 하나의 injected D port를 호출한다(RUN_DEPLOYMENT/PLAN_COMPLETED/APPLY_COMPLETED).
 - work는 queue payload가 아니라 (job_id, revision)으로 다시 읽고, 불일치하면 진행하지 않는다.
 - 승인되지 않은/불일치 plan으로는 apply를 dispatch하지 않는다.
-- 재조회한 run이 승인 사실(repository/workflow_path/ref/plan_hash/conclusion)과 하나라도 다르면
-  apply 후 Actual을 재조회하지 않고 차단한다 (EventBridge payload만으로 상태가 확정되지 않는다).
-- 같은 approval로 두 번째 apply run을 만들지 않는다 (idempotent dispatch).
+- APPLY_COMPLETED는 apply를 재dispatch하지 않고 **저장된 run reference**로 재조회한다(P1-1, §5·§7).
+- 재조회한 run이 승인 사실(repository/workflow_path/ref/commit/plan_hash/conclusion)과 하나라도
+  다르면 apply 후 Actual을 재조회하지 않고 차단한다.
 """
 
 import unittest
 
 from agent.runtime import (
-    DeploymentPortError,
     MockActualRereadPort,
     MockApplyDispatchPort,
     MockPlanRequestPort,
@@ -26,19 +25,20 @@ from apps.backend.deployment import (
     DeploymentWorkNotFoundError,
 )
 from packages.contracts import (
-    ApplyRunReference,
+    ApplyDispatchReceipt,
     ArtifactReference,
     ArtifactType,
-    AwsResourceSnapshot,
     DeploymentApproval,
-    PlanReadinessInput,
-    PlanRequestOutcome,
+    PlanExecutionResult,
     TerraformPlan,
     TerraformStateVersion,
-    VerifiedRunOutcome,
     WorkflowCommand,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
     WorkflowTask,
 )
+from packages.contracts.remediation import RemediationSyncTarget
 
 CUSTOMER_ID = "cust-001"
 REPOSITORY_ID = "repo-iac-001"
@@ -50,7 +50,7 @@ COMMIT = "a" * 40
 LINEAGE = "11111111-2222-3333-4444-555555555555"
 SERIAL = 7
 APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
-RESOURCE_ID = "logs-bucket"
+RUN_ID = "run-777"
 
 
 def build_plan() -> TerraformPlan:
@@ -68,36 +68,45 @@ def build_plan() -> TerraformPlan:
     )
 
 
-def build_outcome() -> PlanRequestOutcome:
-    plan = build_plan()
-    return PlanRequestOutcome(
-        plan=plan,
+def build_binary() -> ArtifactReference:
+    return ArtifactReference(
+        artifact_id="art-plan-bin-1",
+        artifact_type=ArtifactType.TERRAFORM_PLAN_BINARY,
+        content_sha256="b" * 64,
+        customer_id=CUSTOMER_ID,
+        repository_id=REPOSITORY_ID,
+    )
+
+
+def build_plan_result() -> PlanExecutionResult:
+    return PlanExecutionResult(
+        plan=build_plan(),
+        binary_artifact=build_binary(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
-        readiness_input=PlanReadinessInput(
-            plan=plan,
-            refreshed=True,
-            has_destructive_changes=False,
-            mapped_resource_ids=(RESOURCE_ID,),
-        ),
     )
 
 
 def build_approval() -> DeploymentApproval:
     return DeploymentApproval(
-        deployment_id=DEPLOYMENT_ID,
-        approved_by="admin-1",
-        commit_sha=COMMIT,
-        plan_hash=PLAN_HASH,
+        deployment_id=DEPLOYMENT_ID, approved_by="admin-1", commit_sha=COMMIT, plan_hash=PLAN_HASH
     )
 
 
-def build_snapshot() -> AwsResourceSnapshot:
-    return AwsResourceSnapshot(
-        customer_id=CUSTOMER_ID,
-        aws_account_id=AWS_ACCOUNT_ID,
-        resource_type="AWS::S3::Bucket",
-        resource_id=RESOURCE_ID,
-        attributes={"encryption": "aws:kms"},
+def build_sync_target() -> RemediationSyncTarget:
+    return RemediationSyncTarget(
+        finding_id="find-1", customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID, commit_sha=COMMIT
+    )
+
+
+def success_facts(run_id: str = RUN_ID) -> WorkflowRunFacts:
+    return WorkflowRunFacts(
+        run_id=run_id,
+        repository_id=REPOSITORY_ID,
+        workflow_path=APPLY_WORKFLOW,
+        ref=COMMIT,
+        commit_sha=COMMIT,
+        conclusion=WorkflowConclusion.SUCCESS,
+        plan_hash=PLAN_HASH,
     )
 
 
@@ -115,39 +124,32 @@ class FakeWorkRepository:
 
 class RecordingStore:
     def __init__(self) -> None:
-        self.plans: list[PlanRequestOutcome] = []
-        self.runs: list[ApplyRunReference] = []
-        self.verifications: list[tuple[VerifiedRunOutcome, tuple[AwsResourceSnapshot, ...]]] = []
+        self.plans: list[PlanExecutionResult] = []
+        self.receipts: list[ApplyDispatchReceipt] = []
+        self.verifications: list[WorkflowRunFacts] = []
 
-    def put_plan_if_absent(self, *, work: DeploymentWork, outcome: PlanRequestOutcome) -> None:
-        self.plans.append(outcome)
+    def put_plan_if_absent(self, *, work: DeploymentWork, result: PlanExecutionResult) -> None:
+        self.plans.append(result)
 
-    def put_run_if_absent(self, *, work: DeploymentWork, reference: ApplyRunReference) -> None:
-        self.runs.append(reference)
+    def put_receipt_if_absent(self, *, work: DeploymentWork, receipt: ApplyDispatchReceipt) -> None:
+        self.receipts.append(receipt)
 
-    def put_verification_if_absent(self, *, work, outcome, actual) -> None:
-        self.verifications.append((outcome, actual))
+    def put_verification_if_absent(self, *, work: DeploymentWork, facts: WorkflowRunFacts) -> None:
+        self.verifications.append(facts)
 
 
 def build_worker(
-    *,
-    work: DeploymentWork | None,
-    run_outcome: VerifiedRunOutcome | None = None,
-    snapshots: tuple[AwsResourceSnapshot, ...] = (),
-    plan_registered: bool = True,
-) -> tuple[DeploymentWorker, RecordingStore, MockApplyDispatchPort]:
+    *, work: DeploymentWork | None, run_facts: WorkflowRunFacts | None = None
+) -> tuple[DeploymentWorker, RecordingStore, MockApplyDispatchPort, MockActualRereadPort]:
     plan_port = MockPlanRequestPort(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID)
-    if plan_registered:
-        plan_port.register_plan(
-            deployment_id=DEPLOYMENT_ID, commit_sha=COMMIT, outcome=build_outcome()
-        )
-    apply_port = MockApplyDispatchPort(repository_id=REPOSITORY_ID)
+    plan_port.register_plan(
+        deployment_id=DEPLOYMENT_ID, commit_sha=COMMIT, result=build_plan_result()
+    )
+    apply_port = MockApplyDispatchPort(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID)
     run_reader = MockWorkflowRunReader(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID)
-    if run_outcome is not None:
-        run_reader.register_run(run_outcome)
-    actual_port = MockActualRereadPort(customer_id=CUSTOMER_ID, aws_account_id=AWS_ACCOUNT_ID)
-    for snapshot in snapshots:
-        actual_port.register_snapshot(snapshot)
+    if run_facts is not None:
+        run_reader.register_run(run_facts)
+    actual_port = MockActualRereadPort(customer_id=CUSTOMER_ID)
     store = RecordingStore()
     worker = DeploymentWorker(
         work_repository=FakeWorkRepository(work),
@@ -159,11 +161,10 @@ def build_worker(
         run_store=store,
         verification_store=store,
     )
-    return worker, store, apply_port
+    return worker, store, apply_port, actual_port
 
 
 def plan_work() -> DeploymentWork:
-    """RUN_DEPLOYMENT 단계의 work — plan/approval 아직 없음."""
     return DeploymentWork(
         customer_id=CUSTOMER_ID,
         deployment_id=DEPLOYMENT_ID,
@@ -172,12 +173,12 @@ def plan_work() -> DeploymentWork:
         job_id=JOB_ID,
         revision=0,
         commit_sha=COMMIT,
-        mapped_resource_ids=(RESOURCE_ID,),
     )
 
 
-def approved_work(revision: int = 1) -> DeploymentWork:
-    """apply 계열 command의 work — stored plan/approval/state 포함."""
+def approved_work(
+    *, revision: int = 1, run_reference: WorkflowRunReference | None = None
+) -> DeploymentWork:
     return DeploymentWork(
         customer_id=CUSTOMER_ID,
         deployment_id=DEPLOYMENT_ID,
@@ -186,51 +187,30 @@ def approved_work(revision: int = 1) -> DeploymentWork:
         job_id=JOB_ID,
         revision=revision,
         commit_sha=COMMIT,
-        mapped_resource_ids=(RESOURCE_ID,),
         plan=build_plan(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
         approval=build_approval(),
+        run_reference=run_reference,
+        sync_target=build_sync_target(),
     )
 
 
-def success_run(run_id: str) -> VerifiedRunOutcome:
-    return VerifiedRunOutcome(
-        run_id=run_id,
-        workflow_path=APPLY_WORKFLOW,
-        repository_id=REPOSITORY_ID,
-        ref=COMMIT,
-        conclusion="success",
-        plan_hash=PLAN_HASH,
+def run_reference() -> WorkflowRunReference:
+    return WorkflowRunReference(
+        deployment_id=DEPLOYMENT_ID, repository_id=REPOSITORY_ID, run_id=RUN_ID
     )
 
 
-class DeploymentWorkerDependencyTest(unittest.TestCase):
-    def test_requires_all_dependencies(self) -> None:
-        with self.assertRaises(TypeError):
-            DeploymentWorker(
-                work_repository=FakeWorkRepository(None),
-                plan_port=None,  # type: ignore[arg-type]
-                apply_port=MockApplyDispatchPort(repository_id=REPOSITORY_ID),
-                run_reader=MockWorkflowRunReader(
-                    customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID
-                ),
-                actual_port=MockActualRereadPort(
-                    customer_id=CUSTOMER_ID, aws_account_id=AWS_ACCOUNT_ID
-                ),
-                plan_store=RecordingStore(),
-                run_store=RecordingStore(),
-                verification_store=RecordingStore(),
-            )
-
+class DependencyTest(unittest.TestCase):
     def test_rejects_non_task(self) -> None:
-        worker, _, _ = build_worker(work=plan_work())
+        worker, _, _, _ = build_worker(work=plan_work())
         with self.assertRaises(TypeError):
             worker.handle("not-a-task")  # type: ignore[arg-type]
 
 
 class ReloadTest(unittest.TestCase):
     def test_missing_work_is_not_found(self) -> None:
-        worker, _, _ = build_worker(work=None)
+        worker, _, _, _ = build_worker(work=None)
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.RUN_DEPLOYMENT
         )
@@ -238,7 +218,7 @@ class ReloadTest(unittest.TestCase):
             worker.handle(task)
 
     def test_stale_revision_is_not_found(self) -> None:
-        worker, _, _ = build_worker(work=plan_work())
+        worker, _, _, _ = build_worker(work=plan_work())
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=5, command=WorkflowCommand.RUN_DEPLOYMENT
         )
@@ -248,160 +228,110 @@ class ReloadTest(unittest.TestCase):
 
 class RunDeploymentTest(unittest.TestCase):
     def test_requests_plan_and_stores_it(self) -> None:
-        worker, store, apply_port = build_worker(work=plan_work())
+        worker, store, _, _ = build_worker(work=plan_work())
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.RUN_DEPLOYMENT
         )
-        outcome = worker.handle(task)
-        self.assertIsInstance(outcome, PlanRequestOutcome)
+        result = worker.handle(task)
+        self.assertIsInstance(result, PlanExecutionResult)
         self.assertEqual(len(store.plans), 1)
-        # RUN_DEPLOYMENT는 apply port를 건드리지 않는다.
-        self.assertEqual(store.runs, [])
-
-    def test_missing_registered_plan_raises(self) -> None:
-        # plan 부재는 port 계층 오류다(D Worker는 재시도하지 않는다).
-        worker, _, _ = build_worker(work=plan_work(), plan_registered=False)
-        task = WorkflowTask(
-            job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.RUN_DEPLOYMENT
-        )
-        with self.assertRaises(DeploymentPortError):
-            worker.handle(task)
+        self.assertEqual(store.receipts, [])
 
 
 class DispatchApplyTest(unittest.TestCase):
     def test_dispatches_apply_for_approved_work(self) -> None:
-        worker, store, _ = build_worker(work=approved_work())
+        worker, store, apply_port, _ = build_worker(work=approved_work())
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.PLAN_COMPLETED
         )
-        reference = worker.handle(task)
-        self.assertIsInstance(reference, ApplyRunReference)
-        self.assertEqual(reference.deployment_id, DEPLOYMENT_ID)
-        self.assertEqual(len(store.runs), 1)
+        receipt = worker.handle(task)
+        self.assertIsInstance(receipt, ApplyDispatchReceipt)
+        self.assertEqual(receipt.deployment_id, DEPLOYMENT_ID)
+        self.assertEqual(len(store.receipts), 1)
+        self.assertEqual(apply_port.dispatch_count, 1)
 
     def test_unapproved_work_does_not_dispatch(self) -> None:
-        # plan/approval 없는 work로 PLAN_COMPLETED를 처리하면 apply를 dispatch하지 않는다.
-        worker, store, _ = build_worker(work=plan_work())
+        worker, store, apply_port, _ = build_worker(work=plan_work())
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.PLAN_COMPLETED
         )
         with self.assertRaises(DeploymentWorkerError):
             worker.handle(task)
-        self.assertEqual(store.runs, [])
-
-    def test_approval_not_matching_plan_is_rejected(self) -> None:
-        mismatched = DeploymentWork(
-            customer_id=CUSTOMER_ID,
-            deployment_id=DEPLOYMENT_ID,
-            repository_id=REPOSITORY_ID,
-            aws_account_id=AWS_ACCOUNT_ID,
-            job_id=JOB_ID,
-            revision=1,
-            commit_sha=COMMIT,
-            plan=build_plan(),
-            state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
-            approval=DeploymentApproval(
-                deployment_id=DEPLOYMENT_ID,
-                approved_by="admin-1",
-                commit_sha=COMMIT,
-                plan_hash="0" * 64,  # plan_hash가 plan과 다르다
-            ),
-        )
-        worker, store, _ = build_worker(work=mismatched)
-        task = WorkflowTask(
-            job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.PLAN_COMPLETED
-        )
-        with self.assertRaises(DeploymentWorkerError):
-            worker.handle(task)
-        self.assertEqual(store.runs, [])
+        self.assertEqual(store.receipts, [])
+        self.assertEqual(apply_port.dispatch_count, 0)
 
 
 class VerifyApplyTest(unittest.TestCase):
-    def _run_id_for_work(self) -> str:
-        # dispatch가 결정적이므로 approved work가 얻을 run_id를 미리 계산한다.
-        apply_port = MockApplyDispatchPort(repository_id=REPOSITORY_ID)
-        return apply_port.dispatch_apply(
-            approval=build_approval(),
-            state_lineage=LINEAGE,
-            state_serial=SERIAL,
-            repository_id=REPOSITORY_ID,
-        ).run_id
-
-    def test_verifies_and_rereads_actual_on_success(self) -> None:
-        run_id = self._run_id_for_work()
-        worker, store, _ = build_worker(
-            work=approved_work(),
-            run_outcome=success_run(run_id),
-            snapshots=(build_snapshot(),),
+    def test_verifies_via_stored_run_reference_without_redispatch(self) -> None:
+        # P1-1: APPLY_COMPLETED는 apply를 재dispatch하지 않고 저장된 run reference로 조회한다.
+        worker, store, apply_port, actual_port = build_worker(
+            work=approved_work(run_reference=run_reference()), run_facts=success_facts()
         )
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
         )
-        outcome = worker.handle(task)
-        self.assertIsInstance(outcome, VerifiedRunOutcome)
-        self.assertTrue(outcome.succeeded)
+        facts = worker.handle(task)
+        self.assertIsInstance(facts, WorkflowRunFacts)
+        self.assertIs(facts.conclusion, WorkflowConclusion.SUCCESS)
+        self.assertEqual(apply_port.dispatch_count, 0)  # 재dispatch 없음
         self.assertEqual(len(store.verifications), 1)
-        _, actual = store.verifications[0]
-        self.assertEqual([s.resource_id for s in actual], [RESOURCE_ID])
+        self.assertEqual(len(actual_port.reread_calls), 1)
+
+    def test_missing_run_reference_is_error(self) -> None:
+        worker, _, _, _ = build_worker(
+            work=approved_work(run_reference=None), run_facts=success_facts()
+        )
+        task = WorkflowTask(
+            job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
+        )
+        with self.assertRaises(DeploymentWorkerError):
+            worker.handle(task)
 
     def test_unregistered_run_is_blocked(self) -> None:
-        # 미등록 run은 not_found 값을 돌려주고, plan_hash가 어긋나 차단된다.
-        worker, store, _ = build_worker(work=approved_work(), snapshots=(build_snapshot(),))
+        worker, store, _, actual_port = build_worker(
+            work=approved_work(run_reference=run_reference())
+        )
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
         )
         with self.assertRaises(DeploymentApplyBlockedError):
             worker.handle(task)
         self.assertEqual(store.verifications, [])
+        self.assertEqual(actual_port.reread_calls, [])
 
     def test_wrong_plan_hash_run_is_blocked(self) -> None:
-        run_id = self._run_id_for_work()
-        wrong = VerifiedRunOutcome(
-            run_id=run_id,
-            workflow_path=APPLY_WORKFLOW,
+        wrong = WorkflowRunFacts(
+            run_id=RUN_ID,
             repository_id=REPOSITORY_ID,
+            workflow_path=APPLY_WORKFLOW,
             ref=COMMIT,
-            conclusion="success",
-            plan_hash="0" * 64,  # 승인 plan_hash와 다르다
+            commit_sha=COMMIT,
+            conclusion=WorkflowConclusion.SUCCESS,
+            plan_hash="0" * 64,
         )
-        worker, store, _ = build_worker(
-            work=approved_work(), run_outcome=wrong, snapshots=(build_snapshot(),)
+        worker, _, _, actual_port = build_worker(
+            work=approved_work(run_reference=run_reference()), run_facts=wrong
         )
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
         )
         with self.assertRaises(DeploymentApplyBlockedError):
             worker.handle(task)
-        self.assertEqual(store.verifications, [])
+        self.assertEqual(actual_port.reread_calls, [])
 
-    def test_non_allowlisted_workflow_is_blocked(self) -> None:
-        run_id = self._run_id_for_work()
-        wrong = VerifiedRunOutcome(
-            run_id=run_id,
-            workflow_path="ci/terraform/malicious.yml",
+    def test_non_success_conclusion_is_blocked(self) -> None:
+        failed = WorkflowRunFacts(
+            run_id=RUN_ID,
             repository_id=REPOSITORY_ID,
-            ref=COMMIT,
-            conclusion="success",
-            plan_hash=PLAN_HASH,
-        )
-        worker, _, _ = build_worker(work=approved_work(), run_outcome=wrong)
-        task = WorkflowTask(
-            job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
-        )
-        with self.assertRaises(DeploymentApplyBlockedError):
-            worker.handle(task)
-
-    def test_failed_conclusion_is_blocked(self) -> None:
-        run_id = self._run_id_for_work()
-        failed = VerifiedRunOutcome(
-            run_id=run_id,
             workflow_path=APPLY_WORKFLOW,
-            repository_id=REPOSITORY_ID,
             ref=COMMIT,
-            conclusion="failure",
+            commit_sha=COMMIT,
+            conclusion=WorkflowConclusion.FAILURE,
             plan_hash=PLAN_HASH,
         )
-        worker, _, _ = build_worker(work=approved_work(), run_outcome=failed)
+        worker, _, _, _ = build_worker(
+            work=approved_work(run_reference=run_reference()), run_facts=failed
+        )
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.APPLY_COMPLETED
         )

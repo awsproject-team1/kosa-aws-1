@@ -1,11 +1,12 @@
 """M3 D live 실행 port 어댑터 Unit 테스트 (ADR-0019).
 
 실제 GitHub/AWS 호출은 주입한 fake로 대체한다. 고정하는 것:
-- 세 어댑터가 각 port Protocol을 만족한다.
+- 세 어댑터가 각 정본 port Protocol을 만족한다.
 - ApplyDispatchPort는 workflow_dispatch만 호출하고 input이 deployment_id/commit_sha/plan_hash다.
-- 재조회 실패(404·형식 오류)는 예외가 아니라 실패 결론 값이다(EventBridge 불신뢰, section 7).
-- 완료된 run은 path/head_sha/conclusion/run name의 plan_hash로 VerifiedRunOutcome이 된다.
-- ActualRereadPort는 read-only Resource Tool을 재사용하고 없는 리소스는 건너뛴다.
+  dispatch는 run_id를 주지 않고 ApplyDispatchReceipt(workflow_path)만 돌려준다.
+- WorkflowRunReader는 WorkflowRunReference(실제 run_id)로 재조회하고, 실패(404·형식·미완료·
+  plan_hash 마커 부재)는 예외가 아니라 FAILURE 결론 값이다(EventBridge 불신뢰, section 7).
+- ActualRereadPort는 read-only Resource Tool 재사용이며 반환값이 없다.
 - 모든 어댑터가 단일 scope 밖 요청을 거부한다.
 """
 
@@ -22,13 +23,20 @@ from agent.runtime import (
     LiveWorkflowRunReader,
     WorkflowRunReader,
 )
-from agent.runtime.aws_resource_tool import AwsResourceNotFoundError, AwsResourceTool
+from agent.runtime.aws_resource_tool import AwsResourceTool
 from packages.contracts import (
-    ApplyRunReference,
+    ApplyDispatchReceipt,
+    ArtifactReference,
+    ArtifactType,
     AwsResourceQuery,
     DeploymentApproval,
-    VerifiedRunOutcome,
+    TerraformPlan,
+    TerraformStateVersion,
+    WorkflowConclusion,
+    WorkflowRunFacts,
+    WorkflowRunReference,
 )
+from packages.contracts.remediation import RemediationSyncTarget
 
 CUSTOMER_ID = "cust-001"
 REPOSITORY_ID = "repo-iac-001"
@@ -38,15 +46,27 @@ DEPLOYMENT_ID = "dep-abc123"
 PLAN_HASH = "f" * 64
 COMMIT = "a" * 40
 LINEAGE = "11111111-2222-3333-4444-555555555555"
-RESOURCE_ID = "logs-bucket"
+APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
+
+
+def build_plan() -> TerraformPlan:
+    return TerraformPlan(
+        deployment_id=DEPLOYMENT_ID,
+        commit_sha=COMMIT,
+        plan_hash=PLAN_HASH,
+        artifact=ArtifactReference(
+            artifact_id="art-plan-1",
+            artifact_type=ArtifactType.TERRAFORM_PLAN,
+            content_sha256=PLAN_HASH,
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+        ),
+    )
 
 
 def build_approval() -> DeploymentApproval:
     return DeploymentApproval(
-        deployment_id=DEPLOYMENT_ID,
-        approved_by="admin-1",
-        commit_sha=COMMIT,
-        plan_hash=PLAN_HASH,
+        deployment_id=DEPLOYMENT_ID, approved_by="admin-1", commit_sha=COMMIT, plan_hash=PLAN_HASH
     )
 
 
@@ -59,34 +79,29 @@ class ApplyDispatchTest(unittest.TestCase):
 
         return calls, dispatch
 
-    def test_protocol_conformance(self) -> None:
-        calls, dispatch = self._capture()
-        port = LiveApplyDispatchPort(
+    def _port(self, dispatch):
+        return LiveApplyDispatchPort(
             customer_id=CUSTOMER_ID,
             repository_id=REPOSITORY_ID,
             repository_full_name=REPO_FULL,
             token_provider=lambda: "tok",
             dispatch=dispatch,
         )
-        self.assertIsInstance(port, ApplyDispatchPort)
 
-    def test_dispatch_posts_workflow_dispatch_with_bound_inputs(self) -> None:
+    def test_protocol_conformance(self) -> None:
+        _, dispatch = self._capture()
+        self.assertIsInstance(self._port(dispatch), ApplyDispatchPort)
+
+    def test_dispatch_posts_workflow_dispatch_and_returns_receipt(self) -> None:
         calls, dispatch = self._capture()
-        port = LiveApplyDispatchPort(
-            customer_id=CUSTOMER_ID,
-            repository_id=REPOSITORY_ID,
-            repository_full_name=REPO_FULL,
-            token_provider=lambda: "tok",
-            dispatch=dispatch,
-        )
-        reference = port.dispatch_apply(
+        receipt = self._port(dispatch).dispatch_apply(
             approval=build_approval(),
-            state_lineage=LINEAGE,
-            state_serial=7,
-            repository_id=REPOSITORY_ID,
+            plan=build_plan(),
+            state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
         )
-        self.assertIsInstance(reference, ApplyRunReference)
-        self.assertEqual(reference.deployment_id, DEPLOYMENT_ID)
+        self.assertIsInstance(receipt, ApplyDispatchReceipt)
+        self.assertEqual(receipt.deployment_id, DEPLOYMENT_ID)
+        self.assertEqual(receipt.workflow_path, APPLY_WORKFLOW)
         self.assertEqual(len(calls), 1)
         url, headers, body = calls[0]
         self.assertIn("/actions/workflows/terraform-apply.yml/dispatches", url)
@@ -98,44 +113,16 @@ class ApplyDispatchTest(unittest.TestCase):
             {"deployment_id": DEPLOYMENT_ID, "commit_sha": COMMIT, "plan_hash": PLAN_HASH},
         )
 
-    def test_dispatch_is_deterministic_per_approval(self) -> None:
-        calls, dispatch = self._capture()
-        port = LiveApplyDispatchPort(
-            customer_id=CUSTOMER_ID,
-            repository_id=REPOSITORY_ID,
-            repository_full_name=REPO_FULL,
-            token_provider=lambda: "tok",
-            dispatch=dispatch,
-        )
-        first = port.dispatch_apply(
-            approval=build_approval(),
-            state_lineage=LINEAGE,
-            state_serial=7,
-            repository_id=REPOSITORY_ID,
-        )
-        second = port.dispatch_apply(
-            approval=build_approval(),
-            state_lineage=LINEAGE,
-            state_serial=7,
-            repository_id=REPOSITORY_ID,
-        )
-        self.assertEqual(first.run_id, second.run_id)
-
-    def test_dispatch_rejects_out_of_scope_repository(self) -> None:
+    def test_dispatch_rejects_unbound_approval(self) -> None:
         _, dispatch = self._capture()
-        port = LiveApplyDispatchPort(
-            customer_id=CUSTOMER_ID,
-            repository_id=REPOSITORY_ID,
-            repository_full_name=REPO_FULL,
-            token_provider=lambda: "tok",
-            dispatch=dispatch,
+        wrong = DeploymentApproval(
+            deployment_id=DEPLOYMENT_ID, approved_by="a", commit_sha=COMMIT, plan_hash="0" * 64
         )
         with self.assertRaises(LiveDeploymentPortError):
-            port.dispatch_apply(
-                approval=build_approval(),
-                state_lineage=LINEAGE,
-                state_serial=7,
-                repository_id="repo-other",
+            self._port(dispatch).dispatch_apply(
+                approval=wrong,
+                plan=build_plan(),
+                state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
             )
 
 
@@ -156,69 +143,73 @@ class WorkflowRunReaderTest(unittest.TestCase):
             request=request,
         )
 
+    def _reference(self, run_id="42"):
+        return WorkflowRunReference(
+            deployment_id=DEPLOYMENT_ID, repository_id=REPOSITORY_ID, run_id=run_id
+        )
+
     def test_protocol_conformance(self) -> None:
         self.assertIsInstance(self._reader(payload={}), WorkflowRunReader)
 
     def test_completed_run_is_parsed(self) -> None:
         reader = self._reader(
             payload={
-                "path": ".github/workflows/terraform-apply.yml",
+                "path": APPLY_WORKFLOW,
                 "head_sha": COMMIT,
                 "conclusion": "success",
                 "name": f"terraform-apply plan_hash={PLAN_HASH}",
             }
         )
-        outcome = reader.read_run(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID, run_id="42")
-        self.assertTrue(outcome.succeeded)
-        self.assertEqual(outcome.ref, COMMIT)
-        self.assertEqual(outcome.plan_hash, PLAN_HASH)
-        self.assertEqual(outcome.workflow_path, ".github/workflows/terraform-apply.yml")
+        facts = reader.read_run(self._reference())
+        self.assertIsInstance(facts, WorkflowRunFacts)
+        self.assertIs(facts.conclusion, WorkflowConclusion.SUCCESS)
+        self.assertEqual(facts.ref, COMMIT)
+        self.assertEqual(facts.commit_sha, COMMIT)
+        self.assertEqual(facts.plan_hash, PLAN_HASH)
+        self.assertEqual(facts.workflow_path, APPLY_WORKFLOW)
 
     def test_http_failure_is_a_value_not_exception(self) -> None:
-        reader = self._reader(fail=True)
-        outcome = reader.read_run(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID, run_id="42")
-        self.assertIsInstance(outcome, VerifiedRunOutcome)
-        self.assertFalse(outcome.succeeded)
-        self.assertEqual(outcome.conclusion, "not_found")
+        facts = self._reader(fail=True).read_run(self._reference())
+        self.assertIsInstance(facts, WorkflowRunFacts)
+        self.assertIs(facts.conclusion, WorkflowConclusion.FAILURE)
 
     def test_incomplete_run_becomes_failure_value(self) -> None:
-        # conclusion=null(진행 중)이면 성공/실패가 아니므로 not_found 값으로 떨어진다.
         reader = self._reader(
             payload={
-                "path": ".github/workflows/terraform-apply.yml",
+                "path": APPLY_WORKFLOW,
                 "head_sha": COMMIT,
                 "conclusion": None,
                 "name": f"terraform-apply plan_hash={PLAN_HASH}",
             }
         )
-        outcome = reader.read_run(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID, run_id="42")
-        self.assertEqual(outcome.conclusion, "not_found")
+        self.assertIs(reader.read_run(self._reference()).conclusion, WorkflowConclusion.FAILURE)
 
     def test_missing_plan_hash_marker_becomes_failure_value(self) -> None:
         reader = self._reader(
             payload={
-                "path": ".github/workflows/terraform-apply.yml",
+                "path": APPLY_WORKFLOW,
                 "head_sha": COMMIT,
                 "conclusion": "success",
-                "name": "terraform-apply",  # plan_hash 마커 없음
+                "name": "terraform-apply",
             }
         )
-        outcome = reader.read_run(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID, run_id="42")
-        self.assertEqual(outcome.conclusion, "not_found")
+        self.assertIs(reader.read_run(self._reference()).conclusion, WorkflowConclusion.FAILURE)
 
     def test_read_rejects_out_of_scope(self) -> None:
         reader = self._reader(payload={})
+        other = WorkflowRunReference(
+            deployment_id=DEPLOYMENT_ID, repository_id="repo-other", run_id="42"
+        )
         with self.assertRaises(LiveDeploymentPortError):
-            reader.read_run(customer_id="cust-other", repository_id=REPOSITORY_ID, run_id="42")
+            reader.read_run(other)
 
 
 class _FakeResourceTool(AwsResourceTool):
-    def __init__(self, present: set[str]) -> None:
-        self._present = present
+    def __init__(self) -> None:
+        self.reads: list[str] = []
 
     def read_resource(self, query: AwsResourceQuery) -> AwsResourceView:
-        if query.resource_id not in self._present:
-            raise AwsResourceNotFoundError("not found")
+        self.reads.append(query.resource_id or "")
         return AwsResourceView(
             aws_account_id=query.aws_account_id,
             resource_type=query.resource_type,
@@ -231,34 +222,41 @@ class _FakeResourceTool(AwsResourceTool):
 
 
 class ActualRereadTest(unittest.TestCase):
-    def _port(self, present: set[str]) -> LiveActualRereadPort:
+    def _sync_target(self) -> RemediationSyncTarget:
+        return RemediationSyncTarget(
+            finding_id="find-1",
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT,
+        )
+
+    def _port(self, publish=None) -> LiveActualRereadPort:
         return LiveActualRereadPort(
             customer_id=CUSTOMER_ID,
             aws_account_id=AWS_ACCOUNT_ID,
-            resource_tool=_FakeResourceTool(present),
+            resource_tool=_FakeResourceTool(),
+            publish=publish,
         )
 
     def test_protocol_conformance(self) -> None:
-        self.assertIsInstance(self._port(set()), ActualRereadPort)
+        self.assertIsInstance(self._port(), ActualRereadPort)
 
-    def test_rereads_present_resources_and_skips_missing(self) -> None:
-        port = self._port({RESOURCE_ID})
+    def test_reread_triggers_publish_callback(self) -> None:
+        seen: list[tuple[str, RemediationSyncTarget]] = []
+        port = self._port(publish=lambda dep, tgt: seen.append((dep, tgt)))
         result = port.reread_actual(
-            customer_id=CUSTOMER_ID,
-            aws_account_id=AWS_ACCOUNT_ID,
-            resource_ids=(RESOURCE_ID, "missing-bucket"),
+            customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID, sync_target=self._sync_target()
         )
-        self.assertEqual([s.resource_id for s in result], [RESOURCE_ID])
-        # attributes는 문자열 매핑으로 직렬화된다.
-        self.assertIsInstance(result[0].attributes["encryption"], str)
+        self.assertIsNone(result)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0], DEPLOYMENT_ID)
 
     def test_rejects_out_of_scope(self) -> None:
-        port = self._port({RESOURCE_ID})
         with self.assertRaises(LiveDeploymentPortError):
-            port.reread_actual(
-                customer_id=CUSTOMER_ID,
-                aws_account_id="999988887777",
-                resource_ids=(RESOURCE_ID,),
+            self._port().reread_actual(
+                customer_id="cust-other",
+                deployment_id=DEPLOYMENT_ID,
+                sync_target=self._sync_target(),
             )
 
 
