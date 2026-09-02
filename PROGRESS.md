@@ -11,6 +11,14 @@
   실제 protected sandbox observation·관측/비용·demo run은 외부 승인 대기이며 fixture/dry-run을
   release evidence로 표시하지 않는다.
 
+- M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
+  `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
+  `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule
+  위반 토글 1:1 매핑이 `fixtures/rules/remediation.json` eligibility(AUTOMATIC=PUBLIC/ACL/TLS, MANUAL_ONLY=
+  POLICY/ENCRYPT/LOGGING)·`rules.s3.json` version `2026-08-31`과 일치. PR #49 리팩터링(D port 파일 이동)은 문서
+  참조 파일을 바꾸지 않아 문서 수정 불필요. 검증: ruff 256 files, Unit 538 / Contract 135 / Integration 9 /
+  Security 72 OK. A Deployment 생성·상태 endpoint가 `dev`에 병합(PR #50/#52)돼 D의 customer runtime 배선
+  차단이 풀렸다. (PR #51 = 이 M4 문서, base `dev`.)
 - PR #50을 포함한 M3 API runtime/infrastructure follow-up: API Lambda에
   `DEPLOYMENT_QUEUE_URL`을 주입하고, deployment 생성·조회·검증 조회·거절의 네 HTTP API Gateway
   route를 JWT authorizer와 함께 명시했다. handler branch만 있고 Gateway route가 없는 배포 누락과
@@ -127,6 +135,15 @@
   fail-closed로 검증하며 공개 report는 민감 원문 없이 aggregate/digest만 가진다. 실제 customer
   evidence는 ADR-0022 handoff에 따라 A/D protected run이 제공할 때만 생성한다. 전체 검증: Unit 638,
   Contract 136, Security 74, Integration 9, Ruff 272 files.
+
+- M4 D 데모 IaC 참조·시나리오와 폐루프 runbook 문서 완결 (ADR-0021 §1·§3): 데모 Terraform은 별도
+  고객 sandbox repository에 두고 이 저장소에는 참조만 남긴다는 결정에 따라, `docs/M4-DEMO-IAC-REFERENCE.md`
+  (데모 저장소 식별자·전제조건, 6개 S3 Rule 1:1 위반 토글 매핑, 세 관점 재현)와
+  `docs/M4-DEMO-RUNBOOK.md`(Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프,
+  ADR-0020 재조회 시점 규칙, ADR-0021 §3 관측·비용 기록 표)를 추가했다. `fixtures/terraform/`은 비어
+  있음을 유지하고 README로 이유·참조를 명시했다. runbook은 ci/terraform template·live 어댑터·
+  `terraform_plan.py`의 실제 경계와 정합한다. 실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용
+  값 채우기는 protected Environment·OIDC Role·자격 증명 대기(A endpoint·runtime 배선 뒤).
 
 - M3 D live 실행 어댑터·workflow template 완결 (ADR-0019 §5·§6·§7, ADR-0007): 세 주입 port의
   live 어댑터를 `agent/runtime/live_deployment_ports.py`에 추가했다. `LiveApplyDispatchPort`는
@@ -666,7 +683,12 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   perspective/overall threshold를 검증하고 sanitized report만 출력한다. 실제 protected run report는
   A/D sandbox 준비 뒤 release 증적으로 생성하며 dry-run/fixture는 근거가 아니다 — ADR-0021/0022)*
 - [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인 *(데모 IaC는 별도
-  고객 sandbox repository — ADR-0021 §1)*
+  고객 sandbox repository — ADR-0021 §1. **문서 몫 완료:** `docs/M4-DEMO-IAC-REFERENCE.md`(별도
+  데모 저장소 식별자·전제조건·6개 S3 Rule 1:1 위반 토글 매핑·세 관점 재현), `docs/M4-DEMO-RUNBOOK.md`
+  (Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프, 재조회 시점 규칙,
+  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). **남은 조각:**
+  실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용 값 채우기는 protected Environment·OIDC Role·
+  자격 증명 대기(A endpoint·runtime 배선 뒤))*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.
