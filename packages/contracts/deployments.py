@@ -6,6 +6,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from packages.contracts._validation import require_non_empty_string
+from packages.contracts.jobs import JobCurrentStep, JobStatus
 
 
 class ArtifactType(StrEnum):
@@ -320,3 +321,153 @@ class AwsResourceSnapshot:
             "resource_id": self.resource_id,
             "attributes": dict(self.attributes),
         }
+
+
+class DeploymentStatus(StrEnum):
+    """Presentation-only deployment lifecycle position (ADR-0019 §8).
+
+    Never persisted. `derive_deployment_status()` computes it at read time from
+    facts that are already durable (Job status/step, approval, rejection, apply
+    run conclusion, verification result), so there is no second copy that can
+    drift. Gates re-check facts directly; this value is for API/UI shape only.
+    """
+
+    PLAN_REQUESTED = "PLAN_REQUESTED"
+    PLAN_COMPLETED = "PLAN_COMPLETED"
+    READINESS_EVALUATED = "READINESS_EVALUATED"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    APPROVED = "APPROVED"
+    APPLYING = "APPLYING"
+    APPLIED = "APPLIED"
+    VERIFYING = "VERIFYING"
+    VERIFIED = "VERIFIED"
+    # Branches.
+    BLOCKED = "BLOCKED"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    REJECTED = "REJECTED"
+    VERIFICATION_INDETERMINATE = "VERIFICATION_INDETERMINATE"
+
+
+class DeploymentRejectionReason(StrEnum):
+    """Enumerated reject reasons; free text is disallowed (ADR-0019 §8)."""
+
+    NOT_APPROVED_BY_POLICY = "NOT_APPROVED_BY_POLICY"
+    PLAN_OUTDATED = "PLAN_OUTDATED"
+    RISK_TOO_HIGH = "RISK_TOO_HIGH"
+    SUPERSEDED = "SUPERSEDED"
+    OTHER = "OTHER"
+
+
+class DeploymentReadinessSignal(StrEnum):
+    """C readiness verdict as seen by the status derivation.
+
+    Values match `DeploymentReadinessStatus` so a caller can pass its verdict
+    through without this pure function importing across the C role boundary
+    (which would create a contracts import cycle).
+    """
+
+    READY_FOR_APPROVAL = "READY_FOR_APPROVAL"
+    BLOCKED = "BLOCKED"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+class ApplyOutcome(StrEnum):
+    """Apply run outcome as re-read from the Actions run (ADR-0019 §5, §7)."""
+
+    NOT_STARTED = "NOT_STARTED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class VerificationOutcome(StrEnum):
+    """Post-Deploy Verification outcome as a status signal (ADR-0020)."""
+
+    NOT_STARTED = "NOT_STARTED"
+    RUNNING = "RUNNING"
+    COMPARABLE = "COMPARABLE"
+    INDETERMINATE = "INDETERMINATE"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DeploymentFacts:
+    """The durable facts a deployment's status is derived from (ADR-0019 §8).
+
+    None of these is a stored `DeploymentStatus`; they are the Job status/step,
+    approval/rejection existence, the apply run outcome, and the verification
+    outcome that already exist independently.
+    """
+
+    job_status: JobStatus
+    current_step: JobCurrentStep
+    readiness: DeploymentReadinessSignal | None = None
+    is_approved: bool = False
+    is_rejected: bool = False
+    apply_outcome: ApplyOutcome = ApplyOutcome.NOT_STARTED
+    verification_outcome: VerificationOutcome = VerificationOutcome.NOT_STARTED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.job_status, JobStatus):
+            raise TypeError("job_status must be a JobStatus")
+        if not isinstance(self.current_step, JobCurrentStep):
+            raise TypeError("current_step must be a JobCurrentStep")
+        if self.readiness is not None and not isinstance(self.readiness, DeploymentReadinessSignal):
+            raise TypeError("readiness must be a DeploymentReadinessSignal or None")
+        for name in ("is_approved", "is_rejected"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool")
+        if not isinstance(self.apply_outcome, ApplyOutcome):
+            raise TypeError("apply_outcome must be an ApplyOutcome")
+        if not isinstance(self.verification_outcome, VerificationOutcome):
+            raise TypeError("verification_outcome must be a VerificationOutcome")
+        if self.is_approved and self.is_rejected:
+            raise ValueError("a deployment cannot be both approved and rejected")
+
+
+def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
+    """Return the presentation status derived from durable deployment facts.
+
+    Precedence follows ADR-0019 §8: terminal reject first, then readiness
+    branches, then the apply/verify progression. Gates never read this value.
+    """
+    if not isinstance(facts, DeploymentFacts):
+        raise TypeError("facts must be a DeploymentFacts")
+
+    # Terminal reject wins over everything else.
+    if facts.is_rejected:
+        return DeploymentStatus.REJECTED
+
+    # Verification stage (only reached after a successful apply).
+    if facts.apply_outcome is ApplyOutcome.SUCCEEDED:
+        if facts.verification_outcome is VerificationOutcome.INDETERMINATE:
+            return DeploymentStatus.VERIFICATION_INDETERMINATE
+        if facts.verification_outcome is VerificationOutcome.COMPARABLE:
+            return DeploymentStatus.VERIFIED
+        if facts.verification_outcome is VerificationOutcome.RUNNING:
+            return DeploymentStatus.VERIFYING
+        return DeploymentStatus.APPLIED
+
+    # Apply failed or was ambiguous: never auto-retried (ADR-0019 §8).
+    if facts.apply_outcome is ApplyOutcome.FAILED:
+        return DeploymentStatus.MANUAL_REVIEW
+    if facts.apply_outcome is ApplyOutcome.RUNNING:
+        return DeploymentStatus.APPLYING
+
+    # Approval granted but apply not yet started.
+    if facts.is_approved:
+        return DeploymentStatus.APPROVED
+
+    # Readiness branches decide whether approval is even offered.
+    if facts.readiness is DeploymentReadinessSignal.BLOCKED:
+        return DeploymentStatus.BLOCKED
+    if facts.readiness is DeploymentReadinessSignal.MANUAL_REVIEW:
+        return DeploymentStatus.MANUAL_REVIEW
+    if facts.readiness is DeploymentReadinessSignal.READY_FOR_APPROVAL:
+        return DeploymentStatus.WAITING_APPROVAL
+
+    # Pre-readiness progression is read from the Job's current step.
+    if facts.current_step is JobCurrentStep.TERRAFORM_PLAN:
+        return DeploymentStatus.PLAN_REQUESTED
+    if facts.current_step is JobCurrentStep.PRE_DEPLOY_VALIDATION:
+        return DeploymentStatus.READINESS_EVALUATED
+    return DeploymentStatus.PLAN_COMPLETED

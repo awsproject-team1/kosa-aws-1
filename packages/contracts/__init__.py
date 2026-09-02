@@ -23,6 +23,7 @@ from packages.contracts.assessments import (
 )
 from packages.contracts.audit import AuditEventType
 from packages.contracts.deployments import (
+    ApplyOutcome,
     ApplyRunReference,
     ArtifactReference,
     ArtifactType,
@@ -30,11 +31,17 @@ from packages.contracts.deployments import (
     AwsResourceQuery,
     AwsResourceSnapshot,
     DeploymentApproval,
+    DeploymentFacts,
+    DeploymentReadinessSignal,
+    DeploymentRejectionReason,
+    DeploymentStatus,
     IaCSnapshot,
     RemediationPatch,
     TerraformPlan,
     TerraformStateVersion,
+    VerificationOutcome,
     VerifiedRunOutcome,
+    derive_deployment_status,
 )
 from packages.contracts.errors import ApiError, ApiErrorResponse
 from packages.contracts.jobs import (
@@ -108,6 +115,7 @@ __all__ = [
     "ApiError",
     "ApiErrorResponse",
     "APPROVABLE_STATUSES",
+    "ApplyOutcome",
     "ApplyRunReference",
     "ApprovalRejectionCode",
     "ArtifactReference",
@@ -121,8 +129,12 @@ __all__ = [
     "AwsResourceQuery",
     "AwsResourceSnapshot",
     "DeploymentApproval",
+    "DeploymentFacts",
     "DeploymentReadiness",
+    "DeploymentReadinessSignal",
     "DeploymentReadinessStatus",
+    "DeploymentRejectionReason",
+    "DeploymentStatus",
     "DocumentUnitKind",
     "EvaluationPerspective",
     "EvaluationResult",
@@ -180,9 +192,11 @@ __all__ = [
     "TerraformPlan",
     "TerraformPlanProjectionError",
     "TerraformStateVersion",
+    "VerificationOutcome",
     "VerifiedRunOutcome",
     "canonical_plan_bytes",
     "compute_plan_hash",
+    "derive_deployment_status",
     "has_destructive_changes",
     "project_plan",
     "WorkflowCommand",
