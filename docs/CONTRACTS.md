@@ -518,8 +518,11 @@ Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불
 
 `fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
 `fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각
-six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
-정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
+six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Initial fixture는 IaC와 Actual이 같은 비준수
+상태이므로 두 Compliance 결과는 `FAIL`이지만 결정적 `DRIFT`는 정합을 뜻하는 `PASS`/100이다.
+Post-Deploy fixture는 승인 apply 뒤 대체로 IaC와 Actual이 정합한 `PASS` snapshot이며 원
+Assessment와 같은 assessment profile/rubric을 재사용한다. Logging Case는 IaC가 `PASS`, Actual이
+`FAIL`인 미해소 상태를 남겨 `DRIFT=FAIL` 경로도 함께 검증한다.
 
 ### D 실행 port 시그니처 (M3 병렬 개발 전제, 구현됨)
 
