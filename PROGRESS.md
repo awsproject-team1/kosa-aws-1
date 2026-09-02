@@ -277,10 +277,11 @@
   M3 A(Deployment 생성·상태 API), M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract는
   이 ADR 자체가 막지 않지만 한시적 순서에 따라 M2의 `dev` 병합 후 시작한다.**
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
-  input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A는
-  `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
-  `(resource_id, rule_id, perspective)` **집합**의 durable 저장·조회와 endpoint 배선을, D는 apply
-  완료 뒤 Actual 재조회 입력을 제공해야 한다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
+  input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A의
+  `phase`/`source_assessment_id`/`deployment_id` durable 저장과 fixture/live runtime phase 복원은
+  구현됐다. 남은 A/D 통합은 원 Assessment의 profile/rubric 고정, planned
+  `(resource_id, rule_id, perspective)` **집합**의 durable 저장·조회와 검증 생성/조회 endpoint,
+  apply 완료 뒤 Actual 재조회 입력이다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
   **planned 집합은 현재 어디에도 저장되지 않고 조회 시 재구성도 불가능하다** (리소스 목록이 시간에
   따라 달라지고, 결과에서 거꾸로 세면 누락된 평가가 보이지 않는다). `ASSESSMENT#{id}#PLAN` item에
   속성으로 추가하는 것이 선행 조건이며, 그 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
@@ -345,8 +346,9 @@
 plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Proposed`다.
 
 - [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
-  *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를
-  얻을 수 없다 — ADR-0019 §4, ADR-0020 §7)*
+  *(Assessment phase/source/deployment provenance 저장과 runtime 복원은 완료. Deployment 생성 endpoint와
+  `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를 얻을 수 없다 —
+  ADR-0019 §4, ADR-0020 §7)*
 - [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(재평가는 원 Assessment의
   Profile version을 고정 재사용하고, 예외는 평가를 막지 않고 표시만 한다 — ADR-0020 §2, §6)*
 - [x] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가

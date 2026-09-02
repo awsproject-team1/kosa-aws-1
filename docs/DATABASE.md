@@ -50,7 +50,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
-| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata; report projection exposes score and coverage |
+| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment selectors, phase, optional verification provenance; report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
@@ -106,9 +106,10 @@ Backend가 발급한다.
 
 ## M3 planned deployment and verification storage
 
-ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable 저장과 endpoint 배선은 아직
-구현되지 않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment
-상태 기계는 계속 `Proposed`다.
+ADR-0020은 `Accepted`이고 C 비교 Contract가 구현됐으며, 검증 Assessment의 phase/correlation
+저장과 runtime 복원도 구현됐다. 아래 Deployment durable 저장과 endpoint 배선은 아직 구현되지
+않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment 상태 기계는
+계속 `Proposed`다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -128,8 +129,10 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   `job_id`, `expected_revision`, `command`만 흐른다. Event detail은 신뢰 대상이 아니라 기록이며, D
   Worker가 `run_id`로 GitHub Actions run을 다시 읽어 대조한 결과만 Deployment 상태로 전이된다.
   GitHub Actions에는 DynamoDB write 권한을 주지 않는다.
-- Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
-  `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
+- Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item은
+  `phase`, `source_assessment_id`, `deployment_id`를 저장하고 result/finding SK 구조는 바꾸지 않는다.
+  새 Initial Assessment도 `phase=INITIAL`을 명시한다. 기존 phase 없는 record는 두 correlation이 모두
+  없을 때만 `INITIAL`로 복원하며, verification의 correlation 누락·부분 값·자기 참조는 fail-closed한다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
   충돌한다.
 - 비교 결과(Finding Resolution, 점수·Coverage delta)는 별도 item으로 저장하지 않는다. 두 immutable
@@ -158,6 +161,7 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   "customer_id": "cust_123",
   "repository_id": "repo_123",
   "policy_profile_id": "profile_001",
+  "phase": "INITIAL",
   "status": "COMPLETED",
   "started_at": "2026-08-29T10:00:00Z",
   "updated_at": "2026-08-29T10:03:00Z",

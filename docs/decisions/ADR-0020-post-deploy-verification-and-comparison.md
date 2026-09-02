@@ -1,7 +1,9 @@
 # ADR-0020: Post-Deploy Verification과 before/after 비교 경계
 
 > **상태: Accepted (2026-09-02)** — M3 C 구현은 이 결정을 따른다. C의 비교 projection과
-> Contract는 구현됐으며, 검증 Assessment의 durable 저장·API 배선은 A/D 통합 작업으로 남는다.
+> Contract는 구현됐다. 검증 Assessment의 `phase`·`source_assessment_id`·`deployment_id` durable
+> 저장과 fixture/live runtime phase 복원도 구현됐으며, 검증 생성 API·planned 집합·동일
+> Profile/rubric 배선과 Actual 재조회는 A/D 통합 작업으로 남는다.
 >
 > **결정 대상:** 재평가 결과를 어디에 저장하는지, 무엇을 다시 평가하는지, 어떤 Model Profile로
 > 평가하는지, "Finding이 해소됐다"를 어떤 값으로 표현하는지, 점수·Coverage 변화를 언제 비교
