@@ -58,7 +58,7 @@ class RemediationContractTest(unittest.TestCase):
     def test_context_has_no_duplicate_action_field(self):
         self.assertEqual(
             {field.name for field in fields(RemediationContext)},
-            {"finding", "snapshot", "evidence_references"},
+            {"finding", "snapshot", "evidence_references", "source_assessment_id"},
         )
         context = RemediationContext(
             finding=finding(),

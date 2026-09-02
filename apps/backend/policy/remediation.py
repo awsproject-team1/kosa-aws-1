@@ -319,6 +319,15 @@ class FindingSuppression:
         require_offset_aware_timestamp(self.expires_at, "expires_at")
         require_optional_non_empty_string(self.ticket_reference, "ticket_reference")
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "finding_id": self.finding_id,
+            "exception_id": self.exception_id,
+            "reason": self.reason.value,
+            "expires_at": self.expires_at,
+            "ticket_reference": self.ticket_reference,
+        }
+
 
 def annotate_suppressed_findings(
     findings: Iterable[Finding],

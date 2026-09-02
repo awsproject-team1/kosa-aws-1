@@ -2,6 +2,36 @@
 
 ## Current
 
+- PR #50을 포함한 M3 API runtime/infrastructure follow-up: API Lambda에
+  `DEPLOYMENT_QUEUE_URL`을 주입하고, deployment 생성·조회·검증 조회·거절의 네 HTTP API Gateway
+  route를 JWT authorizer와 함께 명시했다. handler branch만 있고 Gateway route가 없는 배포 누락과
+  cold-start 환경 변수 누락을 CloudFormation security regression으로 고정했다. Deployment Worker의
+  concrete live adapter/customer runtime은 여전히 고객 GitHub/OIDC configuration과 D-owned adapter
+  구현에 의존하며, 미구성 상태를 실행 가능하다고 표시하지 않는다.
+- 조회 시점 예외 억제 표시를 `GET /assessments/{id}/report`에 배선했다(ADR-0020 §6,
+  `feature/m3-a-deployment-endpoints`). `annotate_suppressed_findings()`는 정의만 있고 호출자가
+  없었는데, `AssessmentReportApiService`가 report page의 Finding에 고객 예외를 조회 시각 기준으로
+  join해 `AssessmentReport.suppressions`(`FindingSuppression`)로 응답한다. 세 갭을 함께 닫았다:
+  (1) `_finding_from_item`이 `evaluated_at`/`assessed_commit_sha` provenance를 복원하지 않아 모든
+  Finding이 억제에서 제외되던 것, (2) `AssessmentReport`에 `suppressions` 필드/`to_dict`가 없던 것,
+  (3) composition root가 예외 reader와 read clock을 report 서비스에 주입하지 않던 것. 예외 reader
+  fault는 억제 없이(위반이 보이는 쪽으로) fail-open한다. `GET /deployments/{id}/verification`의
+  `AssessmentComparison`은 순수 비교 계약상 예외를 join하지 않는다. 검증: ruff 263 files,
+  Unit 619 / Contract 135 / Security 72 / Integration 9 OK.
+- M3 A Deployment endpoint를 D 실행 Contract(PR #49, 이제 `dev`에 병합됨) 위에 구현했다(`feature/m3-a-deployment-endpoints`).
+  `DeploymentStatus`+`derive_deployment_status()`(저장 안 함, durable 사실 파생), `Action`
+  START/REJECT_DEPLOYMENT와 `AuditEventType` DEPLOYMENT_REQUESTED/REJECTED, `DeploymentRecord` store
+  (생성=DEPLOYMENT+JOB+OUTBOX(RUN_DEPLOYMENT)+audit 한 transaction, reject=terminal REJECTION+Job
+  CANCELLED), 그리고 4개 endpoint(생성·조회·검증조회·Admin reject)와 composition root 배선.
+  생성·reject는 durable 배선이 끝났고, approve/get/verification은 facts/comparison reader 조립기
+  통합 전까지 fail-closed다. 닫힌 PR #40의 검증 provenance(`plan_verification_assessment`, Assessment
+  phase/correlation/scope-pin 영속화, Worker phase 복원)도 이 브랜치에 되살렸다. PR #48 리뷰 3건 반영:
+  terminal Job(FAILED/CANCELLED)→`MANUAL_REVIEW`, plan/binary artifact의 customer/repository scope
+  강제, plan 투영 fail-closed는 D 정본에서 이미 해결. D 실행 Contract는 PR #49 정본
+  (`PlanExecutionResult`/`ApplyDispatchReceipt`/`WorkflowRunFacts`/`WorkflowConclusion`/
+  `WorkflowRunReference`)을 그대로 소비하며, 최신 `dev` 병합 시 중복 정의하던 `ApplyRunReference`/
+  `VerifiedRunOutcome`/`AwsResourceSnapshot` 초안 심볼은 정본 심볼로 대체했다.
+  문서(API/CONTRACTS/DATABASE) 동기화. 후속 리뷰 대기
 - `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
   그 run 좌표가 필요한데(ADR-0019 §1), 정본 port에 실을 자리가 없어 live apply dispatch가
   GitHub API 422로 거부되던 상태였다. `PlanExecutionResult.plan_run`(`WorkflowRunReference`)을
@@ -568,9 +598,11 @@
 동일 Profile/rubric, Code의 Finding Resolution 및 fail-closed comparison을 사용한다. ADR-0019의
 plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확정됐다(구현 대기).
 
-- [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
-  *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를
-  얻을 수 없다 — ADR-0019 §4, ADR-0020 §7)*
+- [x] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
+  *(Deployment 생성 `POST /remediations/{id}/deployments`, `GET /deployments/{id}`(파생 상태),
+  `GET /deployments/{id}/verification`(비교), Admin `POST /deployments/{id}/reject`와 record store를
+  D 실행 Contract(PR #49) 위에 구현. 생성·reject는 durable 배선, approve/get/verification은 D live
+  reader 조립기 대기로 fail-closed — ADR-0019 §4·§8, ADR-0020 §7)*
 - [x] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(검증 phase의 Profile
   version pin 해석과 6개 S3 Rule 적용 가능성을 회귀로 고정하고, 예외의 조회 시점 표시 경계
   `annotate_suppressed_findings()`를 조치 판정과 같은 술어로 구현 — ADR-0020 §2, §6. 조회 API

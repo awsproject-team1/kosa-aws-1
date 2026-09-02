@@ -8,6 +8,7 @@ from apps.backend.assessment.runtime_config import (
     M1RuntimeConfiguration,
     M1RuntimeConfigurationError,
 )
+from packages.contracts import ModelProfile, ModelProfileRole
 
 TARGET = {
     "customer_id": "cust-001",
@@ -21,6 +22,16 @@ TARGET = {
     "aws_external_id_secret_id": "external-id",
     "s3_bucket_id": "customer-test-bucket",
 }
+
+MODEL_PROFILE = ModelProfile(
+    model_profile_id="assessment-nova-lite-m1-v2",
+    role=ModelProfileRole.ASSESSMENT,
+    region="us-east-1",
+    model_id="amazon.nova-lite-v1:0",
+    prompt_version="assessment-s3-m1-v2",
+    rubric_version="m1-v2",
+    golden_dataset_version="m1-s3-v2",
+)
 
 
 class M1RuntimeConfigurationTest(unittest.TestCase):
@@ -71,7 +82,7 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
         repository = DynamoM1WorkRepository(
             Table(),
             M1RuntimeConfiguration.from_json(json.dumps([TARGET])),
-            model_profile_id="assessment-nova-lite-m1-v2",
+            model_profile=MODEL_PROFILE,
         )
         work = repository.get_resource_work(job_id="job-001", expected_revision=0)
 
