@@ -17,12 +17,17 @@ from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
     ModelProfile,
+    PlannedEvaluation,
     WorkflowCommand,
     WorkflowTask,
 )
 
 # Evaluate IaC before Actual so a derived DRIFT rationale always reads in that order.
 _PERSPECTIVE_ORDER = (EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL)
+
+
+class AssessmentPlanError(ValueError):
+    """Raised when the resolved Rule set cannot produce a coverable evaluation plan."""
 
 
 class AssessmentWorkNotFoundError(LookupError):
@@ -43,15 +48,17 @@ class AssessmentResourceWork:
     resource_type: str
     perspective: EvaluationPerspective
     model_profile_id: str
-    planned_evaluations: int | None = None
-    assessed_commit_sha: str | None = None
-    """Server-computed `Resource × Rule × Perspective` total for the whole Assessment.
+    planned_coordinates: tuple[PlannedEvaluation, ...] | None = None
+    """Server-fixed `Resource × Rule × Perspective` set for the whole Assessment.
 
     A single-resource Assessment can leave this unset and let the Worker derive the
     plan from the resolved Rule set. Multi-resource or multi-perspective Assessments
-    must supply it so the immutable Coverage denominator does not depend on which
-    task happens to run first.
+    must supply it so the immutable plan does not depend on which task happens to
+    run first. It is the set, not a count: two Assessments with equal counts but
+    different coordinates are not comparable (ADR-0020 §5).
     """
+
+    assessed_commit_sha: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -74,13 +81,13 @@ class AssessmentResourceWork:
             raise TypeError("phase must be an AssessmentPhase")
         if not isinstance(self.perspective, EvaluationPerspective):
             raise TypeError("perspective must be an EvaluationPerspective")
-        if self.planned_evaluations is not None:
-            if isinstance(self.planned_evaluations, bool) or not isinstance(
-                self.planned_evaluations, int
-            ):
-                raise TypeError("planned_evaluations must be an integer or None")
-            if self.planned_evaluations <= 0:
-                raise ValueError("planned_evaluations must be greater than zero")
+        if self.planned_coordinates is not None:
+            if not isinstance(self.planned_coordinates, tuple) or not self.planned_coordinates:
+                raise ValueError("planned_coordinates must be a non-empty tuple or None")
+            if not all(isinstance(value, PlannedEvaluation) for value in self.planned_coordinates):
+                raise TypeError("planned_coordinates must contain PlannedEvaluation values")
+            if len(set(self.planned_coordinates)) != len(self.planned_coordinates):
+                raise ValueError("planned_coordinates must not contain duplicates")
         if self.assessed_commit_sha is not None and (
             not isinstance(self.assessed_commit_sha, str) or not self.assessed_commit_sha.strip()
         ):
@@ -194,8 +201,8 @@ class AssessmentWorker:
                 AssessmentEvaluationPlan(
                     customer_id=work.customer_id,
                     assessment_id=work.assessment_id,
-                    planned_evaluations=work.planned_evaluations
-                    or len(context.rules) * self._perspectives_per_rule(),
+                    planned_coordinates=work.planned_coordinates
+                    or self._derived_coordinates(work, context),
                 )
             )
         profile = self._model_profiles.get_assessment_profile(work.model_profile_id)
@@ -217,10 +224,40 @@ class AssessmentWorker:
         )
         return results
 
-    def _perspectives_per_rule(self) -> int:
+    def _derived_coordinates(
+        self, work: AssessmentResourceWork, context: PolicyContext
+    ) -> tuple[PlannedEvaluation, ...]:
+        """Derive the plan for a single-resource Assessment from its resolved Rules.
+
+        Only this task's resource is known here, so a multi-resource Assessment must
+        inject `planned_coordinates` instead; deriving would fix the plan to whichever
+        task ran first.
+        """
+        rule_ids = tuple(rule.rule_id for rule in context.rules)
+        if len(set(rule_ids)) != len(rule_ids):
+            # Two Rule versions under one rule_id share a result SK, so only one of
+            # them could ever be stored; a plan naming both can never be covered.
+            raise AssessmentPlanError(
+                "policy context resolves one rule_id to more than one rule version"
+            )
+        perspectives = self._planned_perspectives(work)
+        return tuple(
+            PlannedEvaluation(
+                resource_id=work.resource_id, rule_id=rule_id, perspective=perspective
+            )
+            for rule_id in rule_ids
+            for perspective in perspectives
+        )
+
+    def _planned_perspectives(
+        self, work: AssessmentResourceWork
+    ) -> tuple[EvaluationPerspective, ...]:
         if self._perspective_runners is None:
-            return 1
-        return len(self._perspective_runners) + (1 if self._derive_drift else 0)
+            return (work.perspective,)
+        evaluated = tuple(perspective for perspective, _ in self._perspective_runners)
+        if self._derive_drift:
+            return (*evaluated, EvaluationPerspective.DRIFT)
+        return evaluated
 
     def _evaluate(
         self,

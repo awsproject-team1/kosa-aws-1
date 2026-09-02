@@ -2,11 +2,7 @@
 
 import unittest
 
-from apps.backend.assessment import (
-    ComparisonAssessment,
-    PlannedEvaluation,
-    compare_post_deploy_assessments,
-)
+from apps.backend.assessment import ComparisonAssessment, compare_post_deploy_assessments
 from apps.backend.assessment.reporting import AssessmentReport
 from packages.contracts import (
     AssessmentCoverage,
@@ -15,6 +11,7 @@ from packages.contracts import (
     EvaluationResult,
     EvaluationStatus,
     FindingResolution,
+    PlannedEvaluation,
     ReadinessScore,
 )
 

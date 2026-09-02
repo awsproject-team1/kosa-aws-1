@@ -51,7 +51,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
 | Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata; report projection exposes score and coverage |
-| Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
+| Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
 | Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context, source Finding, optional Job/result reference |
@@ -138,13 +138,14 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   bucket과 DynamoDB lock table을 사용하고, state key는 `(repository_id, workspace)`로 분리한다.
   workspace 이름은 `{customer_id}-{repository_id}`이며 Repository 승인 시점에 두 ID를
   `^[A-Za-z0-9_-]+$`로 검증해 배포 시점에 이름이 깨지지 않게 한다.
-- 감사 event의 **종류**를 담는 정본 필드명은 `event_type`이고 값은 `AuditEventType` 어휘를
-  사용한다. `action`은 도메인 payload 전용으로 남긴다 — `REMEDIATION_DECIDED` audit item은 한 item에
-  `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 함께 쓰므로, 두 개념에
-  같은 필드명을 쓰면 값이 충돌한다. 현재 `action`을 종류 필드로 쓰는 세 곳
-  (`DEPLOYMENT_APPROVED`, `POLICY_SOURCE_APPROVED`, `POLICY_PROFILE_PUBLISHED`)은 `event_type`으로
-  개명한다. M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`,
-  `APPLY_COMPLETED`, `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가
+- 감사 event의 **종류**를 담는 정본 필드명은 `event_type`이고 값은 `AuditEventType`
+  (`packages/contracts/audit.py`) 어휘를 쓴다. `action`은 도메인 payload 전용이다 —
+  `REMEDIATION_DECIDED` audit item은 한 item에 `event_type`(audit 종류)과 `action`
+  (`RemediationAction` 값)을 다른 뜻으로 함께 쓰므로, 두 개념에 같은 필드명을 쓰면 값이 충돌한다.
+  `action`을 종류 필드로 쓰던 세 곳(`DEPLOYMENT_APPROVED`, `POLICY_SOURCE_APPROVED`,
+  `POLICY_PROFILE_PUBLISHED`)은 `event_type`으로 개명했고 다섯 writer 모두 같은 필드명을 쓴다.
+  M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`,
+  `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 ADR-0019 합의와 함께
   추가된다.
 
 ## Example items
@@ -163,6 +164,23 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   "version": 1,
   "GSI3PK": "REPOSITORY#repo_123",
   "GSI3SK": "2026-08-29T10:00:00Z#ASSESSMENT#asm_456"
+}
+```
+
+```json
+{
+  "PK": "CUSTOMER#cust_123",
+  "SK": "ASSESSMENT#asm_456#PLAN",
+  "entity_type": "ASSESSMENT_EVALUATION_PLAN",
+  "customer_id": "cust_123",
+  "assessment_id": "asm_456",
+  "planned_evaluations": 3,
+  "planned_coordinates": [
+    {"resource_id": "s3_bucket_logs", "rule_id": "S3-PUBLIC-001", "perspective": "IAC"},
+    {"resource_id": "s3_bucket_logs", "rule_id": "S3-PUBLIC-001", "perspective": "AWS_ACTUAL"},
+    {"resource_id": "s3_bucket_logs", "rule_id": "S3-PUBLIC-001", "perspective": "DRIFT"}
+  ],
+  "completed_evaluations": 3
 }
 ```
 

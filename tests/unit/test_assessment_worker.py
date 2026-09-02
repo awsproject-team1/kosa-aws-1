@@ -1,8 +1,10 @@
 """Unit tests for the C Assessment worker application boundary."""
 
 import unittest
+from dataclasses import replace
 
 from apps.backend.assessment import (
+    AssessmentPlanError,
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
@@ -17,6 +19,7 @@ from packages.contracts import (
     EvaluationStatus,
     ModelProfile,
     ModelProfileRole,
+    PlannedEvaluation,
     PolicyProfile,
     PolicyRule,
     PolicyRuleReference,
@@ -246,6 +249,24 @@ class DecisionEvaluator:
         )
 
 
+class StubResolver:
+    """Resolve a fixed Rule set so a duplicated rule_id can reach the plan."""
+
+    def __init__(self, rules: tuple[PolicyRule, ...]) -> None:
+        self._rules = rules
+
+    def resolve(
+        self, *, policy_profile_id: str, phase: AssessmentPhase, resource_type: str
+    ) -> PolicyContext:
+        return PolicyContext(
+            policy_profile_id=policy_profile_id,
+            policy_profile_version="v1",
+            phase=phase,
+            resource_type=resource_type,
+            rules=self._rules,
+        )
+
+
 class InitialAssessmentPerspectiveTest(unittest.TestCase):
     def build_worker(
         self,
@@ -254,12 +275,13 @@ class InitialAssessmentPerspectiveTest(unittest.TestCase):
         actual_status: EvaluationStatus,
         derive_drift: bool = True,
         work_value: AssessmentResourceWork | None = None,
+        context_resolver: object | None = None,
     ) -> tuple[AssessmentWorker, ResultStore, PlanStore]:
         store, plans = ResultStore(), PlanStore()
         return (
             AssessmentWorker(
                 work_repository=WorkRepository(work_value or work()),
-                context_resolver=PolicyContextResolver(Catalog()),
+                context_resolver=context_resolver or PolicyContextResolver(Catalog()),
                 perspective_runners={
                     EvaluationPerspective.AWS_ACTUAL: AssessmentRunner(
                         DecisionEvaluator(
@@ -309,16 +331,34 @@ class InitialAssessmentPerspectiveTest(unittest.TestCase):
         self.assertIs(outcomes[2].status, EvaluationStatus.FAIL)
         self.assertEqual(store.calls[0][2], outcomes)
 
-    def test_plan_counts_every_perspective_so_coverage_is_not_task_ordered(self) -> None:
+    def test_plan_names_every_perspective_so_coverage_is_not_task_ordered(self) -> None:
         worker, _, plans = self.build_worker(
             iac_status=EvaluationStatus.PASS, actual_status=EvaluationStatus.PASS
         )
 
         worker.handle(self.task())
 
-        self.assertEqual(plans.plans[0].planned_evaluations, 3)
+        self.assertEqual(
+            set(plans.plans[0].planned_coordinates),
+            {
+                PlannedEvaluation(
+                    resource_id="bucket-001", rule_id="S3-001", perspective=perspective
+                )
+                for perspective in (
+                    EvaluationPerspective.IAC,
+                    EvaluationPerspective.AWS_ACTUAL,
+                    EvaluationPerspective.DRIFT,
+                )
+            },
+        )
 
-    def test_server_supplied_plan_overrides_the_derived_count(self) -> None:
+    def test_server_supplied_plan_overrides_the_derived_coordinates(self) -> None:
+        planned = tuple(
+            PlannedEvaluation(
+                resource_id=resource_id, rule_id="S3-001", perspective=EvaluationPerspective.IAC
+            )
+            for resource_id in ("bucket-001", "bucket-002", "bucket-003")
+        )
         worker, _, plans = self.build_worker(
             iac_status=EvaluationStatus.PASS,
             actual_status=EvaluationStatus.PASS,
@@ -333,13 +373,26 @@ class InitialAssessmentPerspectiveTest(unittest.TestCase):
                 resource_type="AWS::S3::Bucket",
                 perspective=EvaluationPerspective.IAC,
                 model_profile_id=MODEL_PROFILE.model_profile_id,
-                planned_evaluations=9,
+                planned_coordinates=planned,
             ),
         )
 
         worker.handle(self.task())
 
-        self.assertEqual(plans.plans[0].planned_evaluations, 9)
+        # A multi-resource plan cannot be derived from the one resource this task
+        # holds; the injected set must survive untouched.
+        self.assertEqual(plans.plans[0].planned_coordinates, planned)
+
+    def test_refuses_to_derive_a_plan_that_names_one_rule_id_twice(self) -> None:
+        """Two Rule versions share a result SK, so a plan naming both is never coverable."""
+        worker, _, _ = self.build_worker(
+            iac_status=EvaluationStatus.PASS,
+            actual_status=EvaluationStatus.PASS,
+            context_resolver=StubResolver((RULE, replace(RULE, version="v2"))),
+        )
+
+        with self.assertRaises(AssessmentPlanError):
+            worker.handle(self.task())
 
     def test_drift_can_be_disabled_and_then_plans_only_evaluated_perspectives(self) -> None:
         worker, _, plans = self.build_worker(
@@ -351,7 +404,18 @@ class InitialAssessmentPerspectiveTest(unittest.TestCase):
         outcomes = worker.handle(self.task())
 
         self.assertEqual(len(outcomes), 2)
-        self.assertEqual(plans.plans[0].planned_evaluations, 2)
+        self.assertEqual(
+            set(plans.plans[0].planned_coordinates),
+            {
+                PlannedEvaluation(
+                    resource_id="bucket-001", rule_id="S3-001", perspective=perspective
+                )
+                for perspective in (
+                    EvaluationPerspective.IAC,
+                    EvaluationPerspective.AWS_ACTUAL,
+                )
+            },
+        )
 
     def test_requires_exactly_one_of_runner_or_perspective_runners(self) -> None:
         for kwargs in (

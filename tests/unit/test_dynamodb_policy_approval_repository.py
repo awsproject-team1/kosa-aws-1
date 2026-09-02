@@ -50,7 +50,7 @@ class DynamoDbPolicyApprovalRepositoryTest(unittest.TestCase):
         self.assertIn("s3_version_id", condition["ConditionExpression"])
         stored = writes[1]["Put"]["Item"]
         self.assertEqual(stored["content_sha256"], {"S": "original-sha"})
-        self.assertEqual(writes[2]["Put"]["Item"]["action"], {"S": "POLICY_SOURCE_APPROVED"})
+        self.assertEqual(writes[2]["Put"]["Item"]["event_type"], {"S": "POLICY_SOURCE_APPROVED"})
 
     def test_profile_and_audit_are_written_together_without_storage_keys(self) -> None:
         self.repository.record_profile(

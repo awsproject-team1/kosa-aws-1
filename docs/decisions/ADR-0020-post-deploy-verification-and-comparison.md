@@ -1,7 +1,10 @@
 # ADR-0020: Post-Deploy Verification과 before/after 비교 경계
 
 > **상태: Accepted (2026-09-02)** — M3 C 구현은 이 결정을 따른다. C의 비교 projection과
-> Contract는 구현됐으며, 검증 Assessment의 durable 저장·API 배선은 A/D 통합 작업으로 남는다.
+> Contract는 구현됐고, 5번의 선행 작업(PLAN item의 planned 집합 저장과 집합을 받는
+> `calculate_readiness_score`)도 반영됐다. 검증 Assessment의 `phase`/`source_assessment_id`/
+> `deployment_id` 영속화와 조회 API 배선, D의 apply 후 Actual 재조회 입력은 A/D 통합 작업으로
+> 남는다.
 >
 > **결정 대상:** 재평가 결과를 어디에 저장하는지, 무엇을 다시 평가하는지, 어떤 Model Profile로
 > 평가하는지, "Finding이 해소됐다"를 어떤 값으로 표현하는지, 점수·Coverage 변화를 언제 비교
@@ -137,7 +140,7 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   `comparable = false`와 이유 코드를 반환한다. 따라서 API는 입력 projection 오류를 500으로 노출하지
   않고 validation 오류로 변환하며, 비교 불가인 정상 projection만 reason 화면에 렌더링한다.
 
-**선행 작업 — 이것 없이는 2번 조건을 판정할 수 없다.**
+**선행 작업 — 이것 없이는 2번 조건을 판정할 수 없다.** *(2026-09-02 반영 완료)*
 
 - planned 집합을 **이미 존재하는 `ASSESSMENT#{assessment_id}#PLAN` item에 속성으로 추가해
   저장한다.** 그 item은 지금 planned 적용 가능 `Resource × Rule × Perspective`의 **개수**만 담는다
@@ -219,10 +222,11 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - Finding Resolution은 Code 판정이고, 18개 `POST_DEPLOY_VERIFICATION` Golden Case(16 PASS, 2
   unresolved FAIL)가 재평가 phase의 양극성 fixture quality gate를 고정한다. 실제 Bedrock 반복
   평가는 M4 customer sandbox gate에서 수행한다.
-- planned 집합이 A의 선행 작업으로 추가되지만 새 item이 아니다. 이미 쓰는
-  `ASSESSMENT#{assessment_id}#PLAN`에 속성이 하나 늘고, 같은 작업에서 `calculate_readiness_score`가
-  개수 대신 집합을 받도록 바뀐다. **이 선행 작업 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
-  동작하며, 실제 배선은 불가능하다.**
+- planned 집합이 추가되지만 새 item이 아니다. 이미 쓰는 `ASSESSMENT#{assessment_id}#PLAN`에
+  `planned_coordinates` 속성이 하나 늘고, 같은 작업에서 `calculate_readiness_score`가 개수 대신
+  집합을 받는다. 집합이 계획의 정본이고 Coverage 분모는 거기서 파생되므로 개수와 집합이 어긋날 수
+  없다. 집합이 없는 옛 plan은 재구성하지 않고 readiness를 `null`로 두며
+  `get_planned_evaluations()`는 fail-closed로 거부한다 — 결과에서 계획을 되짚을 수 없기 때문이다.
 - `runtime.py`의 `INITIAL` 하드코딩 제거는 M1 경로에 영향을 준다. 기존 호출부가 명시적으로
   `INITIAL`을 넘기도록 바꾸고 테스트로 고정한다.
 
@@ -268,5 +272,7 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   비교 입력으로 거부되고, 결과 좌표와 Coverage가 immutable plan과 정확히 일치하지 않아도 거부된다.
   A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와
   `ASSESSMENT#{assessment_id}#PLAN` item의 planned 집합 저장·조회를, D는 apply 완료 뒤의 Actual
-  재조회 입력을 제공한다. **planned 집합 저장(5번 선행 작업)이 들어가기 전까지 C의 비교 경계는
-  실제 배선이 불가능하다.**
+  재조회 입력을 제공한다. planned 집합 저장(5번 선행 작업)은 2026-09-02에 들어갔다 —
+  `AssessmentEvaluationPlan`이 좌표 집합을 갖고, Worker가 그것을 PLAN item에 쓰며,
+  `DynamoDbAssessmentReportStore.get_planned_evaluations()`가 비교 경계에 그 집합을 돌려준다.
+  남은 것은 `phase`/`source_assessment_id`/`deployment_id` 영속화와 검증 endpoint 배선이다.

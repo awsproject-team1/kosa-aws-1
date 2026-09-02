@@ -46,5 +46,5 @@ class DynamoDbDeploymentApprovalRepositoryTest(unittest.TestCase):
         items = transactions.calls[0]["TransactItems"]
         self.assertEqual(len(items), 2)
         self.assertEqual(items[0]["Put"]["Item"]["commit_sha"], "commit-001")
-        self.assertEqual(items[1]["Put"]["Item"]["action"], "DEPLOYMENT_APPROVED")
+        self.assertEqual(items[1]["Put"]["Item"]["event_type"], "DEPLOYMENT_APPROVED")
         self.assertNotIn("artifact", items[1]["Put"]["Item"])

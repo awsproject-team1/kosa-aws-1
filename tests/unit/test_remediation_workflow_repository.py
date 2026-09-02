@@ -138,7 +138,11 @@ class RemediationWorkflowRepositoryTest(unittest.TestCase):
         self.assertEqual(remediation["decision"]["action"], "TERRAFORM_PATCH")
         self.assertNotIn("strategy", remediation)
         self.assertNotIn("strategy", remediation["context"])
-        self.assertEqual(puts[3]["Put"]["Item"]["event_type"], "REMEDIATION_DECIDED")
+        audit = puts[3]["Put"]["Item"]
+        # The two fields mean different things in one item: the audit kind and the
+        # decided RemediationAction.  Unifying them on `action` would lose one.
+        self.assertEqual(audit["event_type"], "REMEDIATION_DECIDED")
+        self.assertEqual(audit["action"], "TERRAFORM_PATCH")
 
     def test_non_actionable_transaction_has_no_job_or_outbox(self):
         self.repository.record_remediation_decision(

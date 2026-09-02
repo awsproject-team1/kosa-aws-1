@@ -13,9 +13,59 @@ from packages.contracts import (
     Finding,
     FindingResolution,
     FindingResolutionResult,
+    PlannedEvaluation,
     ReadinessScore,
     ScoringMode,
 )
+
+
+class PlannedEvaluationContractTest(unittest.TestCase):
+    def test_serializes_the_three_coordinate_values(self) -> None:
+        coordinate = PlannedEvaluation(
+            resource_id="bucket-001",
+            rule_id="S3-001",
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+        )
+
+        self.assertEqual(
+            coordinate.to_dict(),
+            {
+                "resource_id": "bucket-001",
+                "rule_id": "S3-001",
+                "perspective": "AWS_ACTUAL",
+            },
+        )
+
+    def test_is_hashable_so_two_plans_compare_as_sets(self) -> None:
+        first = PlannedEvaluation(
+            resource_id="bucket-001", rule_id="S3-001", perspective=EvaluationPerspective.IAC
+        )
+        second = PlannedEvaluation(
+            resource_id="bucket-001", rule_id="S3-001", perspective=EvaluationPerspective.IAC
+        )
+
+        self.assertEqual({first, second}, {first})
+
+    def test_carries_no_rule_version_so_a_changed_version_still_pairs_up(self) -> None:
+        """ADR-0020 §4: rule_version is compared, never part of the matching key."""
+        self.assertNotIn(
+            "rule_version",
+            PlannedEvaluation(
+                resource_id="bucket-001", rule_id="S3-001", perspective=EvaluationPerspective.IAC
+            ).to_dict(),
+        )
+
+    def test_rejects_an_empty_coordinate_value(self) -> None:
+        with self.assertRaises(ValueError):
+            PlannedEvaluation(
+                resource_id=" ", rule_id="S3-001", perspective=EvaluationPerspective.IAC
+            )
+        with self.assertRaises(TypeError):
+            PlannedEvaluation(
+                resource_id="bucket-001",
+                rule_id="S3-001",
+                perspective="IAC",  # type: ignore[arg-type]
+            )
 
 
 class AssessmentContractTest(unittest.TestCase):

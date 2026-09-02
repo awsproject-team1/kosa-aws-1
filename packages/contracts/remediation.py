@@ -83,6 +83,25 @@ class RemediationStartResponse:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RemediationSyncTarget:
+    """Validated current IaC commit that D may use as a later Plan input.
+
+    This is the return type of D's `SyncAction` port, so it lives here rather than
+    inside C's worker module: a role boundary type in one role's app package forces
+    the other role to import across it.
+    """
+
+    finding_id: str
+    customer_id: str
+    repository_id: str
+    commit_sha: str
+
+    def __post_init__(self) -> None:
+        for name in ("finding_id", "customer_id", "repository_id", "commit_sha"):
+            require_non_empty_string(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PlanReadinessInput:
     """D's bounded plan summary consumed by C's readiness evaluator."""
 

@@ -43,6 +43,7 @@ from apps.backend.assessment.runtime_config import (
 from apps.backend.assessment.s3 import S3ActualEvidence, S3ActualEvidenceLoader, S3EvidenceError
 from apps.backend.assessment.s3_evaluator import S3ActualBedrockEvaluator
 from apps.backend.assessment.worker import (
+    AssessmentPlanError,
     AssessmentResourceWork,
     AssessmentWorker,
     AssessmentWorkNotFoundError,
@@ -52,6 +53,7 @@ __all__ = [
     "Assessment",
     "AssessmentCoverage",
     "AssessmentEvaluationPlan",
+    "AssessmentPlanError",
     "AssessmentReport",
     "AssessmentReportNotFoundError",
     "AssessmentReportStoreError",
