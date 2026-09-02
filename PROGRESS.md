@@ -43,6 +43,13 @@
 
 ## Completed
 
+- M1 A `record_candidate_extraction` 재시도 idempotency (PR #44 리뷰 대응 3): C의 추출 Worker가
+  at-least-once로 같은 결과를 재전송하면 `attribute_not_exists` 조건이 transaction을 취소해 정상
+  재시도가 오류로 보였다. 이제 충돌 시 이미 저장된 CANDIDATES·PolicySource item이 지금 쓰려는
+  것과 같은 내용이면 흡수하고, 다르면 immutability를 지켜 fail-closed한다
+  (`DynamoDbPolicyCatalogBootstrap`과 같은 관용구, transaction 맥락). read table이 없으면 확인
+  불가하므로 원래 오류를 유지한다. 동일 내용 흡수·상이 내용 거부 unit 테스트 추가.
+
 - M1 A `load_publication` 게시 입력 의미 명확화 (PR #44 리뷰 대응 2): 리뷰는 "필터가
   `RULE_NOT_APPROVED` 게이트를 앞질러 삼킨다"고 지적했다. 확인 결과 `publish_profile`은 넘어온
   후보를 전부 Profile에 넣고 미승인이면 거부하므로, 게시 입력 자체가 "승인된 Rule"이어야 한다

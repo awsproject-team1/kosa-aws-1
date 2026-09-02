@@ -316,3 +316,73 @@ class DynamoDbPolicyApprovalReadTest(unittest.TestCase):
         approved_ids = {candidate.rule.rule_id for candidate in candidates}
         self.assertEqual(approved_ids, {"RULE-1"})
         self.assertTrue(all(candidate.is_approved for candidate in candidates))
+
+
+class _ConflictClient:
+    """항상 ConditionalCheckFailed를 던지는 write client (재시도 충돌 시뮬레이션)."""
+
+    def transact_write_items(self, **kwargs: object) -> None:
+        raise _ConflictError()
+
+
+class _ConflictError(Exception):
+    def __init__(self) -> None:
+        super().__init__("conflict")
+        self.response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+
+
+class CandidateExtractionIdempotencyTest(unittest.TestCase):
+    def _repository(self, table: "ReadTable") -> DynamoDbPolicyApprovalRepository:
+        return DynamoDbPolicyApprovalRepository(
+            table_name="metadata",
+            transaction_client=_ConflictClient(),
+            table=table,
+            now=lambda: datetime(2026, 9, 1, tzinfo=UTC),
+            id_factory=lambda: "id-1",
+        )
+
+    def _stored_items(self) -> "ReadTable":
+        """record_candidate_extraction가 write할 두 item을 미리 담은 read table."""
+        table = ReadTable()
+        document = extraction().document
+        table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATES",
+                "entity_type": "POLICY_CANDIDATE_EXTRACTION",
+                "customer_id": "cust-a",
+                "source_id": "source-1",
+                "source_version": "v1",
+                "version": 1,
+                **extraction().to_dict(),
+            }
+        )
+        table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1",
+                "entity_type": "POLICY_SOURCE",
+                "customer_id": "cust-a",
+                "version": 1,
+                "source_id": "source-1",
+                "kind": "INTERNAL_POLICY",
+                "title": document.filename,
+                "policy_source_version": "v1",
+                "artifact_id": "original-1",
+                "content_sha256": "original-sha",
+            }
+        )
+        return table
+
+    def test_retry_with_identical_content_is_absorbed(self) -> None:
+        repository = self._repository(self._stored_items())
+        # 충돌이 나도 저장된 내용이 같으면 예외 없이 흡수된다.
+        repository.record_candidate_extraction(customer_id="cust-a", extraction=extraction())
+
+    def test_retry_with_different_content_fails_closed(self) -> None:
+        table = self._stored_items()
+        # 저장된 CANDIDATES를 다른 내용(제목만 다른 source)으로 바꿔 둔다.
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1")]["title"] = "다름"
+        repository = self._repository(table)
+        with self.assertRaises(RepositoryError):
+            repository.record_candidate_extraction(customer_id="cust-a", extraction=extraction())

@@ -234,10 +234,30 @@ class DynamoDbPolicyApprovalRepository:
                 ),
             }
         }
-        self._write(
-            [condition, self._put(candidates_item), self._put(source_item)],
-            "policy candidate extraction",
-        )
+        try:
+            self._write(
+                [condition, self._put(candidates_item), self._put(source_item)],
+                "policy candidate extraction",
+            )
+        except RepositoryError:
+            # C의 추출 Worker는 at-least-once로 같은 결과를 재전송할 수 있다. 이미 저장된 두 item이
+            # 지금 쓰려는 것과 같은 내용이면 재시도로 보고 흡수하고, 다르면 immutability를 지켜
+            # fail-closed한다(`DynamoDbPolicyCatalogBootstrap`과 같은 관용구). read table이 없으면
+            # 같은 내용인지 확인할 수 없으므로 원래 오류를 그대로 올린다.
+            if self._table is None or not (
+                self._stored_matches(customer_id, candidates_item)
+                and self._stored_matches(customer_id, source_item)
+            ):
+                raise
+        return None
+
+    def _stored_matches(self, customer_id: str, expected: dict[str, object]) -> bool:
+        """이미 저장된 item이 기대 item과 정확히 같은 내용인지 확인한다."""
+        try:
+            existing = self._read_item(customer_id, str(expected["SK"]))
+        except RepositoryError:
+            return False
+        return dict(existing) == expected
 
     def load_review(
         self, *, customer_id: str, source_id: str, source_version: str
