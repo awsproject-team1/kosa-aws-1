@@ -2,13 +2,16 @@
 
 ## Current
 
-- M3 D 실행 경계를 PR #49로 올렸다(base `dev`, `feature/m3-d-execution-ports`). ADR-0019
-  `Accepted` 근거로 `plan_hash` 허용 목록 투영·destructive 판정 공용 함수, D 실행 port 4종과
-  반환형(`PlanRequestOutcome`/`TerraformStateVersion`), revision-bound `DeploymentWorker`,
-  live GitHub/AWS 어댑터 3종, 고객용 `ci/terraform/` plan/apply workflow template을 기능별
-  커밋으로 담았다. 검증: ruff 252 files, Unit 548 / Contract 123 / Integration 9 / Security 72.
-  D·A·C·Security 리뷰 대기. **남은 D 조각(customer runtime 배선)은 A의 Deployment endpoint가
-  `dev`에 병합된 뒤 착수한다.** 최종적으로 M3 통합 PR로 A/B/C/Shared와 함께 병합한다.
+- M3 D 실행 경계를 PR #49로 올렸고 리뷰(P1 5건)를 반영했다(base `dev`,
+  `feature/m3-d-execution-ports`). #48(A Contract 동결)을 병합해 정본 Contract를 소비한다 —
+  중복 `terraform_plan.py`/D port/반환형을 제거하고 `PlanExecutionResult`/`ApplyDispatchReceipt`/
+  `WorkflowRunFacts`/`WorkflowConclusion`/`WorkflowRunReference`를 쓴다. `DeploymentWorker`는
+  `APPLY_COMPLETED`에서 apply를 재dispatch하지 않고 저장된 `run_reference`(실제 GitHub run_id)로
+  재조회하며, plan 시점 state와 실행 시점 state를 workflow에서 실제 비교하고, apply는 별도 plan
+  run의 artifact를 `plan_run_id`로 받는다. 검증: ruff 253 files, Unit 526 / Contract 128 /
+  Integration 9 / Security 72. `plan_run_id`를 dispatch input으로 채우는 경로는 정본
+  `ApplyDispatchPort` 시그니처에 자리가 없어 A Contract 확장이 필요함을 `ci/terraform/README.md`에
+  명시했다. 남은 D 조각(customer runtime 배선)은 A Deployment endpoint의 `dev` 병합 뒤 착수한다.
 - 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
   그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
   억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
@@ -120,6 +123,11 @@
   (4) `Action`에 `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin), `AuditEventType`에
   `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더했다. `docs/CONTRACTS.md`를 구현에 맞춰 동기화했고
   ruff·Unit·Contract·Security·Integration 검증을 통과했다. A endpoint 배선은 Next다. 후속 PR 검토 대기
+- M3 B 조회 시점 억제의 미래 평가 시각 회귀 수정 (PR #47, `dev` 병합): 공용
+  `select_in_force_exception()`이 `finding_evaluated_at > at`을 예외 선택 전에 fail-closed로
+  거부한다. 조회 뒤에 평가된 것으로 기록된 Finding이 그 사이 승인된 예외로 억제 표시되는 경로를
+  막아 `RemediationPolicy.decide()`의 시간 순서 불변식과 일치시켰으며, 해당 시나리오의 단위 회귀
+  테스트를 추가했다.
 - M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
   low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
   쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
