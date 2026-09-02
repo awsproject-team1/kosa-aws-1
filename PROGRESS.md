@@ -62,6 +62,15 @@
 
 ## Completed
 
+- M4 D 데모 IaC 참조·시나리오와 폐루프 runbook 문서 완결 (ADR-0021 §1·§3): 데모 Terraform은 별도
+  고객 sandbox repository에 두고 이 저장소에는 참조만 남긴다는 결정에 따라, `docs/M4-DEMO-IAC-REFERENCE.md`
+  (데모 저장소 식별자·전제조건, 6개 S3 Rule 1:1 위반 토글 매핑, 세 관점 재현)와
+  `docs/M4-DEMO-RUNBOOK.md`(Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프,
+  ADR-0020 재조회 시점 규칙, ADR-0021 §3 관측·비용 기록 표)를 추가했다. `fixtures/terraform/`은 비어
+  있음을 유지하고 README로 이유·참조를 명시했다. runbook은 ci/terraform template·live 어댑터·
+  `terraform_plan.py`의 실제 경계와 정합한다. 실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용
+  값 채우기는 protected Environment·OIDC Role·자격 증명 대기(A endpoint·runtime 배선 뒤).
+
 - M3 D live 실행 어댑터·workflow template 완결 (ADR-0019 §5·§6·§7, ADR-0007): 세 주입 port의
   live 어댑터를 `agent/runtime/live_deployment_ports.py`에 추가했다. `LiveApplyDispatchPort`는
   승인 approval로 GitHub Actions `workflow_dispatch`만 호출하고(유일한 write 표면, input은
@@ -570,7 +579,12 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   *(6 Rule × IAC/AWS_ACTUAL/DRIFT, 총 18개 Case. customer Bedrock 반복 실행 리포트는 release 증적으로
   A/D sandbox 준비 뒤 생성하며, 미달 시 목표를 낮추지 않는다 — ADR-0021 §2)*
 - [ ] **D — Remediation/GitHub/Deployment:** Demo IaC, Plan/Apply/검증 runbook 확인 *(데모 IaC는 별도
-  고객 sandbox repository — ADR-0021 §1)*
+  고객 sandbox repository — ADR-0021 §1. **문서 몫 완료:** `docs/M4-DEMO-IAC-REFERENCE.md`(별도
+  데모 저장소 식별자·전제조건·6개 S3 Rule 1:1 위반 토글 매핑·세 관점 재현), `docs/M4-DEMO-RUNBOOK.md`
+  (Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프, 재조회 시점 규칙,
+  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). **남은 조각:**
+  실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용 값 채우기는 protected Environment·OIDC Role·
+  자격 증명 대기(A endpoint·runtime 배선 뒤))*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.
