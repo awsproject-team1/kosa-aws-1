@@ -1,4 +1,4 @@
-"""M2 A deployment approval boundary, M3 D execution worker, and deployment record."""
+"""M2 A deployment approval boundary, M3 D execution ports/worker, and deployment record."""
 
 from apps.backend.deployment.approval import (
     DeploymentApprovalError,
@@ -6,25 +6,32 @@ from apps.backend.deployment.approval import (
     DeploymentApprovalService,
     DeploymentConflictError,
 )
+from apps.backend.deployment.ports import (
+    ActualRereadPort,
+    ApplyDispatchPort,
+    PlanRequestPort,
+    WorkflowRunReader,
+)
 from apps.backend.deployment.record import (
     DeploymentRecord,
     DeploymentRecordRepository,
     DeploymentRejection,
 )
 from apps.backend.deployment.worker import (
-    ApplyRunStore,
     DeploymentApplyBlockedError,
     DeploymentPlanStore,
+    DeploymentRunStore,
+    DeploymentVerificationStore,
     DeploymentWork,
     DeploymentWorker,
     DeploymentWorkerError,
     DeploymentWorkNotFoundError,
     DeploymentWorkRepository,
-    VerifiedActualStore,
 )
 
 __all__ = [
-    "ApplyRunStore",
+    "ActualRereadPort",
+    "ApplyDispatchPort",
     "DeploymentApplyBlockedError",
     "DeploymentApprovalError",
     "DeploymentApprovalRepository",
@@ -34,10 +41,13 @@ __all__ = [
     "DeploymentRecord",
     "DeploymentRecordRepository",
     "DeploymentRejection",
+    "DeploymentRunStore",
+    "DeploymentVerificationStore",
     "DeploymentWork",
     "DeploymentWorker",
     "DeploymentWorkerError",
     "DeploymentWorkNotFoundError",
     "DeploymentWorkRepository",
-    "VerifiedActualStore",
+    "PlanRequestPort",
+    "WorkflowRunReader",
 ]

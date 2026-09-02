@@ -263,6 +263,8 @@ def select_in_force_exception(
     `exception_id` 순으로 첫 번째다 — 입력 순서를 기준으로 삼으면 저장소 조회 순서가 달라질
     때 감사 기록에 남는 `exception_id`가 같은 사실에 대해 달라진다.
     """
+    if finding_evaluated_at > at:
+        raise ValueError("finding_evaluated_at must not be after the selection time")
     matches: list[RemediationException] = []
     for exception in exceptions:
         if not isinstance(exception, RemediationException):

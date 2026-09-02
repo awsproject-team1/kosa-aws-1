@@ -75,10 +75,16 @@ jobs:
 
       - name: Record state lineage and serial (§2)
         id: state
+        # plan 시점 lineage/serial을 출력이자 artifact 파일로 남긴다. apply는 이 파일을 받아
+        # 실행 시점 state와 실제로 대조한다(§2). serial 단독이 아니라 lineage와 쌍으로 남긴다.
         run: |
           terraform state pull > /tmp/state.json
-          echo "lineage=$(jq -r '.lineage' /tmp/state.json)" >> "$GITHUB_OUTPUT"
-          echo "serial=$(jq -r '.serial' /tmp/state.json)" >> "$GITHUB_OUTPUT"
+          lineage="$(jq -r '.lineage' /tmp/state.json)"
+          serial="$(jq -r '.serial' /tmp/state.json)"
+          echo "lineage=$lineage" >> "$GITHUB_OUTPUT"
+          echo "serial=$serial" >> "$GITHUB_OUTPUT"
+          jq -n --arg lineage "$lineage" --argjson serial "$serial" \
+            '{lineage: $lineage, serial: $serial}' > plan.state.json
 
       - name: Terraform plan (saved binary plan only)
         # apply는 이 saved plan만 적용한다(§1). 재계산 금지.
@@ -94,7 +100,7 @@ jobs:
           python3 ci/terraform/canonical_plan_hash.py plan.full.json > plan.canonical.json
           echo "plan_hash=$(sha256sum plan.canonical.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Upload plan artifacts (saved binary + full json + canonical)
+      - name: Upload plan artifacts (saved binary + full json + canonical + state)
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan-${{ inputs.deployment_id }}
@@ -102,6 +108,7 @@ jobs:
             tfplan.binary
             plan.full.json
             plan.canonical.json
+            plan.state.json
           retention-days: 7
 
       # 완료 신호는 Platform으로 게시하되 정본이 아니다(§7). Platform이 run_id로 재조회해

@@ -34,3 +34,25 @@ template이다. Platform(GitHub App)은 이 파일을 만들거나 수정하지 
   `deployment_id`, `commit_sha`, `plan_hash`, `run_id`, `conclusion`만 담는다. plan 본문·정책
   원문·IaC 본문은 담지 않는다.
 - **DynamoDB write 권한 없음(§7):** GitHub Actions에 상태 정본 write 권한을 주지 않는다.
+- **plan artifact는 별도 run에서 온다(§1):** apply는 자기 run이 아니라 `terraform-plan` run이 만든
+  saved plan을 적용한다. 그래서 apply workflow는 `plan_run_id` 입력과 `actions: read` 권한,
+  `github-token`으로 그 run의 artifact를 내려받는다. 같은 run 안에서 만든 artifact가 아니다.
+- **state 이동 실제 차단(§2):** plan은 plan 시점 `lineage`/`serial`을 `plan.state.json`으로 남기고,
+  apply는 그 값을 실행 시점 state와 **실제로 비교**해 하나라도 다르면 apply 전에 실패시킨다.
+  출력만 하지 않는다. `serial` 단독이 아니라 `lineage`와 쌍으로 대조한다.
+
+## plan run id는 어떻게 전달되는가
+
+apply는 자기 run이 아니라 `terraform-plan` run이 만든 saved plan을 적용한다(§1). 그래서 apply
+workflow는 `plan_run_id`를 필수 입력으로 받는다.
+
+이 값은 D가 dispatch 시점에 만들어내지 않는다. plan과 apply는 서로 다른 실행이고 그 사이에 사람
+승인이 들어가므로, run 좌표는 durable해야 한다. `PlanRequestPort.request_plan()`이 돌려주는
+`PlanExecutionResult.plan_run`(`WorkflowRunReference`)에 담겨 저장되고, apply 단계에서 A가
+`DeploymentWork.plan_run`으로 다시 읽어 `ApplyDispatchPort.dispatch_apply(..., plan_run=...)`에
+넘긴다. `LiveApplyDispatchPort`가 그것을 `plan_run_id` input으로 전달한다.
+
+세 경계 모두 run 좌표가 승인된 배포·저장소 안인지 확인한다 — `PlanExecutionResult`는 plan과 같은
+`deployment_id`인지, Worker는 work scope 안인지, live 어댑터는 approval과 tool scope에 맞는지.
+확인 없이 통과시키면 다른 배포의 plan artifact를 적용하면서도 나머지 승인 값은 전부 일치하는
+상태가 만들어진다.

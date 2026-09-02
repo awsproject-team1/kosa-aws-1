@@ -10,12 +10,6 @@ from agent.runtime.aws_resource_tool import (
     require_read_operation,
     require_scope,
 )
-from agent.runtime.deployment_ports import (
-    ActualRereadPort,
-    ApplyDispatchPort,
-    PlanRequestPort,
-    WorkflowRunReader,
-)
 from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
 from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
@@ -55,6 +49,12 @@ from agent.runtime.mock_deployment_ports import (
 )
 from agent.runtime.mock_github_tool import MockGitHubTool
 from agent.runtime.mock_github_write_tool import MockGitHubWriteTool
+from apps.backend.deployment.ports import (
+    ActualRereadPort,
+    ApplyDispatchPort,
+    PlanRequestPort,
+    WorkflowRunReader,
+)
 
 __all__ = [
     "ActualRereadPort",

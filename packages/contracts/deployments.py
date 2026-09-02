@@ -1,9 +1,7 @@
 """GitHub, read-only AWS, and approved Terraform deployment contracts."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
 
 from packages.contracts._validation import require_non_empty_string
 from packages.contracts.jobs import JobCurrentStep, JobStatus
@@ -14,9 +12,10 @@ class ArtifactType(StrEnum):
     TERRAFORM_SNAPSHOT = "TERRAFORM_SNAPSHOT"
     AWS_SNAPSHOT = "AWS_SNAPSHOT"
     REMEDIATION_PATCH = "REMEDIATION_PATCH"
+    # The `show -json` allow-list projection whose SHA-256 is `plan_hash` (ADR-0019 §1).
     TERRAFORM_PLAN = "TERRAFORM_PLAN"
-    # apply가 사용하는 binary saved plan. Terraform이 바이트 안정성을 보장하지 않으므로
-    # hash 대상이 아니다 (ADR-0019 §1).
+    # The saved binary plan `terraform apply` consumes; never a hash target because
+    # Terraform does not guarantee its byte stability (ADR-0019 §1).
     TERRAFORM_PLAN_BINARY = "TERRAFORM_PLAN_BINARY"
     GOLDEN_DATASET = "GOLDEN_DATASET"
 
@@ -139,6 +138,35 @@ class AwsResourceQuery:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class TerraformStateVersion:
+    """The plan-time Terraform state identity re-checked before apply (ADR-0019 §2).
+
+    `serial` alone is insufficient: a re-created state gets a fresh `lineage` and a
+    `serial` reset to a low value, so a different state can coincidentally match a
+    `serial`. Both values are compared as a pair so that case is caught.
+    """
+
+    lineage: str
+    serial: int
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.lineage, "lineage")
+        if isinstance(self.serial, bool) or not isinstance(self.serial, int):
+            raise TypeError("serial must be an integer")
+        if self.serial < 0:
+            raise ValueError("serial must be zero or greater")
+
+    def matches(self, other: object) -> bool:
+        """Return whether two state versions are the same lineage and serial pair."""
+        if not isinstance(other, TerraformStateVersion):
+            raise TypeError("other must be a TerraformStateVersion")
+        return self.lineage == other.lineage and self.serial == other.serial
+
+    def to_dict(self) -> dict[str, object]:
+        return {"lineage": self.lineage, "serial": self.serial}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TerraformPlan:
     deployment_id: str
     commit_sha: str
@@ -161,6 +189,86 @@ class TerraformPlan:
             "commit_sha": self.commit_sha,
             "plan_hash": self.plan_hash,
             "artifact": self.artifact.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowRunReference:
+    """Locator for one GitHub Actions run tied to a deployment (ADR-0019 §7)."""
+
+    deployment_id: str
+    repository_id: str
+    run_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("deployment_id", "repository_id", "run_id"):
+            require_non_empty_string(getattr(self, name), name)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "repository_id": self.repository_id,
+            "run_id": self.run_id,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PlanExecutionResult:
+    """D's `PlanRequestPort` output: the hashed plan, its saved binary, and state.
+
+    `plan` carries the allow-listed projection whose digest is `plan_hash`.
+    `binary_artifact` is the saved binary plan that `terraform apply` consumes and
+    is never a hash target. `state_version` is the plan-time `(lineage, serial)`
+    re-checked before apply. `plan_run` names the Actions run that produced the
+    binary. All four refer to the same deployment (ADR-0019 §1, §2).
+
+    `plan_run` exists because apply consumes a saved plan from a **different**
+    run (§1): the apply workflow needs that run's id to download the artifact, and
+    apply happens in a later invocation than plan, so the id has to survive in the
+    durable plan result rather than in the dispatching process. Without it the
+    apply workflow's required `plan_run_id` input has no source and the dispatch
+    is rejected before apply starts.
+    """
+
+    plan: TerraformPlan
+    binary_artifact: ArtifactReference
+    state_version: TerraformStateVersion
+    plan_run: WorkflowRunReference
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan, TerraformPlan):
+            raise TypeError("plan must be a TerraformPlan")
+        if not isinstance(self.binary_artifact, ArtifactReference):
+            raise TypeError("binary_artifact must be an ArtifactReference")
+        if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
+            raise ValueError("binary_artifact must be a TERRAFORM_PLAN_BINARY")
+        # The binary plan and its hashed projection must describe the same
+        # deployment. Without this, a result could bundle one customer/repo's plan
+        # with another's binary and still apply against the wrong account scope.
+        if self.binary_artifact.customer_id != self.plan.artifact.customer_id:
+            raise ValueError("binary_artifact customer_id must match the plan artifact")
+        if self.binary_artifact.repository_id != self.plan.artifact.repository_id:
+            raise ValueError("binary_artifact repository_id must match the plan artifact")
+        if not isinstance(self.state_version, TerraformStateVersion):
+            raise TypeError("state_version must be a TerraformStateVersion")
+        if not isinstance(self.plan_run, WorkflowRunReference):
+            raise TypeError("plan_run must be a WorkflowRunReference")
+        # The run that produced the binary must be the run of *this* deployment.
+        # An unchecked id would let apply download a plan artifact belonging to a
+        # different deployment while every other approved value still matched.
+        if self.plan_run.deployment_id != self.plan.deployment_id:
+            raise ValueError("plan_run deployment_id must match the plan")
+        if self.binary_artifact.repository_id is not None and (
+            self.plan_run.repository_id != self.binary_artifact.repository_id
+        ):
+            raise ValueError("plan_run repository_id must match the plan artifact")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plan": self.plan.to_dict(),
+            "binary_artifact": self.binary_artifact.to_dict(),
+            "state_version": self.state_version.to_dict(),
+            "plan_run": self.plan_run.to_dict(),
         }
 
 
@@ -194,132 +302,71 @@ class DeploymentApproval:
         }
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TerraformStateVersion:
-    """plan 시점의 Terraform state 정체성 (ADR-0019 section 2).
+class WorkflowConclusion(StrEnum):
+    """GitHub Actions run conclusion re-read from the run, never trusted from an Event."""
 
-    `lineage`와 `serial`을 쌍으로 묶는다. apply job은 dispatch 직전과 실행 시작 시 두 값이
-    **모두** 일치할 때만 실행한다. `serial` 단독으로는 state 재생성을 잡지 못한다 — state가
-    재생성되면 `lineage`가 새로 발급되고 `serial`이 낮은 값으로 초기화되므로, 다른 state가
-    우연히 같은 `serial`로 통과할 수 있다.
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    CANCELLED = "CANCELLED"
+    TIMED_OUT = "TIMED_OUT"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowRunFacts:
+    """Facts re-read from an Actions run so D can verify, not trust, an Event.
+
+    D compares `workflow_path` against an allow-list, `repository_id`/`ref` against
+    the approved commit, `conclusion`, and `plan_hash` against the approved plan.
+    Any mismatch routes to MANUAL_REVIEW rather than a retry (ADR-0019 §7).
     """
 
-    lineage: str
-    serial: int
+    run_id: str
+    repository_id: str
+    workflow_path: str
+    ref: str
+    commit_sha: str
+    conclusion: WorkflowConclusion
+    plan_hash: str
 
     def __post_init__(self) -> None:
-        require_non_empty_string(self.lineage, "lineage")
-        if not isinstance(self.serial, int) or isinstance(self.serial, bool):
-            raise TypeError("serial must be an int")
-        if self.serial < 0:
-            raise ValueError("serial must be non-negative")
+        for name in ("run_id", "repository_id", "workflow_path", "ref", "commit_sha", "plan_hash"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.conclusion, WorkflowConclusion):
+            raise TypeError("conclusion must be a WorkflowConclusion")
 
-    def matches(self, other: "TerraformStateVersion") -> bool:
-        """두 state 정체성이 같은 lineage와 serial을 갖는지 반환한다."""
-        if not isinstance(other, TerraformStateVersion):
-            raise TypeError("other must be a TerraformStateVersion")
-        return self.lineage == other.lineage and self.serial == other.serial
-
-    def to_dict(self) -> dict[str, object]:
-        return {"lineage": self.lineage, "serial": self.serial}
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "run_id": self.run_id,
+            "repository_id": self.repository_id,
+            "workflow_path": self.workflow_path,
+            "ref": self.ref,
+            "commit_sha": self.commit_sha,
+            "conclusion": self.conclusion.value,
+            "plan_hash": self.plan_hash,
+        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ApplyRunReference:
-    """`ApplyDispatchPort.dispatch_apply`가 반환하는 dispatch된 apply run 참조.
+class ApplyDispatchReceipt:
+    """The `workflow_dispatch` acknowledgment D obtains when it triggers apply.
 
-    승인된 approval 하나로 dispatch된 GitHub Actions run을 가리킨다. 같은 approval로
-    두 번 dispatch돼도 같은 run을 가리켜야 하므로(ADR-0019 §5), 이 값은 dispatch 자체가
-    아니라 dispatch된 run의 좌표만 서술한다. 실제 실행/apply 표면은 담지 않는다.
+    A dispatch confirms the run was requested; the authoritative apply facts still
+    come from re-reading the run via `WorkflowRunReader` (ADR-0019 §5, §7).
     """
 
     deployment_id: str
     repository_id: str
-    run_id: str
+    workflow_path: str
 
     def __post_init__(self) -> None:
-        for name in ("deployment_id", "repository_id", "run_id"):
+        for name in ("deployment_id", "repository_id", "workflow_path"):
             require_non_empty_string(getattr(self, name), name)
 
     def to_dict(self) -> dict[str, str]:
         return {
             "deployment_id": self.deployment_id,
             "repository_id": self.repository_id,
-            "run_id": self.run_id,
-        }
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class VerifiedRunOutcome:
-    """`WorkflowRunReader.read_run`이 반환하는 권위 있는 run 완료 사실.
-
-    EventBridge payload를 신뢰하지 않고 `run_id`로 Actions run을 다시 읽어 만든 값이다
-    (ADR-0019 §7). 실패도 값이므로(ADR-0017·0018) 재조회 실패나 mismatch는 예외가 아니라
-    `conclusion`으로 표현한다. D Worker는 이 값의 `workflow_path`/`repository_id`/`ref`/
-    `plan_hash`를 승인 사실과 대조한 뒤에만 상태를 진행한다.
-    """
-
-    run_id: str
-    workflow_path: str
-    repository_id: str
-    ref: str
-    conclusion: str
-    plan_hash: str
-
-    def __post_init__(self) -> None:
-        for name in ("run_id", "workflow_path", "repository_id", "ref", "conclusion", "plan_hash"):
-            require_non_empty_string(getattr(self, name), name)
-
-    @property
-    def succeeded(self) -> bool:
-        """GitHub Actions 규약대로 성공 결론만 참으로 본다."""
-        return self.conclusion == "success"
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "run_id": self.run_id,
             "workflow_path": self.workflow_path,
-            "repository_id": self.repository_id,
-            "ref": self.ref,
-            "conclusion": self.conclusion,
-            "plan_hash": self.plan_hash,
-        }
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AwsResourceSnapshot:
-    """`ActualRereadPort.reread_actual`가 반환하는 apply 후 단일 리소스 Actual.
-
-    M1 read-only AWS Resource Tool 재사용이며 write 표면이 없다(ADR-0007). `attributes`는
-    서술적 read 상태일 뿐 리소스를 변경할 수 있는 handle/token을 담지 않는다. Contract가
-    앱 모듈의 freeze 유틸에 의존하지 않도록 값은 문자열 매핑으로 제한하고 최상위를
-    read-only로 감싼다.
-    """
-
-    customer_id: str
-    aws_account_id: str
-    resource_type: str
-    resource_id: str
-    attributes: Mapping[str, str]
-
-    def __post_init__(self) -> None:
-        for name in ("customer_id", "aws_account_id", "resource_type", "resource_id"):
-            require_non_empty_string(getattr(self, name), name)
-        if not isinstance(self.attributes, Mapping):
-            raise TypeError("attributes must be a mapping")
-        for key, value in self.attributes.items():
-            require_non_empty_string(key, "attributes key")
-            if not isinstance(value, str):
-                raise TypeError("attributes values must be strings")
-        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "customer_id": self.customer_id,
-            "aws_account_id": self.aws_account_id,
-            "resource_type": self.resource_type,
-            "resource_id": self.resource_id,
-            "attributes": dict(self.attributes),
         }
 
 
@@ -437,6 +484,17 @@ def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
     if facts.is_rejected:
         return DeploymentStatus.REJECTED
 
+    # A terminally failed or cancelled Job must never present as forward progress.
+    # A successful apply is handled by the verification branch below; a Job that
+    # failed or was cancelled before that routes to MANUAL_REVIEW so it is never
+    # auto-retried and never shown as still advancing (ADR-0019 §8). Reject was
+    # already handled above, so a CANCELLED here is a non-reject cancellation.
+    if facts.apply_outcome is not ApplyOutcome.SUCCEEDED and facts.job_status in (
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    ):
+        return DeploymentStatus.MANUAL_REVIEW
+
     # Verification stage (only reached after a successful apply).
     if facts.apply_outcome is ApplyOutcome.SUCCEEDED:
         if facts.verification_outcome is VerificationOutcome.INDETERMINATE:
@@ -452,13 +510,6 @@ def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
         return DeploymentStatus.MANUAL_REVIEW
     if facts.apply_outcome is ApplyOutcome.RUNNING:
         return DeploymentStatus.APPLYING
-
-    # A terminal Job before apply started must not read as an in-progress step.
-    # A rejection would have been caught above; any other CANCELLED path and a
-    # FAILED plan/readiness Job need a person, so they route to MANUAL_REVIEW
-    # rather than showing PLAN_REQUESTED/PLAN_COMPLETED (ADR-0019 §8).
-    if facts.job_status in (JobStatus.FAILED, JobStatus.CANCELLED):
-        return DeploymentStatus.MANUAL_REVIEW
 
     # Approval granted but apply not yet started.
     if facts.is_approved:

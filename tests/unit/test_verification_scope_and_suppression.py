@@ -251,6 +251,20 @@ class ReadTimeSuppressionTests(unittest.TestCase):
 
         self.assertEqual(notes, ())
 
+    def test_a_future_dated_finding_is_rejected_before_suppression(self) -> None:
+        """조회 뒤의 평가는 아직 존재할 수 없으므로 예외 표시를 만들지 않고 fail-closed한다."""
+        future_evaluation = datetime(2026, 9, 1, 13, 0, tzinfo=UTC)
+        approved_after_read = _exception(
+            approved_at="2026-09-01T12:30:00+00:00",
+            expires_at="2026-12-31T00:00:00+00:00",
+        )
+
+        with self.assertRaisesRegex(ValueError, "must not be after the selection time"):
+            _annotate(
+                [_finding(evaluated_at=future_evaluation.isoformat())],
+                exceptions=(approved_after_read,),
+            )
+
     def test_an_exception_for_another_rule_version_does_not_carry_over(self) -> None:
         notes = _annotate([_finding()], exceptions=(_exception(rule_version="2026-07-01"),))
 
