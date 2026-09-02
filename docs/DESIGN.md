@@ -203,7 +203,9 @@ Verification은 Assessment Profile을 재사용하므로 MVP에서 Deployment �
 미달이면 릴리스를 진행하지 않는다. 미달 시 선택지는 rubric/prompt/Golden Case 재고정 또는 ADR-0003
 절차에 따른 Anchor 전환이며, 목표치를 낮추는 판단은 개인이 하지 않는다. 세 관점(`IAC`,
 `AWS_ACTUAL`, `DRIFT`) 중 하나라도 Golden Case가 없어 측정하지 못한 리포트는 Gate 통과 근거로 쓰지
-않는다.
+않는다. ADR-0022에 따라 M4 live report는 customer runtime에서 Post-Deploy 18 Case를 5회 반복하고,
+IAC/AWS_ACTUAL 60회 Bedrock 결과와 같은 run에서 Code로 파생한 DRIFT 30개를 검증한다. Private
+observation은 고객 경계에 두고 공개 release evidence에는 aggregate와 digest만 남긴다.
 
 ## Development ownership and repository boundaries
 
@@ -234,9 +236,10 @@ M0 Contract Fixtures, M0 Platform Foundation, IaC/Actual/Drift 평가, Natural-l
 Orchestration/Model Profiles, SQS Resumable Worker, Artifact Audit/Tenant Isolation,
 Customer Policy Ingestion, M1 Finding/Readiness Projection, Remediation Scope/Exceptions,
 Remediation Consumption Contract, Approved Deployment Execution Boundary, Post-Deploy
-Verification/Comparison, Demo/Release Readiness Gate를 다룬다 (ADR-0001~0021).
+Verification/Comparison, Demo/Release Readiness Gate, M4 Golden Customer Runtime Observation
+Handoff를 다룬다 (ADR-0001~0022).
 
 ADR-0019(승인 배포 실행 경계), ADR-0020(Post-Deploy Verification과 before/after 비교),
-ADR-0021(Demo·Release readiness gate)은 모두 `Accepted`다. 따라서 D의 live plan/apply와 A의
-Deployment 생성·후속 전이는 ADR-0019 정의를 따라 구현할 수 있고, C의 비교 projection은
-ADR-0020을 따른다.
+ADR-0021(Demo·Release readiness gate), ADR-0022(M4 Golden customer-runtime observations)는 모두
+`Accepted`다. 따라서 D의 live plan/apply와 A의 Deployment 생성·후속 전이는 ADR-0019 정의를 따라
+구현할 수 있고, C의 비교 projection은 ADR-0020, M4 품질 증적은 ADR-0022를 따른다.

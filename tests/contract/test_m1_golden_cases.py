@@ -106,6 +106,20 @@ class M1GoldenCaseTest(unittest.TestCase):
             "m3-s3-initial-post-deploy-six-rule-three-perspective-v1",
         )
 
+    def test_initial_fail_fail_pairs_are_aligned_not_drifted(self) -> None:
+        root = Path(__file__).parents[2] / "fixtures" / "m1"
+        cases = json.loads((root / "golden_dataset_cases.json").read_text())
+        by_coordinate = {(case["rule_id"], case["perspective"]): case for case in cases}
+        rules = {case["rule_id"] for case in cases}
+
+        for rule_id in rules:
+            self.assertEqual(by_coordinate[(rule_id, "IAC")]["expected_status"], "FAIL")
+            self.assertEqual(by_coordinate[(rule_id, "AWS_ACTUAL")]["expected_status"], "FAIL")
+            drift = by_coordinate[(rule_id, "DRIFT")]
+            self.assertEqual(drift["expected_status"], "PASS")
+            self.assertEqual(drift["expected_score_min"], 100)
+            self.assertEqual(drift["expected_score_max"], 100)
+
     def test_iac_and_drift_fixtures_pass_the_repeated_quality_gate(self) -> None:
         class FixtureEvaluator:
             def evaluate_case(self, case: GoldenDatasetCase) -> EvaluationResult:
