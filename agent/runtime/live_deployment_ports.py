@@ -109,8 +109,15 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         if plan.artifact.repository_id not in (None, self._repository_id):
             raise LiveDeploymentPortError("plan is outside the tool scope")
 
-        # workflow_dispatch input은 deployment_id/commit_sha/plan_hash뿐이다(§5). workflow가
-        # 이 값으로 자신이 적용할 saved plan artifact를 조회·검증한다.
+        # 이 어댑터가 보낼 수 있는 input은 deployment_id/commit_sha/plan_hash 셋뿐이다(§5).
+        #
+        # `ci/terraform/terraform-apply.yml`은 네 번째 필수 입력 `plan_run_id`를 요구하지만,
+        # 정본 `ApplyDispatchPort.dispatch_apply(approval, plan, state_version)`(PR #48 동결)에도
+        # `plan.artifact`(`ArtifactReference`)에도 plan run id를 실을 자리가 없다. 따라서 지금
+        # 이 dispatch는 GitHub API에서 422로 거부된다. 값을 지어내거나 workflow의 필수 조건을
+        # 낮추는 대신, A Contract가 plan run id를 durable하게 실을 때까지 막힌 채로 둔다 —
+        # 잘못된 plan artifact로 apply가 시작되는 것보다 dispatch가 실패하는 편이 안전하다.
+        # 상세는 `ci/terraform/README.md`의 "Contract 갭"과 `PROGRESS.md` Next 참조.
         body = json.dumps(
             {
                 "ref": approval.commit_sha,

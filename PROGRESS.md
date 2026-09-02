@@ -409,6 +409,16 @@
 
 ## Next
 
+- **M3 A/D — `plan_run_id` Contract 갭 (live apply dispatch 차단 중):** `ci/terraform/terraform-apply.yml`
+  은 plan artifact를 만든 run을 찾기 위해 `plan_run_id`를 필수 입력으로 요구하지만, 정본
+  `ApplyDispatchPort.dispatch_apply(approval, plan, state_version)`(PR #48 동결)에도
+  `ArtifactReference`에도 plan run id를 실을 자리가 없다. 그래서 `LiveApplyDispatchPort`는 셋만
+  보내고 실제 dispatch는 GitHub API 422로 거부된다. **의도된 fail-closed다** — 입력을 optional로
+  낮추면 `download-artifact`가 plan run이 아닌 현재 run에서 artifact를 찾아 "어떤 plan을
+  apply하는가"가 불분명해진다. 해소하려면 A가 plan run id를 durable하게 싣는다
+  (`PlanExecutionResult` 또는 Deployment record). *Owner:* A(Contract) + D(어댑터 배선).
+  *Blocks:* live apply dispatch, M3 Shared의 승인 없는 Write 방지 E2E.
+
 - **M2 → M3 → M4 순차 통합 PR (M4의 `dev` 병합까지 한시 적용):**
   1. M2 PR은 D의 live GitHub branch/commit/PR·refreshed plan/runtime 배선과
      Shared Approval·Security·Patch/Plan 통합 검증을 묶는다(`AuditEventType` 신설과 audit

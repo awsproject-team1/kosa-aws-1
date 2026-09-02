@@ -8,6 +8,19 @@
 #   - 승인된 saved plan(binary)만 apply한다(§1). apply 시점 재계산 금지.
 #   - dispatch 직전과 실행 시작 시 state lineage/serial이 plan 시점과 모두 같을 때만 apply한다(§2).
 #   - run name에 plan_hash=<hash>를 담아 Platform이 승인 사실과 대조할 수 있게 한다(§7).
+#
+# 아직 Platform이 dispatch할 수 없다 — `plan_run_id`를 채울 경로가 없다.
+# 정본 `ApplyDispatchPort.dispatch_apply(approval, plan, state_version)`(PR #48에서 동결)에는
+# plan run id를 실을 자리가 없고, `ArtifactReference`에도 그 필드가 없다. 그래서 현재
+# `LiveApplyDispatchPort`는 deployment_id/commit_sha/plan_hash 셋만 보내고, 이 workflow는
+# 필수 입력 누락으로 dispatch 단계에서 거부된다(GitHub API 422).
+#
+# `plan_run_id`를 optional로 낮추지 않는다. 비면 `download-artifact`가 plan run이 아니라 현재
+# run에서 artifact를 찾게 되어, "어떤 plan을 apply하는가"가 불분명한 채로 실행이 시작된다.
+# dispatch 단계에서 막히는 편이 apply가 잘못된 plan으로 진행되는 것보다 안전하다(§1).
+#
+# 해소 조건: A 소유 Contract가 plan run id를 durable하게 싣는다(예: `PlanExecutionResult` 또는
+# Deployment record). 상세는 `ci/terraform/README.md`의 "Contract 갭"과 `PROGRESS.md` Next 참조.
 name: terraform-apply
 
 on:
@@ -26,7 +39,11 @@ on:
         required: true
         type: string
       plan_run_id:
-        description: plan artifact를 만든 terraform-plan workflow run의 id (§1, 다른 run의 artifact)
+        # 필수로 남긴다. Platform이 아직 이 값을 채우지 못하므로 dispatch가 거부되는데, 그것이
+        # 의도한 fail-closed다 — 위 헤더 주석 참조.
+        description: >-
+          plan artifact를 만든 terraform-plan workflow run의 id (§1, 다른 run의 artifact).
+          Platform dispatch 경로는 A Contract 확장 전까지 이 값을 채울 수 없다.
         required: true
         type: string
 
