@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from apps.backend.assessment import GoldenDatasetRunner
+from apps.backend.policy.context import RESOURCE_EVIDENCE_PREFIXES
 from packages.contracts import (
     AssessmentPhase,
     EvaluationPerspective,
@@ -17,6 +18,14 @@ from packages.contracts.model_profiles import ModelProfile, ModelProfileRole
 
 
 class M1GoldenCaseTest(unittest.TestCase):
+    @staticmethod
+    def _is_allowed_evidence_reference(reference: str) -> bool:
+        if reference.startswith(RESOURCE_EVIDENCE_PREFIXES):
+            return True
+        source_id, at, source_and_locator = reference.partition("@")
+        source_version, hash_mark, locator = source_and_locator.partition("#")
+        return bool(source_id and at and source_version and hash_mark and locator)
+
     @staticmethod
     def _cases() -> list[GoldenDatasetCase]:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
@@ -46,6 +55,25 @@ class M1GoldenCaseTest(unittest.TestCase):
             {EvaluationPerspective.IAC, EvaluationPerspective.DRIFT},
         )
         self.assertEqual({case.rubric_version for case in cases}, {"m1-three-perspective-v1"})
+
+    def test_all_fixture_evidence_uses_an_allowed_resource_or_policy_reference(self) -> None:
+        root = Path(__file__).parents[2] / "fixtures" / "m1"
+        raw_cases = [
+            json.loads((root / name).read_text())
+            for name in (
+                "golden_dataset_iac_s3_public.json",
+                "golden_dataset_drift_s3_public.json",
+            )
+        ]
+        raw_cases.extend(json.loads((root / "golden_dataset_cases.json").read_text()))
+
+        self.assertTrue(
+            all(
+                self._is_allowed_evidence_reference(reference)
+                for raw in raw_cases
+                for reference in raw["expected_evidence_references"]
+            )
+        )
 
     def test_m1_profile_pins_the_same_rebaselined_rubric_and_golden_version(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"

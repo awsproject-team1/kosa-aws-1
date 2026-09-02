@@ -56,6 +56,11 @@
   비교 입력으로 받는다. 누락/계획 밖 결과 또는 손상된 Coverage로 정상 delta를 위장하는 경로를
   fail-closed로 차단했다.
 
+- M3 C Golden fixture evidence hardening: fixture evaluator가 expected evidence를 그대로 echo하므로
+  반복 quality gate만으로는 evidence namespace를 검증하지 못한다. 모든 M1 fixture expected evidence를
+  runtime resource allow-list(`aws:`/`terraform:`/`s3://`) 또는 canonical policy reference
+  (`{source_id}@{source_version}#{locator}`)로 제한해 잘못된 `github:` 재유입을 차단했다.
+
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
   읽어 B policy를 호출하고 actionable decision은 context/Job/Outbox/audit와 원자 저장하며,
