@@ -401,9 +401,7 @@ class DynamoDbDeploymentPlanStore:
     the apply step reloads it to download the saved plan artifact (§1).
     """
 
-    def __init__(
-        self, *, table_name: str, transaction_client: DynamoTransactionClient
-    ) -> None:
+    def __init__(self, *, table_name: str, transaction_client: DynamoTransactionClient) -> None:
         if not isinstance(table_name, str) or not table_name.strip():
             raise ValueError("table_name must be a non-empty string")
         if transaction_client is None:
@@ -480,9 +478,7 @@ class DynamoDbDeploymentRunStore:
     revision does not create a second record.
     """
 
-    def __init__(
-        self, *, table_name: str, transaction_client: DynamoTransactionClient
-    ) -> None:
+    def __init__(self, *, table_name: str, transaction_client: DynamoTransactionClient) -> None:
         if not isinstance(table_name, str) or not table_name.strip():
             raise ValueError("table_name must be a non-empty string")
         if transaction_client is None:
@@ -490,9 +486,7 @@ class DynamoDbDeploymentRunStore:
         self._table_name = table_name
         self._transaction_client = transaction_client
 
-    def put_receipt_if_absent(
-        self, *, work: DeploymentWork, receipt: ApplyDispatchReceipt
-    ) -> None:
+    def put_receipt_if_absent(self, *, work: DeploymentWork, receipt: ApplyDispatchReceipt) -> None:
         if not isinstance(work, DeploymentWork):
             raise TypeError("work must be a DeploymentWork")
         if not isinstance(receipt, ApplyDispatchReceipt):
@@ -544,9 +538,7 @@ class DynamoDbDeploymentVerificationStore:
     deployment status is still derived at read time.
     """
 
-    def __init__(
-        self, *, table_name: str, transaction_client: DynamoTransactionClient
-    ) -> None:
+    def __init__(self, *, table_name: str, transaction_client: DynamoTransactionClient) -> None:
         if not isinstance(table_name, str) or not table_name.strip():
             raise ValueError("table_name must be a non-empty string")
         if transaction_client is None:
@@ -554,9 +546,7 @@ class DynamoDbDeploymentVerificationStore:
         self._table_name = table_name
         self._transaction_client = transaction_client
 
-    def put_verification_if_absent(
-        self, *, work: DeploymentWork, facts: WorkflowRunFacts
-    ) -> None:
+    def put_verification_if_absent(self, *, work: DeploymentWork, facts: WorkflowRunFacts) -> None:
         if not isinstance(work, DeploymentWork):
             raise TypeError("work must be a DeploymentWork")
         if not isinstance(facts, WorkflowRunFacts):

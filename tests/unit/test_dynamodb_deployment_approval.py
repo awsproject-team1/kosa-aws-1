@@ -78,13 +78,9 @@ class DynamoDbDeploymentApprovalRepositoryTest(unittest.TestCase):
         repository = DynamoDbDeploymentApprovalRepository(
             table_name="metadata",
             transaction_client=Transactions(),
-            table=FakeReadTable(
-                {("CUSTOMER#cust-001", approval_item["SK"]): approval_item}
-            ),
+            table=FakeReadTable({("CUSTOMER#cust-001", approval_item["SK"]): approval_item}),
         )
-        approval = repository.get_approval(
-            customer_id="cust-001", deployment_id="deployment-001"
-        )
+        approval = repository.get_approval(customer_id="cust-001", deployment_id="deployment-001")
         self.assertEqual(
             approval,
             DeploymentApproval(
