@@ -134,7 +134,7 @@ class TerraformStateVersionContractTest(unittest.TestCase):
 
 
 class PlanExecutionResultContractTest(unittest.TestCase):
-    def _plan(self) -> TerraformPlan:
+    def _plan(self, *, repository_id: str | None = None) -> TerraformPlan:
         return TerraformPlan(
             deployment_id="deployment-001",
             commit_sha="commit-001",
@@ -144,6 +144,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 artifact_type=ArtifactType.TERRAFORM_PLAN,
                 content_sha256="plan-hash-001",
                 customer_id="cust-001",
+                repository_id=repository_id,
             ),
         )
 
@@ -181,6 +182,20 @@ class PlanExecutionResultContractTest(unittest.TestCase):
         self.assertEqual(payload["plan"]["plan_hash"], "plan-hash-001")
         self.assertEqual(payload["state_version"], {"lineage": "lineage-1", "serial": 3})
         self.assertEqual(payload["plan_run"]["run_id"], "plan-run-1")
+
+    def test_rejects_a_plan_run_from_a_different_repository(self) -> None:
+        """binary가 저장소를 밝히면 plan run도 같은 저장소여야 한다.
+
+        다르면 apply가 다른 저장소의 run에서 plan artifact를 내려받으면서도 `deployment_id`는
+        일치하는 상태가 된다.
+        """
+        with self.assertRaisesRegex(ValueError, "plan_run repository_id"):
+            PlanExecutionResult(
+                plan=self._plan(repository_id="repo-001"),
+                binary_artifact=self._binary(repository_id="repo-001"),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(repository_id="repo-other"),
+            )
 
     def test_rejects_a_plan_run_from_a_different_deployment(self) -> None:
         """apply는 이 run의 artifact를 내려받으므로, 다른 배포의 run이면 다른 plan을 적용한다."""

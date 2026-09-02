@@ -185,7 +185,11 @@ def plan_work() -> DeploymentWork:
 
 
 def approved_work(
-    *, revision: int = 1, run_reference: WorkflowRunReference | None = None
+    *,
+    revision: int = 1,
+    run_reference: WorkflowRunReference | None = None,
+    plan_run: WorkflowRunReference | None = None,
+    include_plan_run: bool = True,
 ) -> DeploymentWork:
     return DeploymentWork(
         customer_id=CUSTOMER_ID,
@@ -197,7 +201,7 @@ def approved_work(
         commit_sha=COMMIT,
         plan=build_plan(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
-        plan_run=build_plan_run(),
+        plan_run=(plan_run or build_plan_run()) if include_plan_run else None,
         approval=build_approval(),
         run_reference=run_reference,
         sync_target=build_sync_target(),
@@ -246,6 +250,63 @@ class RunDeploymentTest(unittest.TestCase):
         self.assertEqual(len(store.plans), 1)
         self.assertEqual(store.receipts, [])
 
+    def test_plan_run_outside_the_work_is_not_stored(self) -> None:
+        """다른 저장소의 run이 저장되면 apply가 그 run의 plan artifact를 적용하게 된다(§1).
+
+        `PlanExecutionResult`는 binary가 `repository_id`를 가질 때만 그 값을 plan_run과 대조한다.
+        repository_id 없는 artifact 조합에서는 Worker의 work scope 확인이 유일한 방어다.
+        """
+        unscoped_plan = TerraformPlan(
+            deployment_id=DEPLOYMENT_ID,
+            commit_sha=COMMIT,
+            plan_hash=PLAN_HASH,
+            artifact=ArtifactReference(
+                artifact_id="art-plan-1",
+                artifact_type=ArtifactType.TERRAFORM_PLAN,
+                content_sha256=PLAN_HASH,
+                customer_id=CUSTOMER_ID,
+            ),
+        )
+        plan_port = MockPlanRequestPort(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID)
+        plan_port.register_plan(
+            deployment_id=DEPLOYMENT_ID,
+            commit_sha=COMMIT,
+            result=PlanExecutionResult(
+                plan=unscoped_plan,
+                binary_artifact=ArtifactReference(
+                    artifact_id="art-plan-bin-1",
+                    artifact_type=ArtifactType.TERRAFORM_PLAN_BINARY,
+                    content_sha256="b" * 64,
+                    customer_id=CUSTOMER_ID,
+                ),
+                state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
+                plan_run=WorkflowRunReference(
+                    deployment_id=DEPLOYMENT_ID,
+                    repository_id="repo-other",
+                    run_id=PLAN_RUN_ID,
+                ),
+            ),
+        )
+        store = RecordingStore()
+        worker = DeploymentWorker(
+            work_repository=FakeWorkRepository(plan_work()),
+            plan_port=plan_port,
+            apply_port=MockApplyDispatchPort(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID),
+            run_reader=MockWorkflowRunReader(customer_id=CUSTOMER_ID, repository_id=REPOSITORY_ID),
+            actual_port=MockActualRereadPort(customer_id=CUSTOMER_ID),
+            plan_store=store,
+            run_store=store,
+            verification_store=store,
+        )
+        task = WorkflowTask(
+            job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.RUN_DEPLOYMENT
+        )
+
+        with self.assertRaisesRegex(DeploymentWorkerError, "plan run is outside"):
+            worker.handle(task)
+
+        self.assertEqual(store.plans, [])
+
 
 class DispatchApplyTest(unittest.TestCase):
     def test_dispatches_apply_for_approved_work(self) -> None:
@@ -258,6 +319,29 @@ class DispatchApplyTest(unittest.TestCase):
         self.assertEqual(receipt.deployment_id, DEPLOYMENT_ID)
         self.assertEqual(len(store.receipts), 1)
         self.assertEqual(apply_port.dispatch_count, 1)
+
+    def test_work_without_a_plan_run_does_not_dispatch(self) -> None:
+        """apply는 plan run의 artifact를 내려받는다. run 좌표가 없으면 무엇을 적용할지 없다(§1)."""
+        worker, store, apply_port, _ = build_worker(work=approved_work(include_plan_run=False))
+        task = WorkflowTask(
+            job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.PLAN_COMPLETED
+        )
+
+        with self.assertRaisesRegex(DeploymentWorkerError, "no plan run"):
+            worker.handle(task)
+
+        self.assertEqual(store.receipts, [])
+        self.assertEqual(apply_port.dispatch_count, 0)
+
+    def test_dispatch_names_the_stored_plan_run(self) -> None:
+        worker, _, apply_port, _ = build_worker(work=approved_work())
+        task = WorkflowTask(
+            job_id=JOB_ID, expected_revision=1, command=WorkflowCommand.PLAN_COMPLETED
+        )
+
+        worker.handle(task)
+
+        self.assertEqual(apply_port.dispatched_plan_run_ids, [PLAN_RUN_ID])
 
     def test_unapproved_work_does_not_dispatch(self) -> None:
         worker, store, apply_port, _ = build_worker(work=plan_work())
