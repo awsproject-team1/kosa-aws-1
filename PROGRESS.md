@@ -40,6 +40,13 @@
   preflight·runtime config·최종 REST adapter에서 같은 fail-closed guard를 재사용한다. 최신 `dev` 통합 후
   Ruff 247 files, Unit 430, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
   Assessment 25-call·Policy Catalog 11-item dry-run 통과
+
+- Docs 정합성 점검 및 수정: `evidence_reference` 정규형을 실행 Contract 정본
+  `{source_id}@{source_version}#{locator}`(`packages/contracts/policy.py`)로 통일 —
+  `docs/API.md`, `docs/CONTRACTS.md`(예시·서술·중복 bullet 제거) 수정. 재점검에서 발견한
+  fixture-vs-contract gap 수정: `fixtures/m1/` golden 3파일의 IaC evidence prefix `github:`(14곳)를
+  allow-list(`aws:`/`terraform:`/`s3://`)·런타임과 일치하는 `terraform:`로 교정. `docs/DESIGN.md`의
+  ADR 열거를 0001~0021로 최신화. 609개 테스트(unit/contract/security/integration)와 ruff 통과 확인.
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
   delta를 fail-closed로 차단한다.
