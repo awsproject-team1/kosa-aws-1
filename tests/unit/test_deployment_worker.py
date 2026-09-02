@@ -49,7 +49,7 @@ PLAN_HASH = "f" * 64
 COMMIT = "a" * 40
 LINEAGE = "11111111-2222-3333-4444-555555555555"
 SERIAL = 7
-APPLY_WORKFLOW = "ci/terraform/apply.yml"
+APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
 RESOURCE_ID = "logs-bucket"
 
 

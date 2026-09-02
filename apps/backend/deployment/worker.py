@@ -27,6 +27,7 @@ from agent.runtime.deployment_ports import (
     PlanRequestPort,
     WorkflowRunReader,
 )
+from agent.runtime.live_deployment_ports import APPLY_WORKFLOW_PATHS
 from packages.contracts import (
     ApplyRunReference,
     AwsResourceSnapshot,
@@ -40,8 +41,9 @@ from packages.contracts import (
 )
 
 # apply run을 성공으로 인정할 때 workflow path가 반드시 이 allow-list 안이어야 한다
-# (ADR-0019 section 7: workflow path allow-list 대조). template로 배포하는 두 workflow다.
-_APPLY_WORKFLOW_PATHS = frozenset({"ci/terraform/apply.yml", "ci/terraform/apply.yaml"})
+# (ADR-0019 section 7). 정본은 live 어댑터가 노출하는 `APPLY_WORKFLOW_PATHS` 하나이며,
+# worker와 어댑터가 다른 경로를 대조하지 않도록 같은 상수를 재사용한다.
+_APPLY_WORKFLOW_PATHS = APPLY_WORKFLOW_PATHS
 
 
 class DeploymentWorkerError(ValueError):
