@@ -95,6 +95,11 @@ class DeploymentRuntimeConfiguration:
                 "deployment runtime configuration is invalid"
             ) from error
 
+    @property
+    def targets(self) -> tuple[DeploymentTarget, ...]:
+        """승인된 target 전체(조립 시 단일 target 구성 확인용)."""
+        return tuple(self._targets.values())
+
     def resolve(self, *, customer_id: str, repository_id: str) -> DeploymentTarget:
         try:
             return self._targets[(customer_id, repository_id)]

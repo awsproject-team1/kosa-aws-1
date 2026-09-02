@@ -23,10 +23,27 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-from apps.backend.deployment.runtime_config import DeploymentRuntimeConfiguration
+from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
+from agent.runtime.live_deployment_ports import (
+    LiveActualRereadPort,
+    LiveApplyDispatchPort,
+    LivePlanRequestPort,
+    LiveWorkflowRunReader,
+    PlanRunOutputs,
+)
+from apps.backend.deployment.runtime_config import (
+    DeploymentRuntimeConfiguration,
+    DeploymentTarget,
+)
 from apps.backend.deployment.worker import DeploymentWorker
+from apps.backend.repositories import (
+    DynamoDbDeploymentPlanStore,
+    DynamoDbDeploymentRunStore,
+    DynamoDbDeploymentVerificationStore,
+    DynamoDbDeploymentWorkRepository,
+)
 from packages.contracts import WorkflowCommand, WorkflowTask
 
 
@@ -35,7 +52,14 @@ class DeploymentRuntimeError(RuntimeError):
 
 
 class LivePlanUnavailableError(DeploymentRuntimeError):
-    """live plan 어댑터·`_live_worker` 조립이 아직 없어 live 구동을 완결할 수 없다."""
+    """live plan I/O가 주입되지 않아 live 구동을 완결할 수 없다."""
+
+
+# `LivePlanRequestPort.fetch_outputs`가 요구하는 실제 GitHub plan run I/O의 타입.
+# (deployment_id, commit_sha) → PlanRunOutputs. plan `workflow_dispatch` 트리거, run 매칭·완료
+# 폴링, artifact 다운로드·파싱은 이 콜백이 담당한다. 실제 구현은 sandbox 자격 증명·네트워크가
+# 있어야 검증되므로 lambda_handler가 주입하고, 조립 로직(_live_worker)은 이 seam으로 테스트한다.
+PlanOutputsFetcher = Callable[[DeploymentTarget, str, str], PlanRunOutputs]
 
 
 def lambda_handler(event: Mapping[str, object], context: object) -> None:
@@ -43,7 +67,16 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
     raw_configuration = os.environ.get("DEPLOYMENT_RUNTIME_JSON")
     if not raw_configuration:
         raise DeploymentRuntimeError("deployment worker runtime is not configured")
-    worker = _live_worker(raw_configuration)
+    worker = _live_worker(
+        raw_configuration,
+        plan_outputs_fetcher=_live_plan_outputs_fetcher(),
+        table=_metadata_table(),
+        table_name=_required_env("METADATA_TABLE_NAME"),
+        transaction_client=_boto3_client("dynamodb"),
+        secret_reader=_live_secret_reader(),
+        sts_client=_boto3_client("sts"),
+        s3_client_factory=_live_s3_client_factory(),
+    )
     run_tasks(event, worker)
 
 
@@ -80,20 +113,157 @@ def parse_tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
     return tuple(tasks)
 
 
-def _live_worker(raw_configuration: str) -> DeploymentWorker:
-    """승인된 target 설정을 검증한다. 완결 조립은 live plan 어댑터 구현 뒤에 이어 붙인다.
+def _live_worker(
+    raw_configuration: str,
+    *,
+    plan_outputs_fetcher: PlanOutputsFetcher,
+    table: object,
+    table_name: str,
+    transaction_client: object,
+    secret_reader: Callable[[str], str],
+    sts_client: object,
+    s3_client_factory: Callable[[Mapping[str, str]], object],
+) -> DeploymentWorker:
+    """승인된 단일 target으로 D 실행 port·store·work repository를 조립해 Worker를 만든다.
 
-    apply/verify/reread live 어댑터(`agent/runtime/live_deployment_ports.py`), 3개 store,
-    `DynamoDbDeploymentWorkRepository`(완료 Event 예약 item에서 `run_reference`를 채움)는 모두
-    구현돼 있다. 아직 없는 것은 live `PlanRequestPort`(GitHub Actions plan run dispatch + saved
-    plan/plan_hash/state 회수)뿐이라, 그것 없이는 `RUN_DEPLOYMENT`를 완결할 수 없다. 추측 구현
-    대신 설정만 fail-closed로 검증하고 명시적 오류로 멈춘다. 이 함수는 live plan 어댑터가 준비되면
-    그 조각들(과 boto3 자격 증명 client)을 조립하는 자리다.
+    I/O seam(`plan_outputs_fetcher`, boto3 client, secret_reader)은 주입받아 이 조립 로직 자체를
+    테스트할 수 있게 한다. `lambda_handler`가 실제 GitHub/AWS I/O를 주입한다. `DeploymentRuntimeJSON`은
+    현재 단일 승인 target 구성을 요구한다 — 어댑터는 (customer_id, repository_id) scope로 고정
+    생성되기 때문이다. 다중 target 처리는 A의 다중 배포 운영이 확정되면 task별 재구성으로 확장한다.
     """
-    DeploymentRuntimeConfiguration.from_json(raw_configuration)  # fail-closed 설정 검증.
-    raise LivePlanUnavailableError(
-        "live deployment worker wiring awaits the live plan request port implementation"
+    configuration = DeploymentRuntimeConfiguration.from_json(raw_configuration)
+    targets = configuration.targets
+    if len(targets) != 1:
+        raise DeploymentRuntimeError("live deployment worker requires exactly one approved target")
+    target = targets[0]
+
+    def github_token() -> str:
+        return secret_reader(target.github_token_secret_id)
+
+    resource_tool = AssumeRoleS3ResourceTool(
+        customer_id=target.customer_id,
+        aws_account_id=target.aws_account_id,
+        role_arn=target.aws_read_role_arn,
+        external_id=secret_reader(target.aws_external_id_secret_id),
+        sts=sts_client,
+        s3_client_factory=s3_client_factory,
     )
+    plan_port = LivePlanRequestPort(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.repository_full_name,
+        # 실제 GitHub plan run I/O는 주입된 fetcher가 담당한다(target을 함께 넘겨 폴링/다운로드에 씀).
+        fetch_outputs=lambda deployment_id, commit_sha: plan_outputs_fetcher(
+            target, deployment_id, commit_sha
+        ),
+    )
+    apply_port = LiveApplyDispatchPort(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.repository_full_name,
+        token_provider=github_token,
+    )
+    run_reader = LiveWorkflowRunReader(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.repository_full_name,
+        token_provider=github_token,
+    )
+    actual_port = LiveActualRereadPort(
+        customer_id=target.customer_id,
+        aws_account_id=target.aws_account_id,
+        resource_tool=resource_tool,
+        resource_types=target.resource_types,
+    )
+    work_repository = DynamoDbDeploymentWorkRepository(
+        table, aws_account_id_for=configuration.aws_account_id_for
+    )
+    plan_store = DynamoDbDeploymentPlanStore(
+        table_name=table_name, transaction_client=transaction_client
+    )
+    run_store = DynamoDbDeploymentRunStore(
+        table_name=table_name, transaction_client=transaction_client
+    )
+    verification_store = DynamoDbDeploymentVerificationStore(
+        table_name=table_name, transaction_client=transaction_client
+    )
+    return DeploymentWorker(
+        work_repository=work_repository,
+        plan_port=plan_port,
+        apply_port=apply_port,
+        run_reader=run_reader,
+        actual_port=actual_port,
+        plan_store=plan_store,
+        run_store=run_store,
+        verification_store=verification_store,
+    )
+
+
+def _live_plan_outputs_fetcher() -> PlanOutputsFetcher:
+    """실제 GitHub plan run I/O를 수행하는 fetcher(sandbox 자격 증명·네트워크 필요).
+
+    plan `workflow_dispatch` 트리거 → run name(`deployment=<id> commit=<sha>`)으로 run 매칭 →
+    완료 폴링 → artifact(`plan.canonical.json`/`plan.state.json`) 다운로드·파싱을 담당한다. 이
+    경로는 실제 GitHub API·자격 증명이 있어야 동작·검증되므로, 조립 로직(`_live_worker`)과 분리해
+    여기에 둔다. 실제 sandbox 배선(protected Environment·OIDC Role) 전까지는 호출 시 명시적으로
+    막아, 검증되지 않은 I/O가 조용히 실행되지 않게 한다.
+    """
+
+    def fetch(target: DeploymentTarget, deployment_id: str, commit_sha: str) -> PlanRunOutputs:
+        raise LivePlanUnavailableError(
+            "live GitHub plan run I/O requires sandbox credentials and is not exercised yet"
+        )
+
+    return fetch
+
+
+def _live_secret_reader() -> Callable[[str], str]:
+    client = _boto3_client("secretsmanager")
+
+    def read(secret_id: str) -> str:
+        try:
+            response = client.get_secret_value(SecretId=secret_id)
+        except Exception:
+            raise DeploymentRuntimeError("deployment runtime secret read failed") from None
+        if not isinstance(response, Mapping):
+            raise DeploymentRuntimeError("deployment runtime secret response is invalid")
+        return _string(response.get("SecretString"))
+
+    return read
+
+
+def _live_s3_client_factory() -> Callable[[Mapping[str, str]], object]:
+    boto3 = _boto3()
+
+    def factory(credentials: Mapping[str, str]) -> object:
+        return boto3.client(
+            "s3",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+
+    return factory
+
+
+def _metadata_table() -> object:
+    return _boto3().resource("dynamodb").Table(_required_env("METADATA_TABLE_NAME"))
+
+
+def _boto3_client(service: str) -> object:
+    return _boto3().client(service)
+
+
+def _boto3() -> object:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise DeploymentRuntimeError("AWS Lambda boto3 runtime is required") from error
+    return boto3
+
+
+def _required_env(name: str) -> str:
+    return _string(os.environ.get(name))
 
 
 def _string(value: object) -> str:

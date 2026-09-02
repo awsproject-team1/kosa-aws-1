@@ -7,11 +7,12 @@ from unittest import mock
 
 from apps.backend.deployment.runtime import (
     DeploymentRuntimeError,
-    LivePlanUnavailableError,
+    _live_worker,
     lambda_handler,
     parse_tasks,
     run_tasks,
 )
+from apps.backend.deployment.worker import DeploymentWorker
 from packages.contracts import WorkflowCommand, WorkflowTask
 from tests.unit.test_deployment_worker import (
     COMMIT,
@@ -84,9 +85,47 @@ class LambdaHandlerModeTest(unittest.TestCase):
             ]
         )
         with mock.patch.dict(os.environ, {"DEPLOYMENT_RUNTIME_JSON": target}, clear=True):
-            # 설정은 유효하므로 config 검증은 통과하고, live plan 어댑터 부재로 멈춘다(7-B).
-            with self.assertRaises(LivePlanUnavailableError):
+            # 설정은 유효하므로 config 검증은 통과하고, 실제 GitHub plan I/O가 없어 멈춘다.
+            # (lambda_handler가 주입하는 실제 fetcher는 sandbox 자격 증명 전까지 호출 시 막힌다.)
+            with self.assertRaises(DeploymentRuntimeError):
                 lambda_handler({"Records": []}, None)
+
+
+_TARGET = {
+    "customer_id": "cust-001",
+    "repository_id": "repo-001",
+    "repository_full_name": "customer/iac",
+    "github_token_secret_id": "github-token",
+    "aws_account_id": "123456789012",
+    "aws_read_role_arn": "arn:aws:iam::123456789012:role/Read",
+    "aws_external_id_secret_id": "external-id",
+    "resource_types": ["AWS::S3::Bucket"],
+}
+
+
+def _assemble_worker(targets: list[dict[str, object]]) -> DeploymentWorker:
+    """실제 I/O를 모두 fake로 주입해 조립 로직만 검증한다."""
+    return _live_worker(
+        json.dumps(targets),
+        plan_outputs_fetcher=lambda target, deployment_id, commit_sha: None,
+        table=object(),
+        table_name="metadata",
+        transaction_client=object(),
+        secret_reader=lambda secret_id: "secret-value",
+        sts_client=object(),
+        s3_client_factory=lambda credentials: object(),
+    )
+
+
+class LiveWorkerAssemblyTest(unittest.TestCase):
+    def test_assembles_a_worker_from_a_single_target(self) -> None:
+        worker = _assemble_worker([_TARGET])
+        self.assertIsInstance(worker, DeploymentWorker)
+
+    def test_requires_exactly_one_target(self) -> None:
+        second = {**_TARGET, "repository_id": "repo-002"}
+        with self.assertRaises(DeploymentRuntimeError):
+            _assemble_worker([_TARGET, second])
 
 
 if __name__ == "__main__":  # pragma: no cover
