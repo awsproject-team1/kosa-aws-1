@@ -69,7 +69,9 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
                 }
 
         repository = DynamoM1WorkRepository(
-            Table(), M1RuntimeConfiguration.from_json(json.dumps([TARGET]))
+            Table(),
+            M1RuntimeConfiguration.from_json(json.dumps([TARGET])),
+            model_profile_id="assessment-nova-lite-m1-v2",
         )
         work = repository.get_resource_work(job_id="job-001", expected_revision=0)
 
@@ -77,3 +79,4 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
         assert work is not None
         self.assertEqual(work.resource_id, "customer-test-bucket")
         self.assertEqual(work.perspective.value, "AWS_ACTUAL")
+        self.assertEqual(work.model_profile_id, "assessment-nova-lite-m1-v2")

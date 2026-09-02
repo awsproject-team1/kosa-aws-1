@@ -198,6 +198,7 @@ jobs:
       LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
       LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
       ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
+      M1_ASSESSMENT_MODE: ${{ vars.M1_ASSESSMENT_MODE }}
       M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
       M1_ASSESSMENT_SECRET_ARNS: ${{ secrets.M1_ASSESSMENT_SECRET_ARNS }}
       M1_ASSESSMENT_READ_ROLE_ARNS: ${{ secrets.M1_ASSESSMENT_READ_ROLE_ARNS }}
@@ -215,6 +216,9 @@ jobs:
           test -n "${LAMBDA_CODE_S3_KEY}"
           test -n "${LAMBDA_CODE_S3_OBJECT_VERSION}"
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+
+      - name: Validate assessment deployment configuration
+        run: python3 -m scripts.validate_m1_deployment_config
 
       - name: Configure customer deployment credentials
         # v6.2.3

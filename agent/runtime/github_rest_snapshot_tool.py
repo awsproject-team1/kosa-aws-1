@@ -16,6 +16,7 @@ from agent.runtime.github_tool import (
     GitHubToolError,
     IaCDocument,
     IaCSnapshotRequest,
+    require_github_repository_full_name,
     require_repository_scope,
     require_snapshot_request,
 )
@@ -48,10 +49,10 @@ class GitHubRestSnapshotTool(GitHubTool):
         for name, value in (
             ("customer_id", customer_id),
             ("repository_id", repository_id),
-            ("repository_full_name", repository_full_name),
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        repository_full_name = require_github_repository_full_name(repository_full_name)
         if not callable(token_provider):
             raise TypeError("token_provider must be callable")
         self._customer_id = customer_id

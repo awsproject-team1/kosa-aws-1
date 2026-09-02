@@ -8,8 +8,11 @@ only by the Worker; callers cannot supply them through the public API.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+
+from agent.runtime.github_tool import require_github_repository_full_name
 
 
 class M1RuntimeConfigurationError(ValueError):
@@ -45,6 +48,9 @@ class M1AssessmentTarget:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        if re.fullmatch(r"[0-9a-f]{40}", self.commit_sha) is None:
+            raise ValueError("commit_sha must be a lowercase 40-character Git SHA")
+        require_github_repository_full_name(self.github_repository)
 
 
 class M1RuntimeConfiguration:
@@ -53,6 +59,10 @@ class M1RuntimeConfiguration:
     def __init__(self, targets: tuple[M1AssessmentTarget, ...]) -> None:
         if not targets or not all(isinstance(target, M1AssessmentTarget) for target in targets):
             raise ValueError("targets must contain M1AssessmentTarget values")
+        github_secret_ids = {target.github_token_secret_id for target in targets}
+        external_id_secret_ids = {target.aws_external_id_secret_id for target in targets}
+        if github_secret_ids & external_id_secret_ids:
+            raise ValueError("M1 credential secret roles must be disjoint")
         self._targets = {
             (target.customer_id, target.repository_id, target.policy_profile_id): target
             for target in targets
