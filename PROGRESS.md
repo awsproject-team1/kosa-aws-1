@@ -10,9 +10,12 @@
   (`DemoRunObservabilityService`, `READ_OBSERVABILITY`)가 주입된 read-only source가 돌려준 사실만
   묶고, source가 사실을 돌려주지 못하면 fail-closed한다(값을 지어내지 않는다). `AuditEventType`을
   게이트의 네 범주(Remediation/Approval/Apply/Verification)로 결정적 매핑하는
-  `assemble_audit_trail_metric`을 함께 두었다. live CloudWatch/CloudTrail/Cost Explorer adapter와
-  HTTP 라우트 배선은 D/A 배포 통합에서 주입하며, 이 저장소에서는 fixture/mock source로 병렬
-  검증한다. 문서(CONTRACTS/DESIGN) 동기화. 후속 리뷰 대기
+  `assemble_audit_trail_metric`을 함께 두었다. D가 live 어댑터를 주입할 진입점을 열도록
+  `DemoRunMetricsSource`의 결정적 Mock(`MockDemoRunMetricsSource`, 다른 실행 port Mock과 같은
+  scope 강제·register seed 관례)도 함께 제공한다. live CloudWatch/CloudTrail/Cost Explorer adapter
+  실제 구현과 HTTP 라우트 배선은 D 배포 통합·M3 A audit-events의 dev 병합 뒤 이어지며, 실제 데모
+  실행값 기록은 Shared/D/C 공동에 sandbox 실행(Blocked)에 의존한다. 문서(CONTRACTS/DESIGN) 동기화.
+  후속 리뷰 대기
 - M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
   `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
   `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule

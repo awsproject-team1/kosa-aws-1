@@ -616,6 +616,9 @@ class ActualRereadPort(Protocol):
   (`DemoRunObservabilityService`, Admin 전용 `READ_OBSERVABILITY`)가 주입된 read-only source가
   돌려준 사실만 묶고, source가 사실을 돌려주지 못하면 fail-closed한다. live metric adapter는
   D/A 배포 통합에서 주입되며 이 저장소에서는 fixture/mock source로 병렬 검증한다(`Mockable`).
+  `agent/runtime/mock_observability_source.py`의 `MockDemoRunMetricsSource`가 그 결정적 Mock으로,
+  seed한 `DemoRunObservability`를 단일 customer scope 안에서만 돌려주고 seed 부재는 `LookupError`
+  계열로 던져 조립기의 fail-closed 경로에 걸리게 한다. D는 이 자리에 live 어댑터를 주입한다.
 - `assemble_audit_trail_metric`은 세분화된 `AuditEventType`을 게이트의 네 범주로 결정적
   매핑한다. apply 성공과 Post-Deploy Verification은 별도 audit event가 아니라 run 재조회 사실과
   새 Assessment 기록이므로 개수를 별도 인자로 받는다.
