@@ -2,7 +2,7 @@
 
 import unittest
 
-from apps.backend.auth import Action, Principal, Role, authorize
+from apps.backend.auth import Action, AuthorizationDenied, Principal, Role, authorize
 
 
 def access_claims(*groups: str) -> dict[str, object]:
@@ -32,13 +32,25 @@ class AuthBoundaryTest(unittest.TestCase):
         self.assertIsNone(authorize(principal, Action.START_ASSESSMENT))
         self.assertIsNone(authorize(principal, Action.READ_JOB))
 
+    def test_user_can_start_a_deployment_but_not_reject_it(self) -> None:
+        # ADR-0019 §4: START_DEPLOYMENT is a User action; §8: reject is Admin only.
+        principal = Principal.from_verified_claims(access_claims("User"))
+
+        self.assertIsNone(authorize(principal, Action.START_DEPLOYMENT))
+        with self.assertRaises(AuthorizationDenied):
+            authorize(principal, Action.REJECT_DEPLOYMENT)
+        with self.assertRaises(AuthorizationDenied):
+            authorize(principal, Action.APPROVE_DEPLOYMENT)
+
     def test_admin_inherits_current_user_actions_and_can_approve_deployments(self) -> None:
         principal = Principal.from_verified_claims(access_claims("Admin"))
 
         self.assertEqual(principal.roles, frozenset({Role.ADMIN}))
         self.assertIsNone(authorize(principal, Action.START_ASSESSMENT))
         self.assertIsNone(authorize(principal, Action.READ_JOB))
+        self.assertIsNone(authorize(principal, Action.START_DEPLOYMENT))
         self.assertIsNone(authorize(principal, Action.APPROVE_DEPLOYMENT))
+        self.assertIsNone(authorize(principal, Action.REJECT_DEPLOYMENT))
         self.assertIsNone(authorize(principal, Action.MANAGE_REMEDIATION_EXCEPTIONS))
 
     def test_unknown_cognito_groups_are_ignored_when_a_product_role_remains(self) -> None:
@@ -59,8 +71,10 @@ class AuthBoundaryTest(unittest.TestCase):
             {
                 "START_ASSESSMENT",
                 "START_REMEDIATION",
+                "START_DEPLOYMENT",
                 "READ_JOB",
                 "APPROVE_DEPLOYMENT",
+                "REJECT_DEPLOYMENT",
                 "MANAGE_REMEDIATION_EXCEPTIONS",
                 "MANAGE_POLICY_SOURCES",
                 "PUBLISH_POLICY_PROFILE",
