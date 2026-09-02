@@ -5,5 +5,5 @@
   "model_id": "amazon.nova-lite-v1:0",
   "prompt_version": "assessment-s3-three-perspective-v2",
   "rubric_version": "m1-three-perspective-v1",
-  "golden_dataset_version": "m1-s3-six-rule-three-perspective-v1"
+  "golden_dataset_version": "m3-s3-initial-post-deploy-six-rule-three-perspective-v1"
 }

@@ -448,6 +448,11 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불완전하거나 손상된 projection은
 비교 전에 fail-closed로 거부한다.
 
+`fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
+`fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각
+six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
+정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
+
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
 M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를

@@ -66,6 +66,7 @@ class M1GoldenCaseTest(unittest.TestCase):
             )
         ]
         raw_cases.extend(json.loads((root / "golden_dataset_cases.json").read_text()))
+        raw_cases.extend(json.loads((root / "golden_dataset_post_deploy_cases.json").read_text()))
 
         self.assertTrue(
             all(
@@ -88,7 +89,10 @@ class M1GoldenCaseTest(unittest.TestCase):
             golden_dataset_version=data["golden_dataset_version"],
         )
         self.assertEqual(profile.rubric_version, "m1-three-perspective-v1")
-        self.assertEqual(profile.golden_dataset_version, "m1-s3-six-rule-three-perspective-v1")
+        self.assertEqual(
+            profile.golden_dataset_version,
+            "m3-s3-initial-post-deploy-six-rule-three-perspective-v1",
+        )
 
     def test_iac_and_drift_fixtures_pass_the_repeated_quality_gate(self) -> None:
         class FixtureEvaluator:
@@ -111,27 +115,45 @@ class M1GoldenCaseTest(unittest.TestCase):
         for case in self._cases():
             self.assertTrue(GoldenDatasetRunner(FixtureEvaluator()).evaluate(case).passes_m0_gate)
 
-    def test_six_m1_rules_have_all_three_perspective_cases(self) -> None:
+    def test_six_rules_have_all_three_perspective_cases_in_both_assessment_phases(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
-        cases = json.loads((root / "golden_dataset_cases.json").read_text())
-        self.assertIsInstance(cases, list)
-        assert isinstance(cases, list)
-        triples = {(case["rule_id"], case["perspective"]) for case in cases}
-        rules = {rule_id for rule_id, _ in triples}
+        initial_cases = json.loads((root / "golden_dataset_cases.json").read_text())
+        verification_cases = json.loads(
+            (root / "golden_dataset_post_deploy_cases.json").read_text()
+        )
+        self.assertIsInstance(initial_cases, list)
+        self.assertIsInstance(verification_cases, list)
+        assert isinstance(initial_cases, list)
+        assert isinstance(verification_cases, list)
+        cases = [*initial_cases, *verification_cases]
+        coordinates = {(case["phase"], case["rule_id"], case["perspective"]) for case in cases}
+        rules = {rule_id for _, rule_id, _ in coordinates}
         self.assertEqual(len(rules), 6)
         self.assertEqual(
-            triples,
+            coordinates,
             {
-                (rule_id, perspective)
+                (phase, rule_id, perspective)
+                for phase in ("INITIAL", "POST_DEPLOY_VERIFICATION")
                 for rule_id in rules
                 for perspective in ("IAC", "AWS_ACTUAL", "DRIFT")
             },
         )
         self.assertTrue(all(case["rubric_version"] == "m1-three-perspective-v1" for case in cases))
+        self.assertTrue(
+            all(
+                case["expected_status"] == "PASS"
+                and case["expected_score_min"] == 100
+                and case["expected_score_max"] == 100
+                for case in verification_cases
+            )
+        )
 
-    def test_all_six_by_three_cases_pass_the_repeated_quality_gate(self) -> None:
+    def test_all_six_by_three_by_two_phase_cases_pass_the_repeated_quality_gate(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
-        fixture_cases = json.loads((root / "golden_dataset_cases.json").read_text())
+        fixture_cases = [
+            *json.loads((root / "golden_dataset_cases.json").read_text()),
+            *json.loads((root / "golden_dataset_post_deploy_cases.json").read_text()),
+        ]
 
         class FixtureEvaluator:
             def evaluate_case(self, case: GoldenDatasetCase) -> EvaluationResult:

@@ -72,9 +72,10 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   대상이 아니다.
 - Profile이 그 사이 교체됐다면 비교가 아니라 **새 Initial Assessment로 처리한다.**
 - 이 제약 때문에 Model Profile 교체는 검증 대기 중인 Deployment가 없을 때만 배포한다.
-- **선행 작업:** `POST_DEPLOY_VERIFICATION` phase의 Golden Case가 현재 0건이다
-  (`fixtures/m1/golden_dataset_cases.json`은 18건 전부 `INITIAL`). 이 phase의 품질 Gate를 돌리려면
-  Case 추가가 선행되고, 그 Case는 원 Assessment와 같은 `rubric_version`을 써야 한다.
+- `fixtures/m1/golden_dataset_post_deploy_cases.json`은 six S3 Rule × 세 관점의 18개
+  `POST_DEPLOY_VERIFICATION` Golden Case를 제공한다. 각 Case는 apply 뒤 IaC/Actual이 정합한
+  `PASS` snapshot이며, 원 Assessment와 같은 `rubric_version`을 사용한다. 이 fixture gate는
+  phase별 Contract 정합성을 고정하며, 실제 Bedrock 반복 평가는 M4 customer sandbox gate에서 수행한다.
 
 ### 4. Finding Resolution은 Code의 결정적 diff다
 
@@ -209,8 +210,9 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   전체만큼 발생한다. 현재 규모(18개)에서는 수용 가능하며, Rule 확장 시 축소 재평가와
   `comparable=false` 표기를 재검토한다.
 - Model Profile 동일성 강제 때문에 Profile 교체 시점이 Deployment 수명과 결합된다.
-- Finding Resolution이 Code 판정이므로 Golden Dataset 확장 없이도 결과가 결정적이다. 다만
-  재평가 자체의 품질 Gate는 `POST_DEPLOY_VERIFICATION` Golden Case가 0건이라 아직 돌릴 수 없다.
+- Finding Resolution은 Code 판정이고, 18개 `POST_DEPLOY_VERIFICATION` Golden Case가 재평가
+  phase의 fixture quality gate를 고정한다. 실제 Bedrock 반복 평가는 M4 customer sandbox gate에서
+  수행한다.
 - planned 집합이 A의 선행 작업으로 추가되지만 새 item이 아니다. 이미 쓰는
   `ASSESSMENT#{assessment_id}#PLAN`에 속성이 하나 늘고, 같은 작업에서 `calculate_readiness_score`가
   개수 대신 집합을 받도록 바뀐다. **이 선행 작업 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
