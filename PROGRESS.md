@@ -11,7 +11,8 @@
   지원한다. 함께 Shared E2E happy-path(생성→승인→apply→검증=VERIFIED, audit trail 조회)와 승인 없는
   write 거부 security 테스트를 추가했고, 그 과정에서 `approve`가 인가보다 stored plan을 먼저 읽던
   순서를 인가 우선으로 바로잡았다(fail-closed, ADR-0019 §4). 문서(API/CONTRACTS/DATABASE) 동기화.
-  검증: ruff 270 files, Unit 641 / Contract 143 / Security 78 / Integration 9 / E2E 1 OK. 후속 PR 검토 대기
+  검증: ruff 270 files, Unit 641 / Contract 143 / Security 78 / Integration 9 / E2E 1 OK. 이 조각은 M3 A라
+  분리하지 않고 M3 A 통합 PR #50(base=dev)에 담았다. 후속 PR 검토 대기
 - 조회 시점 예외 억제 표시를 `GET /assessments/{id}/report`에 배선했다(ADR-0020 §6,
   `feature/m3-a-deployment-endpoints`). `annotate_suppressed_findings()`는 정의만 있고 호출자가
   없었는데, `AssessmentReportApiService`가 report page의 Finding에 고객 예외를 조회 시각 기준으로
