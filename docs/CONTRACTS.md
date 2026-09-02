@@ -348,6 +348,28 @@ exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지
 예외는 Registry에 커밋하지 않는다. 고객 데이터이므로 A가 고객 partition에 저장하고 판정 시점에
 넘긴다. 허용 범위는 Rule과 함께 커밋되고, 예외는 고객이 등록하고 만료된다 — 수명이 다르다.
 
+### 예외의 조회 시점 표시 (M3 B, ADR-0020 §6)
+
+예외는 **평가 게이트가 아니다.** 위반이면 Finding은 그대로 생성·저장되고, 억제는 조회 시점에
+예외를 join해 표시만 한다. `annotate_suppressed_findings(findings, *, customer_id, exceptions, at)`
+가 그 경계이며 `FindingSuppression`(`finding_id`, `exception_id`, `reason`, `expires_at`,
+`ticket_reference`) 목록을 **억제된 것만** 담아 입력 순서로 돌려준다. 목록의 부재가 곧 "억제 아님"
+이다.
+
+- `Finding`에도 결과 item에도 억제 필드를 추가하지 않는다. 예외는 만료되므로 저장된 억제는 만료
+  이후 과거 사실을 왜곡한다. 반환값을 Finding 사본이 아니라 별도 값으로 둔 것도 같은 이유다 —
+  저장 경로로 흘러도 Finding item에는 들어가지 않는다
+- 억제 여부는 조치 판정과 **같은 술어**(`select_in_force_exception()`)로 정한다. 두 경계가 각자
+  판정하면 화면의 "억제됨"과 `RemediationDecision.SUPPRESSED`가 갈리고, 어느 쪽이 거짓인지 알 수
+  없다. 겹치는 예외의 우선순위(리소스 단위 > Rule 전체, 같으면 `exception_id` 순)도 공유한다
+- 평가 시각은 `Finding.evaluated_at`에서 읽는다. provenance가 없는 옛 record는 **억제하지 않는다**
+  — 없는 평가 시각을 조회 시각으로 대체하면 나중에 승인된 예외가 옛 위반을 덮는 경로가 그대로
+  열린다. 근거가 없으면 위반이 보이는 쪽으로 닫는다
+- `at`은 조회 시각이다. 만료를 이 시각으로 판정하므로 같은 Assessment라도 조회 시점에 따라 억제
+  표시가 사라질 수 있다. 그것이 의도다
+- 억제 표시는 재평가를 막지 않는다. 검증 Assessment의 계획·Coverage·Readiness는 예외와 무관하게
+  원 Assessment의 집합을 그대로 재실행한다 (ADR-0020 §2)
+
 ## M2 A/C remediation and readiness boundary
 
 `packages/contracts/remediation.py`는 M1 Finding을 A의 정책·Job 경계와 C Remediation Worker,
