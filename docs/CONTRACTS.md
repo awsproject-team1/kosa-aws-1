@@ -441,7 +441,9 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 | `AuditEventType` | A | 감사 event **종류** 어휘. 정본 필드명은 `event_type`이다 |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
 | `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
-| `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
+| `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | 구현됨. apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
+| `project_plan`/`compute_plan_hash`/`has_destructive_changes` (`terraform_plan.py`) | D | 구현됨. `show -json`을 허용 목록으로 투영한 canonical 바이트의 SHA-256이 `plan_hash`이고, `delete`/비어 있지 않은 `replace_paths`가 destructive다. A 승인·C readiness·D apply가 같은 함수를 부른다 (ADR-0019 §1) |
+| `PlanRequestOutcome` + `TerraformStateVersion` | D | 구현됨. `PlanRequestPort`의 반환형. plan + state `lineage`·`serial` 쌍 + `PlanReadinessInput`을 묶는다 (ADR-0019 §1·§2) |
 | `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
 
 `DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
@@ -561,7 +563,12 @@ class ActualRereadPort(Protocol):
   planned 집합에서 나오고, 재조회는 불일치한 리소스로 좁힌다 (ADR-0020 §8).
 
 위에서 예고한 대로 `PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않는다. 그래서
-시그니처 확정 대상에서 제외하며, 확정된 것은 나머지 세 port다.
+시그니처 확정 대상에서 제외했지만, 소유·구현은 D이므로 ADR-0019 `Accepted` 이후
+`agent/runtime/deployment_ports.py`에 정의했고 반환형 `PlanRequestOutcome`
+(`packages/contracts/remediation.py`)과 결정적 Mock(`MockPlanRequestPort`)을 함께 구현했다.
+확정된 세 port(`ApplyDispatchPort`·`WorkflowRunReader`·`ActualRereadPort`)도 같은 모듈에 있으며,
+`apps/backend/deployment/worker.py`의 `DeploymentWorker`가 세 deployment command를 command당
+하나의 injected port로 분기한다.
 
 ## Contract change review
 
