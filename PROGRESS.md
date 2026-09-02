@@ -55,6 +55,21 @@
 
 ## Completed
 
+- M3 D live 실행 어댑터·workflow template 완결 (ADR-0019 §5·§6·§7, ADR-0007): 세 주입 port의
+  live 어댑터를 `agent/runtime/live_deployment_ports.py`에 추가했다. `LiveApplyDispatchPort`는
+  승인 approval로 GitHub Actions `workflow_dispatch`만 호출하고(유일한 write 표면, input은
+  deployment_id/commit_sha/plan_hash) run 좌표를 결정적으로 유도한다. `LiveWorkflowRunReader`는
+  `run_id`로 run을 GET 재조회하고 404·미완료·`plan_hash` 마커 부재를 예외가 아니라 `not_found`
+  결론 값으로 반환해 EventBridge payload를 신뢰하지 않는다(§7). `LiveActualRereadPort`는 M1
+  read-only AWS Resource Tool을 재사용해 planned 집합으로 좁힌 리소스만 다시 읽는다(write 표면
+  없음). 고객이 1회 설치하는 `ci/terraform/` plan/apply workflow template과, Platform
+  `terraform_plan.py`와 같은 canonical 바이트를 내는 `canonical_plan_hash.py`(두 경로 동일 확인)를
+  추가했다. apply는 saved plan만 적용하고 protected Environment·OIDC Role 분리(Plan/Deployment)·
+  plan_hash와 state `lineage`·`serial` 재검증을 거치며, App에는 `workflows: write`가 없다(§6).
+  worker와 어댑터가 같은 apply workflow path allow-list(`APPLY_WORKFLOW_PATHS`) 하나를 공유한다.
+  남은 것은 customer runtime 배선(composition root 주입)과 실제 sandbox 실행으로, 이는 A의
+  Deployment endpoint(kosa-m3-a)와 보호된 자격 증명에 의존한다.
+
 - M3 D live plan/apply 실행 경로 (ADR-0019 `Accepted` 이후): `plan_hash`의 유일한 산출 근거를
   `packages/contracts/terraform_plan.py`에 두었다. `terraform show -json`을 `resource_changes[]`의
   11개 허용 필드로 투영하고(허용 목록이라 Terraform/Provider가 필드를 늘려도 hash가 안 흔들린다,
@@ -522,12 +537,14 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   Resolution의 결정적 projection 및 18개 Post-Deploy Golden fixture 구현. durable Assessment/endpoint
   wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
-  재검증, AWS Actual 재조회 *(코드 경계 완료: `plan_hash` 허용 목록 투영·destructive 판정 공용 함수
-  (`packages/contracts/terraform_plan.py`), state `lineage`·`serial` 쌍 대조(`TerraformStateVersion`),
-  `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 그리고 세 command를 injected
-  port로 분기하며 idempotent apply dispatch·run 재조회 후 승인 사실 대조·apply 후 Actual 재조회를
-  하는 `DeploymentWorker` — ADR-0019 §1·§2·§5·§7. **남은 조각:** live GitHub Actions OIDC/Terraform
-  SDK adapter와 customer runtime 배선, `ci/terraform/` workflow template)*
+  재검증, AWS Actual 재조회 *(D 소유 코드·어댑터·template 완료: `plan_hash` 허용 목록 투영·destructive
+  판정 공용 함수(`packages/contracts/terraform_plan.py`), state `lineage`·`serial` 쌍 대조,
+  `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 세 command를 injected port로
+  분기하는 `DeploymentWorker`, 세 live 어댑터(`agent/runtime/live_deployment_ports.py`)와 고객용
+  `ci/terraform/` plan/apply workflow template·canonical `plan_hash` 스크립트 — ADR-0019
+  §1·§2·§5·§6·§7. **남은 조각(A/보호된 자격 증명 의존):** customer runtime 배선(composition root의
+  live 어댑터 주입)과 실제 sandbox E2E 실행. 이는 A의 Deployment 생성·상태 endpoint(kosa-m3-a)와
+  protected Environment/OIDC Role 설정 뒤에 이어진다)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.
