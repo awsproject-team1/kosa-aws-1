@@ -37,15 +37,17 @@ Parameters:
     NoEcho: true
     ConstraintDescription: Optional protected M1 customer/repository target configuration; empty preserves fixture mode.
   M1AssessmentSecretArns:
-    Type: CommaDelimitedList
+    Type: String
     Default: ""
     NoEcho: true
-    ConstraintDescription: Exact Secrets Manager ARNs holding the GitHub installation token and AWS External ID for M1.
+    AllowedPattern: '^$|^arn:[^:,]+:secretsmanager:[^:,]+:[0-9]{12}:secret:[^,]+(,arn:[^:,]+:secretsmanager:[^:,]+:[0-9]{12}:secret:[^,]+)*$'
+    ConstraintDescription: Comma-separated non-empty Secrets Manager ARNs or empty for fixture mode.
   M1AssessmentReadRoleArns:
-    Type: CommaDelimitedList
+    Type: String
     Default: ""
     NoEcho: true
-    ConstraintDescription: Exact customer cross-account read Role ARNs that the M1 Worker may assume.
+    AllowedPattern: '^$|^arn:[^:,]+:iam::[0-9]{12}:role/[^,]+(,arn:[^:,]+:iam::[0-9]{12}:role/[^,]+)*$'
+    ConstraintDescription: Comma-separated non-empty IAM role ARNs or empty for fixture mode.
   FrontendCallbackUrl:
     Type: String
     Default: http://localhost:5173
@@ -54,6 +56,29 @@ Parameters:
     Type: String
     Default: http://localhost:5173
     ConstraintDescription: Exact HTTPS production or localhost logout URL for the Assessment SPA.
+
+Rules:
+  M1AssessmentInputsAllOrNone:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::And:
+                - Fn::Equals: [!Ref M1AssessmentRuntimeJson, ""]
+                - Fn::Equals: [!Ref M1AssessmentSecretArns, ""]
+                - Fn::Equals: [!Ref M1AssessmentReadRoleArns, ""]
+            - Fn::And:
+                - Fn::Not: [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
+                - Fn::Not: [!Equals [!Ref M1AssessmentSecretArns, ""]]
+                - Fn::Not: [!Equals [!Ref M1AssessmentReadRoleArns, ""]]
+        AssertDescription: >-
+          M1 runtime JSON, secret ARNs, and read-role ARNs must be either all empty
+          for fixture mode or all non-empty for live mode.
+  M1AssessmentRegionMatchesModelProfile:
+    RuleCondition: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: >-
+          Live M1 deployment Region must match the approved Assessment Model Profile Region.
 
 Conditions:
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
@@ -379,10 +404,10 @@ Resources:
               Statement:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !Ref M1AssessmentSecretArns
+                  Resource: !Split [",", !Ref M1AssessmentSecretArns]
                 - Effect: Allow
                   Action: sts:AssumeRole
-                  Resource: !Ref M1AssessmentReadRoleArns
+                  Resource: !Split [",", !Ref M1AssessmentReadRoleArns]
                 - Effect: Allow
                   Action: bedrock:InvokeModel
                   Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"

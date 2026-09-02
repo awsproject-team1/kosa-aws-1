@@ -6,8 +6,11 @@
   `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
   before/after projection을 구현했고 18개(6 Rule × 3 perspective) Golden fixture gate를 확인했다.
   ADR-0019(승인 배포 실행 경계)는 계속 `Proposed`이며 아래 Blocked가 적용된다.
-- PR #26 review follow-up: 최신 `dev` 위에서 assessment provenance(commit/time)와 remediation
-  identity 검증을 통합했고, 후속 PR 검토 대기
+- M1 sandbox readiness 보강 완료: live Worker가 등록된 M1 Model Profile ID를 work에 직접 결합하고,
+  deployment workflow가 명시적 live/fixture mode·selector/ARN/account/Region/40자 commit을 customer
+  deployment credential 설정 전에 fail-closed 검증함. 실제 고객 배포는 아래 Blocked 해소 전 시작하지 않음
+- PR #26 review follow-up은 PR #29로 최신 `dev`에 통합 완료: assessment provenance(commit/time),
+  remediation identity, 미래/누락/mismatch provenance 차단을 A→B 흐름과 persistence에 연결
 - M1 Initial Assessment MVP의 코드 경계 완료: 하나의 Assessment가 `IAC`, `AWS_ACTUAL`,
   `DRIFT` 세 관점을 모두 산출하고 Finding·Coverage·Readiness Score까지 조회된다.
   실제 고객 sandbox 배포와 Bedrock 품질 Gate 실행만 대기한다.
@@ -25,6 +28,13 @@
 
 ## Completed
 
+- M1 sandbox readiness hardening: live work를 composition root의 승인 Model Profile에 결합하고,
+  lowercase 40자 commit, explicit live/fixture mode, exact selector/ARN/account/Profile Region preflight,
+  credential Secret 역할 분리와 canonical GitHub `owner/repository` identity 검증, CloudFormation M1
+  parameter all-or-none·빈 CSV 요소·live Region 차단 및 runbook 동기화를 완료. Repository identity는
+  preflight·runtime config·최종 REST adapter에서 같은 fail-closed guard를 재사용한다. 최신 `dev` 통합 후
+  Ruff 247 files, Unit 430, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
+  Assessment 25-call·Policy Catalog 11-item dry-run 통과
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
   delta를 fail-closed로 차단한다.
@@ -233,6 +243,13 @@
 
 ## Blocked
 
+- M1 actual sandbox validation: 두 protected GitHub Environment에 required reviewer가 없고 deploy
+  Environment의 `M1_ASSESSMENT_MODE` 및 M1 Secret 3개가 미설정이다. 로컬 AWS credential도 없으므로
+  bootstrap/runtime target 생성과 실제 workflow dispatch는 고객 관리자·승인자 작업 대기
+- M1 live Golden quality gate: 6 Rule × 3 perspective case의 artifact resolver와 versioned
+  prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
+  derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
+  generic benchmark 결과를 M1 gate 통과로 간주하지 않음
 - **M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이 모두 채워져 있다. 남은 것은
   A·D의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의 리뷰 approve**로 받는다 (CONTRIBUTING:
   Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). 서명 전에는 D가 live plan/apply 경로를,

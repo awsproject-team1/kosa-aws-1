@@ -94,9 +94,18 @@ class DynamoFixtureWorkRepository:
 class DynamoM1WorkRepository:
     """Reload a Job and resolve its live target only from protected Worker config."""
 
-    def __init__(self, table: object, configuration: M1RuntimeConfiguration) -> None:
+    def __init__(
+        self,
+        table: object,
+        configuration: M1RuntimeConfiguration,
+        *,
+        model_profile_id: str,
+    ) -> None:
+        if not isinstance(model_profile_id, str) or not model_profile_id.strip():
+            raise ValueError("model_profile_id must be a non-empty string")
         self._table = table
         self._configuration = configuration
+        self._model_profile_id = model_profile_id
         self._targets: dict[tuple[str, int], object] = {}
         self._work: dict[tuple[str, int], AssessmentResourceWork] = {}
 
@@ -156,7 +165,7 @@ class DynamoM1WorkRepository:
             # The live Worker runs the full perspective set, so this declares the
             # primary evaluated perspective rather than the only one.
             perspective=EvaluationPerspective.AWS_ACTUAL,
-            model_profile_id="assessment-nova-lite-m0-v1",
+            model_profile_id=self._model_profile_id,
             assessed_commit_sha=target.commit_sha,
         )
         self._work[(job_id, expected_revision)] = work
@@ -253,7 +262,11 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
     table = boto3.resource("dynamodb").Table(table_name)
     profile = _model_profile()
     for task in _tasks(event):
-        work_repository = DynamoM1WorkRepository(table, configuration)
+        work_repository = DynamoM1WorkRepository(
+            table,
+            configuration,
+            model_profile_id=profile.model_profile_id,
+        )
         target = work_repository.target_for(
             job_id=task.job_id, expected_revision=task.expected_revision
         )
