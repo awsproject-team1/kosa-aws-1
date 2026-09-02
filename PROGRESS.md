@@ -709,9 +709,13 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   고객 sandbox repository — ADR-0021 §1. **문서 몫 완료:** `docs/M4-DEMO-IAC-REFERENCE.md`(별도
   데모 저장소 식별자·전제조건·6개 S3 Rule 1:1 위반 토글 매핑·세 관점 재현), `docs/M4-DEMO-RUNBOOK.md`
   (Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프, 재조회 시점 규칙,
-  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). **남은 조각:**
-  실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용 값 채우기는 protected Environment·OIDC Role·
-  자격 증명 대기(A endpoint·runtime 배선 뒤))*
+  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). ADR-0022 §4의
+  **D producer 결합 로직도 구현**: `apps/backend/deployment/release_binding.py`의
+  `derive_release_binding()`가 demo commit/deployment ID/artifact set을 세 SHA-256(bundle의
+  `repository_commit_sha256`/`deployment_id_sha256`/`artifact_set_sha256`)으로 결정적 결합하며, C
+  parser의 `_digest` 관문과 정합함을 회귀 테스트로 고정했다. **남은 조각:** 실제 데모 저장소 생성·
+  sandbox 폐루프 실행·관측/비용 값 채우기(실제 commit/ID/artifact 주입)는 protected Environment·
+  OIDC Role·자격 증명 대기)*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.
