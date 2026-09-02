@@ -62,6 +62,11 @@
   runtime resource allow-list(`aws:`/`terraform:`/`s3://`) 또는 canonical policy reference
   (`{source_id}@{source_version}#{locator}`)로 제한해 잘못된 `github:` 재유입을 차단했다.
 
+- PR #37 review follow-up: complete-input validation과 두 complete Assessment 사이의
+  `comparable=false`를 ADR-0020/Contract에 구분해 API 오류 변환 경계를 명시했고, post-deploy
+  Golden 18개를 16 PASS + 2 unresolved FAIL로 양극화했다. evidence 검증은 Rule fixture의 실제
+  `SourceReference` 집합과 대조하고 위반 case/reference를 출력한다.
+
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
   읽어 B policy를 호출하고 actionable decision은 context/Job/Outbox/audit와 원자 저장하며,
@@ -237,8 +242,9 @@
   것은 단위 테스트 assertion 4건이다. Admin `GET /audit-events`를 만들기 전에, 그리고 M3에서 값이
   7개 더 늘기 전에 선행한다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
-  apply 뒤 IaC/Actual 정합 `PASS` snapshot이며 원 Assessment와 같은 rubric을 쓴다. fixture gate는
-  통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로 남는다 (ADR-0020 §3).
+  16개 정합 `PASS` snapshot과 logging 설정이 남은 Actual/Drift 2개 `FAIL` snapshot이며 원 Assessment와
+  같은 rubric을 쓴다. fixture gate는 통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로
+  남는다 (ADR-0020 §3).
 - **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
   계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
   bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른

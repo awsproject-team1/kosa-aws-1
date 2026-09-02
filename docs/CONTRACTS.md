@@ -446,7 +446,8 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 `ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
 비교 가능 근거가 아니다. 비교 입력 report는 pagination cursor가 없어야 하고, 결과 좌표 집합과
 Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불완전하거나 손상된 projection은
-비교 전에 fail-closed로 거부한다.
+비교 전에 fail-closed로 거부한다. 이는 두 complete Assessment의 plan/profile/rubric/score 차이에서
+반환하는 `comparable: false`와 구별되는 입력 validation이며, API는 이를 validation 오류로 변환한다.
 
 `fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
 `fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각

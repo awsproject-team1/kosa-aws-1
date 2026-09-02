@@ -19,12 +19,20 @@ from packages.contracts.model_profiles import ModelProfile, ModelProfileRole
 
 class M1GoldenCaseTest(unittest.TestCase):
     @staticmethod
-    def _is_allowed_evidence_reference(reference: str) -> bool:
+    def _allowed_policy_evidence_references() -> set[str]:
+        rules_root = Path(__file__).parents[2] / "fixtures" / "rules"
+        return {
+            (f"{reference['source_id']}@{reference['source_version']}#{reference['locator']}")
+            for path in rules_root.glob("rules.*.json")
+            for rule in json.loads(path.read_text())
+            for reference in rule["source_references"]
+        }
+
+    @classmethod
+    def _is_allowed_evidence_reference(cls, reference: str) -> bool:
         if reference.startswith(RESOURCE_EVIDENCE_PREFIXES):
             return True
-        source_id, at, source_and_locator = reference.partition("@")
-        source_version, hash_mark, locator = source_and_locator.partition("#")
-        return bool(source_id and at and source_version and hash_mark and locator)
+        return reference in cls._allowed_policy_evidence_references()
 
     @staticmethod
     def _cases() -> list[GoldenDatasetCase]:
@@ -68,12 +76,16 @@ class M1GoldenCaseTest(unittest.TestCase):
         raw_cases.extend(json.loads((root / "golden_dataset_cases.json").read_text()))
         raw_cases.extend(json.loads((root / "golden_dataset_post_deploy_cases.json").read_text()))
 
-        self.assertTrue(
-            all(
-                self._is_allowed_evidence_reference(reference)
-                for raw in raw_cases
-                for reference in raw["expected_evidence_references"]
-            )
+        violations = [
+            f"{raw['case_id']}: {reference}"
+            for raw in raw_cases
+            for reference in raw["expected_evidence_references"]
+            if not self._is_allowed_evidence_reference(reference)
+        ]
+        self.assertEqual(
+            [],
+            violations,
+            "Golden evidence must be an allowed resource reference or a Rule fixture SourceReference",
         )
 
     def test_m1_profile_pins_the_same_rebaselined_rubric_and_golden_version(self) -> None:
@@ -139,13 +151,17 @@ class M1GoldenCaseTest(unittest.TestCase):
             },
         )
         self.assertTrue(all(case["rubric_version"] == "m1-three-perspective-v1" for case in cases))
+        expected_outcomes = {
+            (case["expected_status"], case["expected_score_min"], case["expected_score_max"])
+            for case in verification_cases
+        }
+        self.assertIn(("PASS", 100, 100), expected_outcomes)
         self.assertTrue(
-            all(
-                case["expected_status"] == "PASS"
-                and case["expected_score_min"] == 100
-                and case["expected_score_max"] == 100
+            any(
+                case["expected_status"] == "FAIL" and case["expected_score_max"] < 100
                 for case in verification_cases
-            )
+            ),
+            "post-deploy gate must include an unresolved FAIL case",
         )
 
     def test_all_six_by_three_by_two_phase_cases_pass_the_repeated_quality_gate(self) -> None:

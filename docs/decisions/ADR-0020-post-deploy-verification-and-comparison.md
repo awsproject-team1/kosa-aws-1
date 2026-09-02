@@ -73,9 +73,10 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - Profile이 그 사이 교체됐다면 비교가 아니라 **새 Initial Assessment로 처리한다.**
 - 이 제약 때문에 Model Profile 교체는 검증 대기 중인 Deployment가 없을 때만 배포한다.
 - `fixtures/m1/golden_dataset_post_deploy_cases.json`은 six S3 Rule × 세 관점의 18개
-  `POST_DEPLOY_VERIFICATION` Golden Case를 제공한다. 각 Case는 apply 뒤 IaC/Actual이 정합한
-  `PASS` snapshot이며, 원 Assessment와 같은 `rubric_version`을 사용한다. 이 fixture gate는
-  phase별 Contract 정합성을 고정하며, 실제 Bedrock 반복 평가는 M4 customer sandbox gate에서 수행한다.
+  `POST_DEPLOY_VERIFICATION` Golden Case를 제공한다. 16개는 apply 뒤 IaC/Actual이 정합한 `PASS`
+  snapshot이고, S3 logging Actual과 그 불일치 Drift 두 건은 apply 뒤에도 설정이 남은 `FAIL`
+  snapshot이다. 따라서 phase gate는 해소와 미해소를 모두 검증한다. 모든 Case는 원 Assessment와
+  같은 `rubric_version`을 사용하며, 실제 Bedrock 반복 평가는 M4 customer sandbox gate에서 수행한다.
 
 ### 4. Finding Resolution은 Code의 결정적 diff다
 
@@ -130,6 +131,11 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - cursor가 없더라도 report의 결과 좌표 집합은 immutable planned 집합과 **정확히 같아야** 하며,
   Coverage의 planned/completed count도 그 집합 및 `EXECUTION_ERROR`를 제외한 완료 좌표와 일치해야
   한다. 따라서 잘못된 조회 구현이나 손상된 projection이 누락 좌표를 정상 score로 위장할 수 없다.
+- 이 complete-input 검사는 comparison eligibility와 별개인 경계 validation이다. cursor가 남거나
+  결과/coverage가 자체 plan과 어긋난 report는 `AssessmentComparison`을 만들기 전에 거부한다. 반면
+  두 개의 유효하고 complete한 Assessment 사이에서 plan/profile/rubric/score가 다르면
+  `comparable = false`와 이유 코드를 반환한다. 따라서 API는 입력 projection 오류를 500으로 노출하지
+  않고 validation 오류로 변환하며, 비교 불가인 정상 projection만 reason 화면에 렌더링한다.
 
 **선행 작업 — 이것 없이는 2번 조건을 판정할 수 없다.**
 
@@ -210,9 +216,9 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   전체만큼 발생한다. 현재 규모(18개)에서는 수용 가능하며, Rule 확장 시 축소 재평가와
   `comparable=false` 표기를 재검토한다.
 - Model Profile 동일성 강제 때문에 Profile 교체 시점이 Deployment 수명과 결합된다.
-- Finding Resolution은 Code 판정이고, 18개 `POST_DEPLOY_VERIFICATION` Golden Case가 재평가
-  phase의 fixture quality gate를 고정한다. 실제 Bedrock 반복 평가는 M4 customer sandbox gate에서
-  수행한다.
+- Finding Resolution은 Code 판정이고, 18개 `POST_DEPLOY_VERIFICATION` Golden Case(16 PASS, 2
+  unresolved FAIL)가 재평가 phase의 양극성 fixture quality gate를 고정한다. 실제 Bedrock 반복
+  평가는 M4 customer sandbox gate에서 수행한다.
 - planned 집합이 A의 선행 작업으로 추가되지만 새 item이 아니다. 이미 쓰는
   `ASSESSMENT#{assessment_id}#PLAN`에 속성이 하나 늘고, 같은 작업에서 `calculate_readiness_score`가
   개수 대신 집합을 받도록 바뀐다. **이 선행 작업 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
