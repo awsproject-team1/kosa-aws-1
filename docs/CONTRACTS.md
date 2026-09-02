@@ -77,7 +77,9 @@ Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
 `EvaluationResult` 중 `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`는 C가 각각 하나의
 immutable `Finding`으로 투영한다. Finding ID는 `resource_id`, `rule_id`, `rule_version`,
 `perspective`에서 결정적으로 만들며, 원 Evaluation Result의 status, severity, score, rationale,
-evidence를 보존한다. `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
+evidence와 평가 provenance(`assessed_commit_sha`, offset-aware `evaluated_at`)를 보존한다.
+legacy Result/Finding은 provenance 없이 읽을 수 있으나 remediation 자동화에는 사용할 수 없다
+(fail-closed). `PASS`, `OUT_OF_SCOPE`, `EXECUTION_ERROR`는 Finding이 아니다.
 
 `ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`와
 `DRIFT` 관점은 점수 계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`,
@@ -312,20 +314,32 @@ Artifact는 공개 S3 URL을 포함하지 않는다. GitHub App은 승인 Reposi
 - `ManualReviewCode`: 자동 조치를 거부한 사유. 자유 문장이 아니다
 - `RemediationException`: `(customer_id, rule_id, rule_version)`과 선택적 `resource_id`에
   묶이는 고객 승인 면제. 사유는 열거값이고 `approved_at`/`expires_at`은 offset을 포함한
-  ISO-8601이어야 한다. 유효 구간은 `approved_at <= moment < expires_at`이며, 승인 이전 시점의
-  Finding은 나중에 등록된 예외로 소급 억제되지 않는다
+  ISO-8601이어야 한다. 억제 여부는 **두 시각**으로 갈린다 — 승인은 Finding이 평가된 시점보다
+  앞서야 하고(`approved_at <= finding_evaluated_at`), 만료는 판정 시점 기준으로 확인한다
+  (`at < expires_at`). `is_in_force_for()`가 이 판단이고, 한 시각만 보는 `is_active_at()`은
+  조치 게이트가 아니다. 조치 요청은 평가보다 늦게 오는 것이 정상이므로 두 시각을 같은 값으로
+  두면 나중에 승인된 예외가 옛 Finding을 소급 억제한다
 - `RemediationTarget`: 대상 Resource의 Terraform 관리 여부와 그 Resource에 대한 **해당 Rule
   version의 IAC 관점** 판정. `rule_id`/`rule_version`을 Finding과 대조하고,
-  `iac_status`/`iac_perspective=IAC`를 한 쌍으로 강제한다. 같은 리소스의 다른 Rule이나
-  Actual 관점에서 나온 `PASS`가 `ACTUAL_SYNC`를 열 수 없다
+  `iac_status`/`iac_perspective=IAC`/`iac_commit_sha`를 한 묶음으로 강제한다. 같은 리소스의
+  다른 Rule이나 Actual 관점에서 나온 `PASS`가 `ACTUAL_SYNC`를 열 수 없고, 평가 뒤 Repository가
+  진행한 경우 옛 commit의 판정이 새 commit을 배포 대상으로 만들 수 없다
 - `RemediationDecision`: Finding·Rule version·관점과 판정. `MANUAL_REVIEW`만
   `manual_review_code`를, `SUPPRESSED`만 `exception_id`를 가진다
 
-`RemediationPolicy.decide()`의 판정 순서가 정책이다. 유효한 예외 → 평가되지 못한 Finding →
-허용 범위 등록 여부 → Terraform 관리 여부 → 관점별 조치 유형 → Patch일 때만 `MANUAL_ONLY` 확인.
+`RemediationPolicy.decide(finding, *, customer_id, target, commit_sha, finding_evaluated_at, at,
+exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지 못한 Finding → 허용 범위 등록 여부
+→ Terraform 관리 여부 → IaC 판정의 commit 대조 → 관점별 조치 유형 → Patch일 때만 `MANUAL_ONLY`
+확인. `commit_sha`는 이번 조치가 대상으로 삼는 IaC commit이고, `finding_evaluated_at`은 Finding이
+평가된 시각, `at`은 판정 시각이다. A는 Finding provenance가 context snapshot commit과 정확히
+같고 `finding_evaluated_at <= at`일 때만 이 호출을 수행한다.
 
 - 허용 범위에 **등록되지 않은** Rule은 어떤 자동 조치도 받지 못한다. 판단의 부재는
   `MANUAL_ONLY`라는 판단과 다르다
+- `AWS_ACTUAL`/`DRIFT` Finding의 IaC 판정이 `commit_sha`가 아닌 commit에서 나왔으면
+  `IAC_VERDICT_COMMIT_MISMATCH`로 사람에게 간다. `PASS`든 `FAIL`이든 같다 — 옛 `PASS`는 새
+  commit을 평가한 적이 없고, 옛 `FAIL`은 이미 고쳐졌을 수 있어 그 위의 Patch가 사람이 쓴 수정을
+  되돌린다. `IAC` Finding은 자기 관점의 판정을 다시 읽지 않으므로 이 대조의 대상이 아니다
 - `MANUAL_ONLY`는 `TERRAFORM_PATCH`만 막는다. `ACTUAL_SYNC`는 새 변경을 합성하지 않고 사람이
   쓴 commit을 배포 대상으로 삼으므로, 적용의 파괴성은 Deployment Readiness의 refresh된 Plan과
   Human Approval이 판단한다 (ADR-0007)
@@ -386,6 +400,72 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 기준으로 비교한다. 기존에 lifecycle 없이 저장된 legacy item은 APPROVED로 정규화해 재실행을
 허용하지만, 다른 writer가 다른 lifecycle이나 내용을 쓰면 계속 fail-closed한다. 따라서 같은
 키에 lifecycle을 별도로 쓰는 두 번째 writer를 만들지 않는다.
+
+## M3 contract additions
+
+ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019의
+A/D-owned Contract는 아직 구현되지 않았다. 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은
+개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인 구조가 재발한다.
+
+| 추가 | 소유 | 의미 |
+| --- | --- | --- |
+| `DeploymentStatus` + `derive_deployment_status()` | A | Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
+| `AuditEventType` | A | 감사 event **종류** 어휘. 정본 필드명은 `event_type`이다 |
+| `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
+| `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
+| `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
+| `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
+
+`DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
+순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
+apply run reference, verification 결과에서 read 시 계산한다. 저장하면 `JobStatus`·`JobCurrentStep`과
+같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). 표현 값의 전이는 다음과 같다.
+
+```text
+PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
+→ APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED
+분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
+```
+
+`AuditEventType`은 감사 event의 **종류**를 담는 enum이고 정본 필드명은 `event_type`이다.
+`action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가 한 item에서 `event_type`
+(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고 있어, `action`으로
+통일하면 두 값이 같은 키를 다툰다. 이관 대상은 현재 `action` 필드명을 쓰는 세 곳
+(`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)이며, 이미 `event_type`을 쓰는
+`REMEDIATION_DECIDED`·`REMEDIATION_EXCEPTION_APPROVED`는 그대로 둔다. 읽는 코드가 없어 write-only
+변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. M3에서 `DEPLOYMENT_REQUESTED`,
+`DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가되므로 값이 늘기 전에 선행한다.
+
+`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
+역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
+옮긴다.
+
+`AssessmentComparison`은 두 immutable Assessment의 Coverage/Readiness와 Finding Resolution을
+읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
+`model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
+`ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
+비교 가능 근거가 아니다.
+
+### D 실행 port 시그니처 (M3 병렬 개발 전제)
+
+M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
+먼저 고정해야 한다. 아래 세 port는 D가 소유하고 A/C가 주입받아 Fixture/Mock으로 병렬 구현한다
+(`Mockable` 의존성).
+
+| Port | 호출자 | 입력 → 출력 |
+| --- | --- | --- |
+| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state `lineage`·`serial` + `PlanReadinessInput` |
+| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` → dispatched run reference (idempotent) |
+| `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
+| `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
+
+- 세 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
+- `ApplyDispatchPort`는 같은 approval로 두 번 호출돼도 새 run을 만들지 않아야 한다. 중복 방지의
+  정본은 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
+- `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다. 검증 단계에서
+  write 표면이 생기지 않는다.
 
 ## Contract change review
 

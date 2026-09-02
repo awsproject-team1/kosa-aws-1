@@ -2,6 +2,11 @@
 
 from apps.backend.assessment.bedrock import BedrockEvaluationError, BedrockStructuredEvaluator
 from apps.backend.assessment.bedrock_runtime import BedrockConverseClientFactory
+from apps.backend.assessment.comparison import (
+    ComparisonAssessment,
+    PlannedEvaluation,
+    compare_post_deploy_assessments,
+)
 from apps.backend.assessment.coverage import AssessmentCoverage, calculate_coverage
 from apps.backend.assessment.drift import DriftDerivationError, derive_drift_results
 from apps.backend.assessment.findings import (
@@ -58,6 +63,8 @@ __all__ = [
     "BedrockConverseClientFactory",
     "BedrockStructuredEvaluator",
     "calculate_coverage",
+    "compare_post_deploy_assessments",
+    "ComparisonAssessment",
     "calculate_readiness_score",
     "derive_drift_results",
     "DriftDerivationError",
@@ -77,6 +84,7 @@ __all__ = [
     "ImmutableEvaluationResultConflict",
     "ImmutableFindingConflict",
     "ModelProfileNotFoundError",
+    "PlannedEvaluation",
     "S3ActualEvidence",
     "S3ActualEvidenceLoader",
     "S3ActualBedrockEvaluator",

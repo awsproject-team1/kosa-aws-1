@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Protocol
 
 from apps.backend.assessment.drift import derive_drift_results
@@ -43,6 +44,7 @@ class AssessmentResourceWork:
     perspective: EvaluationPerspective
     model_profile_id: str
     planned_evaluations: int | None = None
+    assessed_commit_sha: str | None = None
     """Server-computed `Resource × Rule × Perspective` total for the whole Assessment.
 
     A single-resource Assessment can leave this unset and let the Worker derive the
@@ -79,6 +81,10 @@ class AssessmentResourceWork:
                 raise TypeError("planned_evaluations must be an integer or None")
             if self.planned_evaluations <= 0:
                 raise ValueError("planned_evaluations must be greater than zero")
+        if self.assessed_commit_sha is not None and (
+            not isinstance(self.assessed_commit_sha, str) or not self.assessed_commit_sha.strip()
+        ):
+            raise ValueError("assessed_commit_sha must be a non-empty string or None")
 
 
 class AssessmentWorkRepository(Protocol):
@@ -194,6 +200,16 @@ class AssessmentWorker:
             )
         profile = self._model_profiles.get_assessment_profile(work.model_profile_id)
         results = self._evaluate(work, context, profile)
+        if work.assessed_commit_sha is not None:
+            evaluated_at = datetime.now(UTC).isoformat()
+            results = tuple(
+                replace(
+                    result,
+                    assessed_commit_sha=work.assessed_commit_sha,
+                    evaluated_at=evaluated_at,
+                )
+                for result in results
+            )
         self._result_store.put_if_absent(
             customer_id=work.customer_id,
             assessment_id=work.assessment_id,

@@ -45,11 +45,24 @@ class RemediationService:
             raise TypeError("context must be a RemediationContext")
         if not isinstance(decision, RemediationDecision):
             raise TypeError("decision must be a RemediationDecision")
-        finding_id = context.finding.finding_id
+        finding = context.finding
+        finding_id = finding.finding_id
         snapshot = context.snapshot
         # 판정과 context가 같은 finding을 가리키는지, 그리고 patch 생성이 허가됐는지(게이트)
         # 확인한다. TERRAFORM_PATCH가 아닌 판정으로 여기까지 온 것은 orchestrator의 버그다.
-        if decision.finding_id != finding_id:
+        if (
+            decision.finding_id,
+            decision.resource_id,
+            decision.rule_id,
+            decision.rule_version,
+            decision.perspective,
+        ) != (
+            finding.finding_id,
+            finding.resource_id,
+            finding.rule_id,
+            finding.rule_version,
+            finding.perspective,
+        ):
             raise RemediationContractError("remediation decision is outside context")
         if decision.action is not RemediationAction.TERRAFORM_PATCH:
             raise RemediationContractError("remediation decision does not permit a Terraform patch")

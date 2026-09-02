@@ -40,6 +40,8 @@ def context() -> RemediationContext:
         score=0,
         rationale="unsafe",
         evidence_references=("terraform:bucket-001",),
+        assessed_commit_sha="base-commit",
+        evaluated_at="2026-09-01T07:00:00+00:00",
     )
     return RemediationContext(
         finding=finding,

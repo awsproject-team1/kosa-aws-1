@@ -44,6 +44,8 @@ class RemediationDecisionMaker(Protocol):
         *,
         customer_id: str,
         target: RemediationTarget,
+        commit_sha: str,
+        finding_evaluated_at: datetime,
         at: datetime,
         exceptions: Iterable[RemediationException] = (),
     ) -> RemediationDecision: ...
@@ -134,16 +136,19 @@ class RemediationApiService:
             context, customer_id=principal.customer_id, finding_id=finding_id
         )
         target = self._targets.get_target(customer_id=principal.customer_id, finding_id=finding_id)
-        exceptions = self._exceptions.list_exceptions(
-            customer_id=principal.customer_id, finding=context.finding
-        )
         decided_at = self._now()
         if not isinstance(decided_at, datetime) or decided_at.tzinfo is None:
             raise ValueError("now must return an offset-aware datetime")
+        finding_evaluated_at = self._require_finding_provenance(context, decided_at=decided_at)
+        exceptions = self._exceptions.list_exceptions(
+            customer_id=principal.customer_id, finding=context.finding
+        )
         decision = self._decision_maker.decide(
             context.finding,
             customer_id=principal.customer_id,
             target=target,
+            commit_sha=context.snapshot.commit_sha,
+            finding_evaluated_at=finding_evaluated_at,
             at=decided_at,
             exceptions=exceptions,
         )
@@ -212,6 +217,27 @@ class RemediationApiService:
             finding.perspective,
         ):
             raise RepositoryError("remediation decision is outside the context identity")
+
+    def _require_finding_provenance(
+        self, context: RemediationContext, *, decided_at: datetime
+    ) -> datetime:
+        finding = context.finding
+        if (
+            finding.assessed_commit_sha != context.snapshot.commit_sha
+            or finding.evaluated_at is None
+        ):
+            raise RepositoryError(
+                "remediation finding provenance is missing or outside the snapshot"
+            )
+        try:
+            evaluated_at = datetime.fromisoformat(finding.evaluated_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise RepositoryError("remediation finding evaluation time is invalid") from None
+        if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
+            raise RepositoryError("remediation finding evaluation time is invalid")
+        if evaluated_at > decided_at:
+            raise RepositoryError("remediation finding evaluation time is after decision time")
+        return evaluated_at
 
     @staticmethod
     def _new(factory: Callable[[], str], name: str) -> str:
