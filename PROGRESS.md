@@ -2,6 +2,17 @@
 
 ## Current
 
+- M4 A 관측·비용 기록 조립 경계를 구현했다(ADR-0021 §3, `feature/m4-a-observability`, base=dev).
+  데모 폐루프 1회 실행의 일곱 항목(Assessment 성공률, Bedrock 호출, Queue 건전성, Job 재개,
+  plan/apply, 감사 이력, 비용)을 immutable하게 묶는 `DemoRunObservability` 계약을 두고, 각 항목은
+  "값이 비어 있으면 미충족"을 `meets_gate`로 판정하며 `unmet_items()`가 미충족 항목을 열거한다.
+  민감 원문 부재 확인 플래그가 없으면 전체 게이트는 통과가 아니다. 조립은 A의 Admin 전용 경계
+  (`DemoRunObservabilityService`, `READ_OBSERVABILITY`)가 주입된 read-only source가 돌려준 사실만
+  묶고, source가 사실을 돌려주지 못하면 fail-closed한다(값을 지어내지 않는다). `AuditEventType`을
+  게이트의 네 범주(Remediation/Approval/Apply/Verification)로 결정적 매핑하는
+  `assemble_audit_trail_metric`을 함께 두었다. live CloudWatch/CloudTrail/Cost Explorer adapter와
+  HTTP 라우트 배선은 D/A 배포 통합에서 주입하며, 이 저장소에서는 fixture/mock source로 병렬
+  검증한다. 문서(CONTRACTS/DESIGN) 동기화. 후속 리뷰 대기
 - PR #50을 포함한 M3 API runtime/infrastructure follow-up: API Lambda에
   `DEPLOYMENT_QUEUE_URL`을 주입하고, deployment 생성·조회·검증 조회·거절의 네 HTTP API Gateway
   route를 JWT authorizer와 함께 명시했다. handler branch만 있고 Gateway route가 없는 배포 누락과
