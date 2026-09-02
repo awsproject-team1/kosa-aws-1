@@ -2,6 +2,12 @@
 
 ## Current
 
+- M1 C→A policy candidate extraction handoff Contract: `PolicyCandidateExtraction`은 exact `READY`
+  normalized document, undecided `RuleCandidate`, extractor ID/version을 immutable하게 묶고 source
+  version·locator·hash provenance를 fail-closed로 검증한다. 원문/정규화 text는 Contract에 없으며,
+  A의 candidate DynamoDB persistence 및 `load_review`/`load_publication` read adapter 구현을 위한
+  mockable input이다. 이는 M3 A/D의 ADR-0019 승인 의존성과 무관하다.
+
 - ADR-0020 파생 Contract를 동결했다. Assessment 계획이 개수가 아니라
   `(resource_id, rule_id, perspective)` **집합**으로 저장되므로 C의 비교 경계를 실제로 배선할 수
   있다. `AuditEventType`과 `RemediationSyncTarget` 위치도 같은 변경에서 정리했다. 후속 PR 검토 대기
