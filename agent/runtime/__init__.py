@@ -37,6 +37,13 @@ from agent.runtime.github_write_tool import (
     require_patch_scope,
     require_remediation_patch,
 )
+from agent.runtime.live_deployment_ports import (
+    APPLY_WORKFLOW_PATHS,
+    LiveActualRereadPort,
+    LiveApplyDispatchPort,
+    LiveDeploymentPortError,
+    LiveWorkflowRunReader,
+)
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
 from agent.runtime.mock_deployment_ports import (
     DeploymentPortError,
@@ -68,9 +75,14 @@ __all__ = [
     "GitHubWriteScopeError",
     "GitHubWriteTool",
     "GitHubWriteToolError",
+    "APPLY_WORKFLOW_PATHS",
     "IaCDocument",
     "IaCDocumentReader",
     "IaCSnapshotRequest",
+    "LiveActualRereadPort",
+    "LiveApplyDispatchPort",
+    "LiveDeploymentPortError",
+    "LiveWorkflowRunReader",
     "MockActualRereadPort",
     "MockApplyDispatchPort",
     "MockAwsResourceTool",
