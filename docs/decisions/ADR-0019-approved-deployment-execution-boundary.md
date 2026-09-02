@@ -1,14 +1,15 @@
 # ADR-0019: 승인 배포 실행 경계 (plan/apply 재현성과 트리거 소유권)
 
-> **상태: Proposed (2026-09-02)** — 팀 합의 전이다. 이 ADR이 `Accepted`가 되기 전에는 D가
-> live plan/apply 경로를, A가 Deployment 생성·승인 후속 전이를 구현하지 않는다.
+> **상태: Accepted (2026-09-02)** — A·D·Security 세 Owner가 이 ADR을 담은 서명 PR의 리뷰
+> approve로 서명했다. 이 상태 이후 D는 live plan/apply 경로를, A는 Deployment 생성·승인 후속
+> 전이를 구현할 수 있다.
 >
 > **승인 방법:** 아래 Decision 1~8은 미정 항목 없이 모두 결정과 근거를 담고 있다. 별도 회의를
-> 열지 않고 **이 PR에 대한 A·D·Security의 리뷰 approve를 서명으로 삼는다** (CONTRIBUTING:
+> 열지 않고 **이 PR에 대한 A·D·Security의 리뷰 approve를 서명으로 삼았다** (CONTRIBUTING:
 > Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). A·D는 Deployment/API와 plan/apply
-> 경계를, Security는 state backend·OIDC·Environment 승인 경계를 확인한다. 수정 의견은 같은 PR의
-> 코멘트로 받고 같은 브랜치에 커밋을 더한다. 세 Owner의 approve가 모이면 같은 PR에서 상태를
-> `Accepted`로 바꾼다.
+> 경계를, Security는 state backend·OIDC·Environment 승인 경계를 확인했다. 세 Owner의 approve가
+> 모여 같은 PR에서 상태를 `Accepted`로 바꾼다. 이 서명은 A(PR #40)와 D의 M3 조각이 병렬로
+> base 삼도록 독립 PR로 분리했다.
 >
 > **결정 대상:** `plan_hash`가 무엇의 digest인지, Terraform state를 누가 어떻게 보유하는지,
 > apply 대상 commit이 무엇인지, `deployment_id`를 누가 발급하는지, apply를 누가 트리거하는지,
@@ -313,6 +314,9 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
   M3 Deployment audit event 값 추가.
 - **Proposed options:** 위 Decision 8개 항목. 각 항목의 대안과 거부 이유는 Rejected alternatives에
   있다.
-- **Final record:** 미정. 합의 시 이 ADR의 상태를 `Accepted`로 바꾸고 `docs/API.md`,
-  `docs/CONTRACTS.md`, `docs/DATABASE.md`, `docs/DESIGN.md`의 계획 표기를 같은 PR에서 구현
-  표기로 옮긴다.
+- **Final record:** `Accepted` (2026-09-02). A·D·Security가 서명 PR 리뷰 approve로 서명했다.
+  Decision 1~8을 수정 없이 채택한다. 같은 PR에서 이 상태 전환과 함께 `docs/API.md`,
+  `docs/CONTRACTS.md`, `docs/DATABASE.md`, `docs/DESIGN.md`, `docs/architecture/C4-CONTAINER.md`의
+  계획 표기를 구현 표기로 옮긴다. Blocks에 묶여 있던 구현 커밋(M2 A audit 정본화, M2/M3 D live
+  plan/apply, M3 A Deployment 생성·상태 API)은 이 서명 이후 A(PR #40)와 D 브랜치에서 병렬로
+  시작한다.

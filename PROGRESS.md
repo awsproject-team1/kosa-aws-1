@@ -15,7 +15,13 @@
   저장되고 세 값은 셋 다 있거나 셋 다 없다. Worker runtime은 그 pin이 자신의 승인 Model Profile·
   rubric과 다르면 Assessment를 거부하고, 검증의 planned 집합을 파생하지 않고 원 Assessment의 PLAN
   item에서 읽어 재사용하며, Profile version pin을 Policy Context 해석에 넘긴다. 남은 것은 endpoint
-  배선이다(ADR-0019 서명 대기). 후속 PR 검토 대기
+  배선이다(ADR-0019 서명 완료, 배선 진행 예정). 후속 PR 검토 대기
+- 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
+  그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
+  억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
+  화면의 억제와 `SUPPRESSED` 판정이 갈리지 않는다. `evaluated_at`이 없는 옛 Finding은 두 시각
+  규칙을 적용할 수 없어 억제하지 않는다. 함께 §2 재평가 범위(검증 phase Profile version pin,
+  Rule 적용 가능성)를 회귀로 고정했다. 후속 PR 검토 대기
 - M1 C→A policy candidate extraction handoff Contract: `PolicyCandidateExtraction`은 exact `READY`
   normalized document, undecided `RuleCandidate`, extractor ID/version을 immutable하게 묶고 source
   version·locator·hash provenance를 fail-closed로 검증한다. 원문/정규화 text는 Contract에 없으며,
@@ -28,7 +34,11 @@
   `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
   before/after projection을 구현했고 36개(6 Rule × 3 perspective × Initial/Post-Deploy phase) Golden
   fixture gate를 확인했다.
-  ADR-0019(승인 배포 실행 경계)는 계속 `Proposed`이며 아래 Blocked가 적용된다.
+  ADR-0019(승인 배포 실행 경계)를 `Accepted`로 확정했다(2026-09-02). A·D·Security가 서명 PR
+  리뷰 approve로 서명했고, 같은 PR에서 상태 전환과 `docs/API.md`·`CONTRACTS.md`·`DATABASE.md`·
+  `DESIGN.md`·C4 계획 표기의 구현 표기 이관을 함께 커밋했다. 이 서명은 A(PR #40)와 D 조각이
+  병렬로 base 삼도록 독립 PR로 분리했다. 이로써 M2 A audit 정본화, M2/M3 D live plan/apply,
+  M3 A Deployment 생성·상태 API의 차단이 풀렸다.
 - M1 sandbox readiness 보강 완료: live Worker가 등록된 M1 Model Profile ID를 work에 직접 결합하고,
   deployment workflow가 명시적 live/fixture mode·selector/ARN/account/Region/40자 commit을 customer
   deployment credential 설정 전에 fail-closed 검증함. 실제 고객 배포는 아래 Blocked 해소 전 시작하지 않음
@@ -55,6 +65,95 @@
   M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
+
+- M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
+  low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
+  쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
+  쓰도록 고치고, 단위 테스트 기대값을 AttributeValue 형식으로 갱신했으며, 모든 write item 값이
+  AttributeValue로 직렬화되는지 확인하는 회귀 테스트를 추가했다. (query 경로는 resource table의
+  auto-marshal이라 무관)
+
+- M2 A Remediation 예외 등록 API를 배포 Lambda에 배선: `RemediationExceptionApiService`와
+  `DynamoDbRemediationExceptionRepository`는 이미 dev에 있었으나 composition root
+  (`runtime.py`)가 주입하지 않아 `POST /remediation-exceptions`가 배포 Lambda에서 404였다.
+  `_remediation_exception_components()`를 추가해 예외 record와 audit event를 한 transaction으로
+  쓰는 리포지토리(관리자 전용, `(customer_id, rule_id, rule_version)` 바인딩, 만료 필수)를
+  구성·주입했다. 배선 unit 테스트 2건 추가. 이어 `m0-foundation.yaml`에
+  `POST /remediation-exceptions` API Gateway 라우트(JWT 인가)를 추가해 배포 Lambda에서 도달
+  가능해졌다. cfn-lint E-level 0. **RemediationApiService와 DeploymentApiService는 이번 범위에서
+  제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
+  프로덕션 구현이 없고(테스트 fake만), 후자는 `DeploymentPlanReader.get_approval_input` 구현이
+  아예 없으며 D의 plan 저장(당시 ADR-0019 `Proposed`, 이후 `Accepted`)에 의존한다.
+
+- M1 A `record_candidate_extraction` 재시도 idempotency (PR #44 리뷰 대응 3): C의 추출 Worker가
+  at-least-once로 같은 결과를 재전송하면 `attribute_not_exists` 조건이 transaction을 취소해 정상
+  재시도가 오류로 보였다. 이제 충돌 시 이미 저장된 CANDIDATES·PolicySource item이 지금 쓰려는
+  것과 같은 내용이면 흡수하고, 다르면 immutability를 지켜 fail-closed한다
+  (`DynamoDbPolicyCatalogBootstrap`과 같은 관용구, transaction 맥락). read table이 없으면 확인
+  불가하므로 원래 오류를 유지한다. 동일 내용 흡수·상이 내용 거부 unit 테스트 추가.
+
+- M1 A `load_publication` 게시 입력 의미 명확화 (PR #44 리뷰 대응 2): 리뷰는 "필터가
+  `RULE_NOT_APPROVED` 게이트를 앞질러 삼킨다"고 지적했다. 확인 결과 `publish_profile`은 넘어온
+  후보를 전부 Profile에 넣고 미승인이면 거부하므로, 게시 입력 자체가 "승인된 Rule"이어야 한다
+  (미승인 후보를 섞으면 부분 승인 Source가 영영 게시 불가). 따라서 필터는 유지하되 그 의미를
+  "게이트 대신이 아니라 게시 대상 집합을 승인 record로 정의"로 주석·docstring에 명확히 하고,
+  잘못된 설명("게이트가 거른다")을 실제 동작에 맞게 고쳤다. 부분 승인(후보 2건 중 1건 승인) 시
+  게시 입력에 승인된 후보만 온다는 것을 unit 테스트로 고정했다. `publish_profile`의 승인 검사는
+  lifecycle과 승인 record 정합성 이중 방어로 남는다.
+
+- M1 A 승인 API 부분 승인 지원 (PR #44 리뷰 대응 1): `PolicyApprovalApiService.approve`가
+  승인할 `approved_rules`(`(rule_id, version)` 목록)를 받아 `load_review` 후보 중 그 부분집합만
+  골라 `approve_source()`에 넘긴다. 리뷰어가 추출 후보 전량이 아니라 일부만 승인할 수 있어야
+  검토 게이트가 형식으로 남지 않는다(`docs/POLICY_INGESTION.md` 인수 조건 4). handler는
+  `POST .../approve` body(`{"approved_rules": [...]}`)를 파싱하고, 후보에 없는 Rule·빈 목록·중복은
+  거부한다. B 순수 함수(`approve_source`)는 이미 "고른 것만 받는" 형태라 변경하지 않았다.
+  부분 승인·미존재 Rule 거부·빈 선택 거부 unit 테스트 추가. `docs/API.md` 갱신.
+
+- M1 A 승인·게시 API를 배포 Lambda에 배선: `runtime.py`의 `_http_handler`에
+  `_policy_approval_components()`를 추가해 `PolicyApprovalApiService`(write는 low-level
+  `transaction_client`, read는 resource `table` 주입)를 `policy_approvals`로 주입했다.
+  `m0-foundation.yaml`에 `POST /policy-sources/{sourceId}/versions/{version}/approve`와
+  `POST /policy-profiles` 라우트(JWT 인가)를 추가해 handler의 승인·게시 경로가 배포 Lambda에서
+  도달 가능해졌다. 배선 unit 테스트 2건 추가, cfn-lint E-level 0. 다만 후보를 실제 저장하는
+  경로(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 없어 E2E 승인 흐름은
+  그 조각 이후에 완성된다. 이 통합 브랜치는 PR #41의 업로드 배선 커밋 3건을 cherry-pick으로
+  흡수해, 업로드→정규화→승인→게시 API 배선을 한 PR로 담는다(PR #41은 이 PR로 대체).
+
+- M1 A 승인·게시 read 어댑터: `DynamoDbPolicyApprovalRepository`에 `load_review`/`load_publication`을
+  구현했다. `load_review`는 `POLICY_INGESTION` item(문서)과 `#CANDIDATES` item(후보)을 읽어
+  `(NormalizedPolicyDocument, RuleCandidate 튜플)`을 돌려주고, `load_publication`은 후보 규칙 전체와
+  승인 record의 `approved_rules`를 조합해 승인된 후보만 APPROVED로 표시한 뒤 approval·PolicySource와
+  함께 돌려준다. read는 자동 un/marshal되는 resource `table`을 쓰고(생성자 `table` 주입, 없으면
+  read가 fail-closed), write는 기존 low-level `transaction_client`를 그대로 쓴다. 문서 재구성은
+  `policy_ingestion.document_from_item`(get_document에서 추출한 공용 함수)을 재사용하되, 그 모듈이
+  api 계층을 참조해 패키지 초기화와 순환하므로 `load_review` 안에서 지연 import한다. read 3건
+  (문서·후보 복원, 승인 표시, read table 없을 때 fail-closed) unit 테스트를 추가했다.
+
+- M1 A 정책 후보 추출 결과 persistence: C가 PR #42로 넘긴 `PolicyCandidateExtraction`(READY
+  정규화 문서 + 미결정 후보 규칙 전체)을 승인·게시 read 경로가 읽을 형태로 저장하는
+  `DynamoDbPolicyApprovalRepository.record_candidate_extraction`을 추가했다. 두 item을 조건부
+  transaction으로 함께 쓴다 — `POLICY_SOURCE#{sid}#VERSION#{ver}#CANDIDATES`(후보 규칙 전체,
+  `load_review`가 읽음)와 `POLICY_SOURCE#{sid}#VERSION#{ver}`(`PolicySource`, `load_publication`이
+  반환·대조). `POLICY_INGESTION` item이 `READY`이고 artifact 바인딩이 일치할 때만 저장해 추측
+  저장을 막는다. `PolicySource`의 artifact 바인딩은 문서에서 유도하므로 승인 record 바인딩과
+  어긋날 수 없다. 원문·정규화 텍스트는 DynamoDB에 담지 않는다. `docs/DATABASE.md`에 candidate
+  SK를 문서화하고 unit 테스트를 추가했다.
+
+- M1 A 정책 원문 업로드 세션 API를 배포 Lambda에 배선: 도메인 코드(`PolicySourceApiService`,
+  `DynamoDbPolicySourceUploadRepository`)는 이미 dev에 있었으나 composition root
+  (`apps/backend/api/runtime.py`)가 이를 `JobHttpHandler`에 주입하지 않아 `POST
+  /policy-sources/uploads`·`GET /policy-sources/{id}/versions/{v}`·`.../process` 라우트가 배포
+  Lambda에서 404를 반환했다. `_policy_source_components()`를 추가해 `POLICY_SOURCE_BUCKET_NAME`
+  버킷과 tenant-scoped 업로드 세션 리포지토리, 정규화 처리용 S3 reader를 구성하고 `policy_sources`
+  ·`policy_reader`로 주입했다. 서버가 `source_id`/`source_version`을 발급하므로 client는 저장
+  위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`는 `policy_ingestion` 모듈에서 직접
+  import한다(패키지 export는 순환 import를 활성화). 배선 성공·버킷 미설정 fail-closed를 검증하는
+  unit 테스트 2건을 추가했다. 이어 `m0-foundation.yaml`에 업로드 세션 라우트 3건
+  (`POST /policy-sources/uploads`, `GET /policy-sources/{sourceId}/versions/{version}`,
+  `POST .../process`, JWT 인가)과 `ApiRuntimeFunction`의 `POLICY_SOURCE_BUCKET_NAME`(=ArtifactBucket)
+  환경변수, `ApiRuntimeRole`의 tenant-scoped S3 권한(`s3:PutObject`/`s3:GetObject`를 `customers/*`
+  prefix로만)을 추가해 라우트가 배포 Lambda에서 실제 도달 가능해졌다. cfn-lint E-level 0,
+  CloudFormation 보안 테스트 통과.
 
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
@@ -323,14 +422,11 @@
   prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
   derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
   generic benchmark 결과를 M1 gate 통과로 간주하지 않음
-- **M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이
-  모두 채워져 있다. 남은 것은 A·D·Security의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의
-  리뷰 approve**로 받는다 (CONTRIBUTING: Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다).
-  서명 전에는 M2 A가 `AuditEventType`/기존 audit 필드를 정규화하거나 D가 live plan/apply 경로를,
-  M3 A가 Deployment 생성·후속 전이를 구현하지 않는다.
-  *Owner:* D + A + Security. *Blocks:* M2 A(audit 정본화), M2 D(live plan), M3 D(plan/apply 실행),
-  M3 A(Deployment 생성·상태 API), M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract는
-  이 ADR 자체가 막지 않지만 한시적 순서에 따라 M2의 `dev` 병합 후 시작한다.**
+- ~~**M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`)**~~ **해소됨
+  (2026-09-02): ADR-0019 `Accepted`.** A·D·Security가 서명 PR 리뷰 approve로 서명했다. 이로써
+  M2 A audit 정본화, M2/M3 D live plan/apply, M3 A Deployment 생성·상태 API가 구현 가능해졌다.
+  구현 커밋은 서명 뒤에 A(PR #40)와 D 브랜치에서 병렬로 이어 붙이고, 완료 시 관련 milestone
+  항목을 `[x]`로 옮긴다.
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
   input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A의
   `phase`/`source_assessment_id`/`deployment_id` durable 저장과 fixture/live runtime phase 복원,
@@ -384,7 +480,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Proposed` — 합의 전에 live plan 경로를 구현하면 A/C의 재검증과 값이 어긋난다)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Accepted`로 확정됨 — live plan 경로 구현 가능, 구현 대기)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.
@@ -395,14 +491,16 @@
 
 **결정:** ADR-0020은 `Accepted`다. 검증은 새 immutable Assessment, 원 평가 계획 전체 재실행,
 동일 Profile/rubric, Code의 Finding Resolution 및 fail-closed comparison을 사용한다. ADR-0019의
-plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Proposed`다.
+plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확정됐다(구현 대기).
 
 - [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
   *(Assessment phase/source/deployment provenance 저장과 runtime 복원은 완료. Deployment 생성 endpoint와
   `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를 얻을 수 없다 —
   ADR-0019 §4, ADR-0020 §7)*
-- [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(재평가는 원 Assessment의
-  Profile version을 고정 재사용하고, 예외는 평가를 막지 않고 표시만 한다 — ADR-0020 §2, §6)*
+- [x] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(검증 phase의 Profile
+  version pin 해석과 6개 S3 Rule 적용 가능성을 회귀로 고정하고, 예외의 조회 시점 표시 경계
+  `annotate_suppressed_findings()`를 조치 판정과 같은 술어로 구현 — ADR-0020 §2, §6. 조회 API
+  배선은 A)*
 - [x] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가
   *(immutable complete-plan input Contract, Profile/rubric/plan/score fail-closed comparison, 5개
   Resolution의 결정적 projection 및 18개 Post-Deploy Golden fixture 구현. durable Assessment/endpoint

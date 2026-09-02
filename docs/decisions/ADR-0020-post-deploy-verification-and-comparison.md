@@ -169,6 +169,11 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - 억제 표시는 **조회 시점에 예외를 join해 표시만** 하고 결과나 Finding에 저장하지 않는다. 예외는
   만료되므로 저장하면 만료 이후 과거 사실이 왜곡된다.
 - 조치 억제 판정은 계속 `RemediationPolicy.decide()`의 두 시각 규칙(ADR-0017)만 사용한다.
+- 구현: `annotate_suppressed_findings()`(B, `apps/backend/policy/remediation.py`)가 표시용
+  `FindingSuppression` 목록을 돌려준다. `decide()`와 같은 술어 `select_in_force_exception()`을
+  공유하므로 화면의 억제와 조치 판정이 갈리지 않는다. `Finding.evaluated_at`이 없는 옛 record는
+  두 시각 규칙을 적용할 수 없으므로 억제하지 않는다 — 조회 시각으로 대체하면 사후 승인이 옛
+  위반을 덮는 경로가 그대로 열린다. 조회 API 배선은 A가 소유한다.
 
 ### 7. Deployment 1건 = Job 1건, `assessment_id`는 검증 Assessment를 가리킨다
 
