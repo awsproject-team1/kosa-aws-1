@@ -14,6 +14,9 @@ class ArtifactType(StrEnum):
     AWS_SNAPSHOT = "AWS_SNAPSHOT"
     REMEDIATION_PATCH = "REMEDIATION_PATCH"
     TERRAFORM_PLAN = "TERRAFORM_PLAN"
+    # apply가 사용하는 binary saved plan. Terraform이 바이트 안정성을 보장하지 않으므로
+    # hash 대상이 아니다 (ADR-0019 §1).
+    TERRAFORM_PLAN_BINARY = "TERRAFORM_PLAN_BINARY"
     GOLDEN_DATASET = "GOLDEN_DATASET"
 
 

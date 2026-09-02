@@ -94,6 +94,13 @@ from packages.contracts.remediation_policy import (
     RemediationRuleScope,
     RemediationTarget,
 )
+from packages.contracts.terraform_plan import (
+    TerraformPlanProjectionError,
+    canonical_plan_bytes,
+    compute_plan_hash,
+    has_destructive_changes,
+    project_plan,
+)
 
 __all__ = [
     "ApiError",
@@ -168,7 +175,12 @@ __all__ = [
     "SUPPORTED_MEDIA_TYPES",
     "TERMINAL_STATUSES",
     "TerraformPlan",
+    "TerraformPlanProjectionError",
     "VerifiedRunOutcome",
+    "canonical_plan_bytes",
+    "compute_plan_hash",
+    "has_destructive_changes",
+    "project_plan",
     "WorkflowCommand",
     "WorkflowTask",
     "require_non_empty_string",
