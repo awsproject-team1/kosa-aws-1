@@ -13,6 +13,7 @@ from agent.runtime.aws_resource_tool import (
 from agent.runtime.deployment_ports import (
     ActualRereadPort,
     ApplyDispatchPort,
+    PlanRequestPort,
     WorkflowRunReader,
 )
 from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
@@ -42,6 +43,7 @@ from agent.runtime.mock_deployment_ports import (
     DeploymentPortScopeError,
     MockActualRereadPort,
     MockApplyDispatchPort,
+    MockPlanRequestPort,
     MockWorkflowRunReader,
 )
 from agent.runtime.mock_github_tool import MockGitHubTool
@@ -74,7 +76,9 @@ __all__ = [
     "MockAwsResourceTool",
     "MockGitHubTool",
     "MockGitHubWriteTool",
+    "MockPlanRequestPort",
     "MockWorkflowRunReader",
+    "PlanRequestPort",
     "ProposedPullRequest",
     "WorkflowRunReader",
     "derive_head_branch",

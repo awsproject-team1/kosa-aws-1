@@ -194,6 +194,36 @@ class DeploymentApproval:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class TerraformStateVersion:
+    """plan 시점의 Terraform state 정체성 (ADR-0019 section 2).
+
+    `lineage`와 `serial`을 쌍으로 묶는다. apply job은 dispatch 직전과 실행 시작 시 두 값이
+    **모두** 일치할 때만 실행한다. `serial` 단독으로는 state 재생성을 잡지 못한다 — state가
+    재생성되면 `lineage`가 새로 발급되고 `serial`이 낮은 값으로 초기화되므로, 다른 state가
+    우연히 같은 `serial`로 통과할 수 있다.
+    """
+
+    lineage: str
+    serial: int
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.lineage, "lineage")
+        if not isinstance(self.serial, int) or isinstance(self.serial, bool):
+            raise TypeError("serial must be an int")
+        if self.serial < 0:
+            raise ValueError("serial must be non-negative")
+
+    def matches(self, other: "TerraformStateVersion") -> bool:
+        """두 state 정체성이 같은 lineage와 serial을 갖는지 반환한다."""
+        if not isinstance(other, TerraformStateVersion):
+            raise TypeError("other must be a TerraformStateVersion")
+        return self.lineage == other.lineage and self.serial == other.serial
+
+    def to_dict(self) -> dict[str, object]:
+        return {"lineage": self.lineage, "serial": self.serial}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ApplyRunReference:
     """`ApplyDispatchPort.dispatch_apply`가 반환하는 dispatch된 apply run 참조.
 

@@ -15,7 +15,8 @@ dispatch, Terraform apply, AWS 재조회는 이 경계 밖(Integrated 단계)이
 - `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다(ADR-0007).
   검증 단계에서 write 표면이 생기지 않는다.
 
-`PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않으므로 이 모듈의 확정 대상이 아니다.
+`PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않으므로 시그니처 확정(고정) 대상은
+아니었다. 하지만 port를 소유·구현하는 것은 D이므로, ADR-0019 `Accepted` 이후 여기에서 정의한다.
 """
 
 from __future__ import annotations
@@ -26,8 +27,34 @@ from packages.contracts import (
     ApplyRunReference,
     AwsResourceSnapshot,
     DeploymentApproval,
+    PlanRequestOutcome,
     VerifiedRunOutcome,
 )
+
+
+@runtime_checkable
+class PlanRequestPort(Protocol):
+    """대상 commit에서 refreshed Terraform plan을 만든다. D Worker 내부 호출이다.
+
+    반환형 `PlanRequestOutcome`은 immutable `TerraformPlan`(plan_hash 포함), plan 시점의
+    state `lineage`·`serial`, C가 소비하는 `PlanReadinessInput`을 하나로 묶는다
+    (ADR-0019 section 1, section 2). 이 port는 승인·정책 판정을 하지 않는다.
+    """
+
+    def request_plan(
+        self,
+        *,
+        customer_id: str,
+        deployment_id: str,
+        repository_id: str,
+        commit_sha: str,
+    ) -> PlanRequestOutcome:
+        """`commit_sha`에서 saved plan을 만들고 그 좌표·state·readiness 요약을 반환한다.
+
+        대상 commit은 default branch의 merge commit(또는 `ACTUAL_SYNC`의 검증된 현재 commit)
+        이어야 한다(ADR-0019 section 3). apply는 이 plan의 saved binary만 적용한다.
+        """
+        ...
 
 
 @runtime_checkable

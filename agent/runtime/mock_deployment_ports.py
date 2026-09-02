@@ -12,12 +12,14 @@ import hashlib
 from agent.runtime.deployment_ports import (
     ActualRereadPort,
     ApplyDispatchPort,
+    PlanRequestPort,
     WorkflowRunReader,
 )
 from packages.contracts import (
     ApplyRunReference,
     AwsResourceSnapshot,
     DeploymentApproval,
+    PlanRequestOutcome,
     VerifiedRunOutcome,
 )
 
@@ -38,6 +40,63 @@ def _derive_run_id(deployment_id: str, plan_hash: str) -> str:
     """
     seed = "\x1f".join((deployment_id, plan_hash))
     return "run-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+class MockPlanRequestPort(PlanRequestPort):
+    """(customer_id, repository_id) scope로 제한된 결정적 plan 요청 Mock.
+
+    등록된 (deployment_id, commit_sha)에 대해 미리 seed한 `PlanRequestOutcome`을 그대로
+    반환한다. 실제 Terraform 실행 없이 D Worker 흐름을 병렬 개발할 수 있게 한다. 어떤 write/
+    apply 표면도 노출하지 않는다.
+    """
+
+    def __init__(self, *, customer_id: str, repository_id: str) -> None:
+        for name, value in (("customer_id", customer_id), ("repository_id", repository_id)):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        self._customer_id = customer_id
+        self._repository_id = repository_id
+        # (deployment_id, commit_sha) -> outcome. plan 요청의 결정성 근거.
+        self._plans: dict[tuple[str, str], PlanRequestOutcome] = {}
+
+    def register_plan(
+        self, *, deployment_id: str, commit_sha: str, outcome: PlanRequestOutcome
+    ) -> None:
+        """결정적 반환을 위해 plan outcome을 등록한다(테스트 seed). scope를 강제한다."""
+        if not isinstance(outcome, PlanRequestOutcome):
+            raise TypeError("outcome must be a PlanRequestOutcome")
+        if outcome.plan.deployment_id != deployment_id:
+            raise ValueError("outcome plan deployment_id must match deployment_id")
+        if outcome.plan.commit_sha != commit_sha:
+            raise ValueError("outcome plan commit_sha must match commit_sha")
+        if outcome.plan.artifact.repository_id not in (None, self._repository_id):
+            raise DeploymentPortScopeError("outcome plan is outside the tool scope")
+        key = (deployment_id, commit_sha)
+        if key in self._plans:
+            raise ValueError(f"duplicate plan request: {key}")
+        self._plans[key] = outcome
+
+    def request_plan(
+        self,
+        *,
+        customer_id: str,
+        deployment_id: str,
+        repository_id: str,
+        commit_sha: str,
+    ) -> PlanRequestOutcome:
+        if customer_id != self._customer_id or repository_id != self._repository_id:
+            raise DeploymentPortScopeError("customer_id/repository_id is outside the tool scope")
+        for name, value in (("deployment_id", deployment_id), ("commit_sha", commit_sha)):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        outcome = self._plans.get((deployment_id, commit_sha))
+        if outcome is None:
+            # 미등록 (deployment, commit)에 대한 plan은 없다. 재조회 실패와 달리 plan 부재는
+            # 흐름 자체가 성립하지 않으므로 값이 아니라 오류다(D Worker가 재시도하지 않는다).
+            raise DeploymentPortError(
+                f"no plan registered for deployment {deployment_id} at {commit_sha}"
+            )
+        return outcome
 
 
 class MockApplyDispatchPort(ApplyDispatchPort):

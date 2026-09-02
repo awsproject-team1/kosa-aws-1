@@ -33,6 +33,7 @@ from packages.contracts.deployments import (
     IaCSnapshot,
     RemediationPatch,
     TerraformPlan,
+    TerraformStateVersion,
     VerifiedRunOutcome,
 )
 from packages.contracts.errors import ApiError, ApiErrorResponse
@@ -80,6 +81,7 @@ from packages.contracts.remediation import (
     DeploymentReadiness,
     DeploymentReadinessStatus,
     PlanReadinessInput,
+    PlanRequestOutcome,
     RemediationContext,
     RemediationStartResponse,
     RemediationSyncTarget,
@@ -152,6 +154,7 @@ __all__ = [
     "PolicySourceKind",
     "PolicySourceUploadRequest",
     "PlanReadinessInput",
+    "PlanRequestOutcome",
     "PlannedEvaluation",
     "ReadinessScore",
     "RemediationContext",
@@ -176,6 +179,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "TerraformPlan",
     "TerraformPlanProjectionError",
+    "TerraformStateVersion",
     "VerifiedRunOutcome",
     "canonical_plan_bytes",
     "compute_plan_hash",
