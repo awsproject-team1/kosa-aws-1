@@ -362,6 +362,11 @@ Resources:
               - Effect: Allow
                 Action: sqs:SendMessage
                 Resource: [!GetAtt AssessmentQueue.Arn, !GetAtt RemediationQueue.Arn, !GetAtt DeploymentQueue.Arn]
+              # 고객 정책 원문 업로드 세션: presigned put 발급, finalize 시 원문 read,
+              # 정규화 산출물 write. tenant-scoped customers/* prefix로만 제한한다.
+              - Effect: Allow
+                Action: ["s3:PutObject", "s3:GetObject"]
+                Resource: !Sub "${ArtifactBucket.Arn}/customers/*"
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
@@ -468,6 +473,7 @@ Resources:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
+          POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
 
   OutboxSweeperFunction:
     Type: AWS::Lambda::Function
@@ -570,6 +576,32 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "GET /assessments/{assessmentId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 고객 정책 원문 업로드 세션 라우트(관리자 전용, JWT 인가). 서버가 저장 위치를
+  # 발급하므로 client는 source_id/version/bucket/key를 고를 수 없다.
+  PostPolicySourceUploadRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /policy-sources/uploads"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetPolicySourceStatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /policy-sources/{sourceId}/versions/{version}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  PostPolicySourceProcessRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /policy-sources/{sourceId}/versions/{version}/process"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
