@@ -6,9 +6,15 @@ import unittest
 from packages.contracts import (
     ApprovalRejectionCode,
     AssessmentPhase,
+    DocumentUnitKind,
+    IngestionStatus,
+    NormalizedDocumentUnit,
+    NormalizedPolicyDocument,
+    PolicyCandidateExtraction,
     PolicyRule,
     PolicyRuleReference,
     PolicySourceApproval,
+    PolicySourceFormat,
     RuleCandidate,
     RuleLifecycle,
     RuleSeverity,
@@ -30,6 +36,33 @@ RULE = PolicyRule(
     applicable_phases=(AssessmentPhase.INITIAL,),
     resource_types=("AWS::S3::Bucket",),
     source_references=(REFERENCE,),
+)
+
+DOCUMENT = NormalizedPolicyDocument(
+    source_id=REFERENCE.source_id,
+    source_version=REFERENCE.source_version,
+    artifact_id="artifact-001",
+    s3_version_id="s3-version-001",
+    content_sha256="b" * 64,
+    filename="policy.md",
+    declared_media_type="text/markdown",
+    byte_size=128,
+    status=IngestionStatus.READY,
+    detected_media_type="text/markdown",
+    source_format=PolicySourceFormat.MARKDOWN,
+    parser_id="markdown-parser",
+    parser_version="1.0.0",
+    normalized_artifact_id="artifact-001#normalized",
+    normalized_sha256="c" * 64,
+    units=(
+        NormalizedDocumentUnit(
+            locator=REFERENCE.locator,
+            kind=DocumentUnitKind.LIST_ITEM,
+            text_sha256=REFERENCE.content_sha256,
+            text_length=34,
+            origin="line/3-3",
+        ),
+    ),
 )
 
 APPROVAL_FIELDS = {
@@ -78,6 +111,109 @@ class RuleCandidateContractTest(unittest.TestCase):
 
         self.assertEqual(payload["lifecycle"], "REJECTED")
         json.dumps(payload)
+
+
+class PolicyCandidateExtractionContractTest(unittest.TestCase):
+    def test_handoff_pins_ready_document_candidate_provenance_without_text(self) -> None:
+        result = PolicyCandidateExtraction(
+            document=DOCUMENT,
+            candidates=(RuleCandidate(rule=RULE),),
+            extractor_id="policy-candidate-extractor",
+            extractor_version="v1",
+        )
+
+        payload = result.to_dict()
+
+        self.assertEqual(payload["document"]["source_id"], REFERENCE.source_id)
+        self.assertEqual(payload["candidates"][0]["lifecycle"], "CANDIDATE")
+        self.assertNotIn("normalized_payload", payload)
+        json.dumps(payload)
+
+    def test_requires_ready_document_and_undecided_unique_candidates(self) -> None:
+        review_required = NormalizedPolicyDocument(
+            source_id=DOCUMENT.source_id,
+            source_version=DOCUMENT.source_version,
+            artifact_id=DOCUMENT.artifact_id,
+            s3_version_id=DOCUMENT.s3_version_id,
+            content_sha256=DOCUMENT.content_sha256,
+            filename=DOCUMENT.filename,
+            declared_media_type=DOCUMENT.declared_media_type,
+            byte_size=DOCUMENT.byte_size,
+            status=IngestionStatus.REVIEW_REQUIRED,
+            detected_media_type=DOCUMENT.detected_media_type,
+            source_format=DOCUMENT.source_format,
+            parser_id=DOCUMENT.parser_id,
+            parser_version=DOCUMENT.parser_version,
+            normalized_artifact_id=DOCUMENT.normalized_artifact_id,
+            normalized_sha256=DOCUMENT.normalized_sha256,
+            units=DOCUMENT.units,
+        )
+        with self.assertRaisesRegex(ValueError, "READY"):
+            PolicyCandidateExtraction(
+                document=review_required,
+                candidates=(),
+                extractor_id="policy-candidate-extractor",
+                extractor_version="v1",
+            )
+        with self.assertRaisesRegex(ValueError, "undecided"):
+            PolicyCandidateExtraction(
+                document=DOCUMENT,
+                candidates=(RuleCandidate(rule=RULE).approved(),),
+                extractor_id="policy-candidate-extractor",
+                extractor_version="v1",
+            )
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            PolicyCandidateExtraction(
+                document=DOCUMENT,
+                candidates=(RuleCandidate(rule=RULE), RuleCandidate(rule=RULE)),
+                extractor_id="policy-candidate-extractor",
+                extractor_version="v1",
+            )
+
+    def test_rejects_candidate_provenance_outside_the_exact_document(self) -> None:
+        outside_document_rule = PolicyRule(
+            rule_id="S3-OUTSIDE-100",
+            version="2026-09-01",
+            title="Outside source reference",
+            severity=RuleSeverity.HIGH,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=("AWS::S3::Bucket",),
+            source_references=(
+                SourceReference(
+                    source_id="different-source",
+                    source_version=REFERENCE.source_version,
+                    locator=REFERENCE.locator,
+                    content_sha256=REFERENCE.content_sha256,
+                ),
+            ),
+        )
+        wrong_digest_rule = PolicyRule(
+            rule_id="S3-WRONG-DIGEST-100",
+            version="2026-09-01",
+            title="Wrong locator digest",
+            severity=RuleSeverity.HIGH,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=("AWS::S3::Bucket",),
+            source_references=(
+                SourceReference(
+                    source_id=REFERENCE.source_id,
+                    source_version=REFERENCE.source_version,
+                    locator=REFERENCE.locator,
+                    content_sha256="z" * 64,
+                ),
+            ),
+        )
+        for rule, message in (
+            (outside_document_rule, "match"),
+            (wrong_digest_rule, "digest"),
+        ):
+            with self.subTest(rule=rule.rule_id), self.assertRaisesRegex(ValueError, message):
+                PolicyCandidateExtraction(
+                    document=DOCUMENT,
+                    candidates=(RuleCandidate(rule=rule),),
+                    extractor_id="policy-candidate-extractor",
+                    extractor_version="v1",
+                )
 
 
 class PolicySourceApprovalContractTest(unittest.TestCase):

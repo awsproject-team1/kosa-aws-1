@@ -49,6 +49,7 @@ from packages.contracts.policy import (
 )
 from packages.contracts.policy_approval import (
     ApprovalRejectionCode,
+    PolicyCandidateExtraction,
     PolicySourceApproval,
     RuleCandidate,
     RuleLifecycle,
@@ -124,6 +125,7 @@ __all__ = [
     "NormalizedDocumentUnit",
     "NormalizedPolicyDocument",
     "PolicyControl",
+    "PolicyCandidateExtraction",
     "PolicyProfile",
     "PolicyRule",
     "PolicyRuleReference",
