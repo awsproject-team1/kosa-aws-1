@@ -2,6 +2,19 @@
 
 ## Current
 
+- M3 D customer runtime 배선의 코드로 완결 가능한 절반(7-A)을 구현했다
+  (`feature/m3-d-deployment-runtime-wiring`). A의 Deployment endpoint가 `dev`에 병합돼 차단이 풀린 뒤,
+  Deployment Worker를 실제로 구동하는 조각들을 기능별 커밋으로 추가했다: (1) approval read
+  경로(`DeploymentApprovalRepository.get_approval`), (2) plan/run/verification store 3종
+  (`DEPLOYMENT#` item에 plan facts+`plan_run` conditional update, `#DISPATCH`·`#EVENT#{run_id}` item),
+  (3) record+job+approval을 합성하는 `DynamoDbDeploymentWorkRepository.get_work`, (4) fail-closed
+  `DeploymentRuntimeConfiguration`(aws_account_id/repository_full_name/secret/resource_types), (5)
+  composition root(`apps/backend/deployment/runtime.py`)의 SQS `parse_tasks`/`run_tasks`/`lambda_handler`.
+  fixture 경로(Mock 어댑터)는 세 command를 end-to-end로 구동한다. 검증: ruff 273 files clean,
+  Unit 653 / Contract 135 / Integration 9 / Security 74 OK. **남은 절반(7-B):** live plan 어댑터
+  (`PlanRequestPort` live 구현)와 apply 완료 Event 저장(EventBridge → `#EVENT#{run_id}`의 `run_id`)은
+  A와의 완료 Event 경계 합의가 필요해 아직 fail-closed로 두었다. live `RUN_DEPLOYMENT`/`APPLY_COMPLETED`는
+  그 경계 확정 뒤 이어 붙인다.
 - M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
   `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
   `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule
@@ -634,9 +647,13 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 세 command를 injected port로
   분기하는 `DeploymentWorker`, 세 live 어댑터(`agent/runtime/live_deployment_ports.py`)와 고객용
   `ci/terraform/` plan/apply workflow template·canonical `plan_hash` 스크립트 — ADR-0019
-  §1·§2·§5·§6·§7. **남은 조각(A/보호된 자격 증명 의존):** customer runtime 배선(composition root의
-  live 어댑터 주입)과 실제 sandbox E2E 실행. 이는 A의 Deployment 생성·상태 endpoint(kosa-m3-a)와
-  protected Environment/OIDC Role 설정 뒤에 이어진다)*
+  §1·§2·§5·§6·§7. customer runtime 배선의 코드 절반(7-A)도 완료: approval read, plan/run/verification
+  store 3종, `DynamoDbDeploymentWorkRepository`, fail-closed `DeploymentRuntimeConfiguration`,
+  Deployment Worker composition root(SQS `parse_tasks`/`run_tasks`/`lambda_handler`). fixture 경로는
+  세 command를 end-to-end 구동. **남은 조각(7-B, A 경계·자격 증명 의존):** live `PlanRequestPort`
+  구현과 apply 완료 Event 저장(EventBridge → `#EVENT#{run_id}`의 `run_id`)이 없어 live
+  `RUN_DEPLOYMENT`/`APPLY_COMPLETED`는 fail-closed. 이는 A와의 완료 Event 경계 합의와 protected
+  Environment/OIDC Role 설정 뒤에 이어진다)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.
