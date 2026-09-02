@@ -104,7 +104,7 @@ revision-bound authoritative work를 다시 읽어 `TERRAFORM_PATCH`에는 injec
 `ACTUAL_SYNC`에는 injected Sync port 하나만 호출한다. `MANUAL_REVIEW`와 `SUPPRESSED`는 Job을 만들지
 않는다. D의 `RUN_DEPLOYMENT`는 이 단계와 분리된 Deployment Worker 명령이다.
 
-M3 승인 배포 경계는 ADR-0019가 `Proposed`로 남아 있고, Post-Deploy Verification 비교 경계는
+M3 승인 배포 경계는 ADR-0019가 `Accepted`로 정의하고, Post-Deploy Verification 비교 경계는
 ADR-0020이 `Accepted`로 정의한다. Deployment는 A가 발급한
 `deployment_id`로 시작해 `PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED →
 WAITING_APPROVAL → APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED`를 거치고,
@@ -158,7 +158,7 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   Environment에서 사람이 commit/key/SHA-256/S3 Version ID를 승인한 뒤, 배포 job이 exact version을
   재검증하고 모든 Lambda에 고정한다.
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.
-- (ADR-0019, `Proposed`) 승인 대상 plan artifact는 `terraform show -json`의 `resource_changes[]`를
+- (ADR-0019, `Accepted`) 승인 대상 plan artifact는 `terraform show -json`의 `resource_changes[]`를
   **허용 목록으로 투영한** canonical JSON 바이트이며 `plan_hash`는 그 SHA-256이다. 제외 목록은 열린
   집합이라 Provider가 필드를 늘리면 재현성이 조용히 깨진다. 이 투영이
   `has_destructive_changes`(`delete` 또는 비어 있지 않은 `replace_paths`)의 유일한 산출 근거이기도
@@ -166,14 +166,14 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   적용한다. Apply 직전에는 `plan_hash`와 함께 plan 시점의 Terraform **state `lineage`·`serial`**도
   재검증한다. hash 일치는 같은 계획을 보장하지만 같은 state를 보장하지 않고, `serial` 단독으로는
   state 재생성을 잡지 못한다.
-- (ADR-0019, `Proposed`) Terraform state는 고객 bootstrap stack이 만드는 별도 S3 bucket과 DynamoDB
+- (ADR-0019, `Accepted`) Terraform state는 고객 bootstrap stack이 만드는 별도 S3 bucket과 DynamoDB
   lock table에 두고 state key를 `(repository_id, workspace)`로 분리한다. apply 대상 commit은 default
   branch의 merge commit이며 PR head commit의 plan은 승인 대상이 아니다.
-- (ADR-0019, `Proposed`) 고객 repository의 plan/apply workflow는 `ci/terraform/` template으로 제공하고
+- (ADR-0019, `Accepted`) 고객 repository의 plan/apply workflow는 `ci/terraform/` template으로 제공하고
   고객 관리자가 1회 수동 설치한다. GitHub App은 `contents`/`pull_requests` write만 요청하고
   `workflows: write`는 요청하지 않는다. App이 workflow를 쓸 수 있으면 승인 경계를 우회한 임의 코드
   실행 경로가 생긴다.
-- (ADR-0019, `Proposed`) 승인은 apply를 트리거하지 않는다. A는 승인 record와 dispatch outbox만 쓰고 D
+- (ADR-0019, `Accepted`) 승인은 apply를 트리거하지 않는다. A는 승인 record와 dispatch outbox만 쓰고 D
   Deployment Worker가 재검증 뒤 dispatch한다. 이중 apply는 `APPROVED → APPLYING` 조건부 전이로 막는다.
   Plan/Apply 완료 Event는 신호일 뿐이며 D가 `run_id`로 Actions run을 다시 읽어 대조한다. GitHub
   Actions에 DynamoDB write 권한을 주지 않는다.
@@ -236,7 +236,7 @@ Customer Policy Ingestion, M1 Finding/Readiness Projection, Remediation Scope/Ex
 Remediation Consumption Contract, Approved Deployment Execution Boundary, Post-Deploy
 Verification/Comparison, Demo/Release Readiness Gate를 다룬다 (ADR-0001~0021).
 
-ADR-0019(승인 배포 실행 경계)는 `Proposed`로 남아 있다. ADR-0020(Post-Deploy Verification과
-before/after 비교)과 ADR-0021(Demo·Release readiness gate)은 `Accepted`다. 따라서 D의 live
-plan/apply와 A의 Deployment 생성·후속 전이는 ADR-0019 합의 전 구현하지 않지만, C의 비교 projection은
+ADR-0019(승인 배포 실행 경계), ADR-0020(Post-Deploy Verification과 before/after 비교),
+ADR-0021(Demo·Release readiness gate)은 모두 `Accepted`다. 따라서 D의 live plan/apply와 A의
+Deployment 생성·후속 전이는 ADR-0019 정의를 따라 구현할 수 있고, C의 비교 projection은
 ADR-0020을 따른다.

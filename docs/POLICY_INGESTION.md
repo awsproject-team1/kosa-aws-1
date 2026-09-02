@@ -149,6 +149,18 @@ Locator는 파일 형식과 무관하게 추적 가능해야 한다. 지원 형�
 - Source version은 immutable하며 새 업로드는 기존 버전을 덮어쓰지 않는다.
 - Rule 후보가 자동 생성돼도 사람 승인 전에는 Policy Profile이나 Assessment에 들어가지 않는다.
 
+### C → A candidate extraction handoff
+
+C는 protected normalized Artifact를 읽어 `PolicyCandidateExtraction`을 만든다. 이 값은 exact
+`READY` `NormalizedPolicyDocument`, undecided `RuleCandidate` 목록, extractor ID/version을 묶으며
+원문·정규화 text는 담지 않는다. 모든 Candidate의 `SourceReference`는 같은 source/version의
+정규화 unit locator와 text hash를 정확히 인용해야 한다.
+
+A는 이 handoff를 customer/source/version 단위로 영속화하고 `load_review()`에서 문서와 후보를,
+`load_publication()`에서 후보·approval·PolicySource를 복원한다. 후보 생성/품질은 C가, DynamoDB
+key·조건부 write·tenant-scoped read는 A가 소유한다. 이 handoff는 M1 policy ingestion 의존성이고
+M3 plan/apply 시작 조건은 아니다.
+
 ## Ownership
 
 | Role | Responsibility |

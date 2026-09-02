@@ -22,6 +22,7 @@ from apps.backend.auth import InvalidIdentityClaims, Principal
 from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
 from packages.contracts import (
     ApiErrorResponse,
+    PolicyRuleReference,
     PolicySourceUploadRequest,
     RemediationExceptionReason,
 )
@@ -119,13 +120,15 @@ class JobHttpHandler:
                         ) from error
                     return _response(202, response.to_dict())
                 if method == "POST" and action == "approve" and self._policy_approvals is not None:
-                    if event.get("body") not in (None, "", "{}"):
-                        raise RequestValidationError("policy approval body is invalid")
                     try:
+                        approved_rules = _policy_approval_request(event.get("body"))
                         response = self._policy_approvals.approve(
-                            principal, source_id=source_id, source_version=source_version
+                            principal,
+                            source_id=source_id,
+                            source_version=source_version,
+                            approved_rules=approved_rules,
                         )
-                    except ValueError as error:
+                    except (TypeError, ValueError, json.JSONDecodeError) as error:
                         raise RequestValidationError(
                             "policy approval request is invalid"
                         ) from error
@@ -293,6 +296,29 @@ def _policy_source_path(path: str) -> tuple[str, str, str | None] | None:
     ):
         return None
     return source_id, source_version, parts[5] if len(parts) == 6 else None
+
+
+def _policy_approval_request(raw_body: object) -> tuple[PolicyRuleReference, ...]:
+    """승인할 Rule 목록을 파싱한다. body는 `{"approved_rules": [{rule_id, version}, ...]}`."""
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    if set(body) != {"approved_rules"}:
+        raise ValueError("policy approval body fields are invalid")
+    entries = body["approved_rules"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("approved_rules must be a non-empty list")
+    references: list[PolicyRuleReference] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != {"rule_id", "version"}:
+            raise ValueError("approved_rules items must be {rule_id, version}")
+        references.append(
+            PolicyRuleReference(
+                rule_id=_non_empty_string(entry["rule_id"], "rule_id"),
+                version=_non_empty_string(entry["version"], "version"),
+            )
+        )
+    return tuple(references)
 
 
 def _policy_profile_request(raw_body: object) -> dict[str, str]:

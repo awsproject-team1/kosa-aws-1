@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from packages.contracts._validation import require_non_empty_string
+from packages.contracts._validation import (
+    require_non_empty_string,
+    require_offset_aware_timestamp,
+)
 
 
 class AssessmentPhase(StrEnum):
@@ -219,6 +222,21 @@ class Finding:
             "evaluated_at": self.evaluated_at,
         }
 
+    @property
+    def evaluated_at_utc(self) -> datetime:
+        """The evaluation time as an offset-aware moment, for time-ordered comparisons.
+
+        `evaluated_at`은 저장·전송을 위한 문자열이지만, 예외의 승인·만료와 순서를 비교하려면
+        시각이어야 한다. 소비자가 각자 파싱하면 같은 값에 서로 다른 파싱 규칙이 생기므로
+        `RemediationException.approved_at_utc`와 같은 방식으로 여기서 한 번만 정의한다.
+
+        provenance가 없는 옛 record에는 비교할 시각 자체가 없다. `None`을 조용히 현재 시각
+        같은 것으로 대체하면 "승인은 평가보다 앞서야 한다"는 규칙이 무너지므로 거부한다.
+        """
+        if self.evaluated_at is None:
+            raise ValueError("finding has no evaluation provenance")
+        return require_offset_aware_timestamp(self.evaluated_at, "evaluated_at")
+
 
 def _require_provenance(assessed_commit_sha: str | None, evaluated_at: str | None) -> None:
     """Validate present provenance; absent values represent legacy records only.
@@ -232,11 +250,9 @@ def _require_provenance(assessed_commit_sha: str | None, evaluated_at: str | Non
     if assessed_commit_sha is None:
         return
     require_non_empty_string(assessed_commit_sha, "assessed_commit_sha")
-    if not isinstance(evaluated_at, str) or not evaluated_at.strip():
-        raise ValueError("evaluated_at must be an offset-aware ISO-8601 timestamp")
-    parsed = datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("evaluated_at must be an offset-aware ISO-8601 timestamp")
+    # 파싱 규칙은 `Finding.evaluated_at_utc`가 쓰는 것과 같아야 한다. 여기서만 다르게 받아들이면
+    # 생성은 통과하고 비교 시점에 실패하는 값이 만들어진다.
+    require_offset_aware_timestamp(evaluated_at, "evaluated_at")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

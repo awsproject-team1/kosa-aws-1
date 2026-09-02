@@ -13,6 +13,7 @@ from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
 from packages.contracts.policy import PolicyRule, PolicyRuleReference
+from packages.contracts.policy_ingestion import NormalizedPolicyDocument
 
 
 class RuleLifecycle(StrEnum):
@@ -81,6 +82,67 @@ class RuleCandidate:
 
     def to_dict(self) -> dict[str, object]:
         return {"rule": self.rule.to_dict(), "lifecycle": self.lifecycle.value}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PolicyCandidateExtraction:
+    """C's immutable handoff for one exact normalized policy source version.
+
+    The result carries document metadata and Rule candidates, but never
+    normalized document text. C reads text only from the protected normalized
+    Artifact; A persists this output for approval/publication read paths.
+    """
+
+    document: NormalizedPolicyDocument
+    candidates: tuple[RuleCandidate, ...]
+    extractor_id: str
+    extractor_version: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.document, NormalizedPolicyDocument):
+            raise TypeError("document must be a NormalizedPolicyDocument")
+        if not self.document.is_approvable:
+            raise ValueError("candidate extraction requires a READY document")
+        for name in ("extractor_id", "extractor_version"):
+            require_non_empty_string(getattr(self, name), name)
+
+        seen: set[tuple[str, str]] = set()
+        for candidate in self.candidates:
+            if not isinstance(candidate, RuleCandidate):
+                raise TypeError("candidates must contain RuleCandidate values")
+            if candidate.lifecycle is not RuleLifecycle.CANDIDATE:
+                raise ValueError("candidate extraction must contain undecided candidates")
+            key = (candidate.rule.rule_id, candidate.rule.version)
+            if key in seen:
+                raise ValueError("candidate extraction must not duplicate a rule version")
+            seen.add(key)
+            self._require_document_provenance(candidate.rule)
+
+    def _require_document_provenance(self, rule: PolicyRule) -> None:
+        for reference in rule.source_references:
+            if (reference.source_id, reference.source_version) != (
+                self.document.source_id,
+                self.document.source_version,
+            ):
+                raise ValueError("candidate source reference must match the extracted document")
+            unit = self.document.unit(reference.locator)
+            if unit is None:
+                raise ValueError(
+                    "candidate source reference locator is not in the extracted document"
+                )
+            if unit.text_sha256 != reference.content_sha256:
+                raise ValueError(
+                    "candidate source reference digest does not match the extracted document"
+                )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the A persistence handoff without protected artifact bytes."""
+        return {
+            "document": self.document.to_dict(),
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "extractor_id": self.extractor_id,
+            "extractor_version": self.extractor_version,
+        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

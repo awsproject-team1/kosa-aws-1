@@ -1,5 +1,10 @@
 """Executable transport contracts shared across platform boundaries."""
 
+from packages.contracts._validation import (
+    require_non_empty_string,
+    require_offset_aware_timestamp,
+    require_optional_non_empty_string,
+)
 from packages.contracts.assessments import (
     SCORE_ANCHORS,
     AssessmentComparison,
@@ -52,6 +57,7 @@ from packages.contracts.policy import (
 )
 from packages.contracts.policy_approval import (
     ApprovalRejectionCode,
+    PolicyCandidateExtraction,
     PolicySourceApproval,
     RuleCandidate,
     RuleLifecycle,
@@ -129,6 +135,7 @@ __all__ = [
     "NormalizedDocumentUnit",
     "NormalizedPolicyDocument",
     "PolicyControl",
+    "PolicyCandidateExtraction",
     "PolicyProfile",
     "PolicyRule",
     "PolicyRuleReference",
@@ -164,4 +171,7 @@ __all__ = [
     "VerifiedRunOutcome",
     "WorkflowCommand",
     "WorkflowTask",
+    "require_non_empty_string",
+    "require_offset_aware_timestamp",
+    "require_optional_non_empty_string",
 ]

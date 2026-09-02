@@ -25,7 +25,13 @@ from apps.backend.policy.registry import (
     PolicyRegistryError,
     load_rule_registry,
 )
-from apps.backend.policy.remediation import RemediationPolicy, RemediationPolicyError
+from apps.backend.policy.remediation import (
+    FindingSuppression,
+    RemediationPolicy,
+    RemediationPolicyError,
+    annotate_suppressed_findings,
+    select_in_force_exception,
+)
 
 __all__ = [
     "ApprovalRejectedError",
@@ -35,6 +41,7 @@ __all__ = [
     "DocumentParseError",
     "DynamoDbPolicyCatalog",
     "DynamoDbPolicyCatalogBootstrap",
+    "FindingSuppression",
     "InMemoryPolicyCatalog",
     "NormalizationOutcome",
     "PolicyContext",
@@ -46,10 +53,12 @@ __all__ = [
     "RemediationPolicy",
     "RemediationPolicyError",
     "UploadedPolicyOriginal",
+    "annotate_suppressed_findings",
     "approve_source",
     "load_m0_fixture_catalog",
     "load_rule_registry",
     "normalize_upload",
     "publish_profile",
+    "select_in_force_exception",
     "source_reference_for",
 ]
