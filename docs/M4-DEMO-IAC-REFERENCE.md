@@ -43,7 +43,7 @@
   DynamoDB lock table. state key는 `(repository_id, workspace)`로 분리하고 workspace 이름은
   `{customer_id}-{repository_id}`다.
 
-## 3. 위반 토글과 S3 Rule 1:1 매핑
+## 3. 데모 토글과 S3 Rule 1:1 매핑
 
 의도적 위반은 코드에 상수로 박지 않고 **변수/모듈 토글**로 만든다. 데모 전후 상태를 같은
 저장소에서 재현해야 하기 때문이다(ADR-0021 §1). 각 토글은 여섯 S3 Rule
