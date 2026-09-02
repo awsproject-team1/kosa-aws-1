@@ -11,25 +11,39 @@ from apps.backend.deployment import (
     DeploymentRecordRepository,
     DeploymentRejection,
 )
+from apps.backend.deployment.worker import DeploymentWork
 from apps.backend.jobs.models import Job
 from apps.backend.jobs.outbox import WorkflowOutboxEntry
 from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.errors import RepositoryError
 from apps.backend.repositories.ports import DuplicateJobError, StoredDataError
 from packages.contracts import (
+    ApplyDispatchReceipt,
     ArtifactReference,
     ArtifactType,
     AuditEventType,
     DeploymentApproval,
     JobStatus,
+    PlanExecutionResult,
     TerraformStateVersion,
     WorkflowCommand,
+    WorkflowRunFacts,
 )
 from packages.contracts.remediation import DeploymentReadiness
 
 
 class DynamoTransactionClient(Protocol):
     def transact_write_items(self, **kwargs: object) -> object: ...
+
+
+def _error_code(error: BaseException) -> str | None:
+    """Extract a DynamoDB error code from a boto3-style exception, if present."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        detail = response.get("Error")
+        if isinstance(detail, dict) and isinstance(detail.get("Code"), str):
+            return detail["Code"]
+    return None
 
 
 class DynamoReadTable(Protocol):
@@ -373,6 +387,212 @@ class DynamoDbDeploymentRepository(DeploymentRecordRepository):
             if isinstance(detail, dict) and isinstance(detail.get("Code"), str):
                 return detail["Code"]
         return None
+
+
+class DynamoDbDeploymentPlanStore:
+    """Fill the deployment's plan facts once, idempotently (ADR-0019 §1, DATABASE.md M3).
+
+    `RUN_DEPLOYMENT` produces a refreshed plan. Its facts (`plan_hash`, plan/binary
+    artifact, state `(lineage, serial)`, and the plan run reference) are written back
+    onto the same `DEPLOYMENT#{deployment_id}` item with a conditional update. The
+    condition `attribute_not_exists(plan_hash)` makes an at-least-once retry at the
+    same revision absorb instead of erroring, while a different plan cannot overwrite
+    an already-recorded one. `plan_run` lives here (not on `DeploymentRecord`) because
+    the apply step reloads it to download the saved plan artifact (§1).
+    """
+
+    def __init__(
+        self, *, table_name: str, transaction_client: DynamoTransactionClient
+    ) -> None:
+        if not isinstance(table_name, str) or not table_name.strip():
+            raise ValueError("table_name must be a non-empty string")
+        if transaction_client is None:
+            raise TypeError("transaction_client is required")
+        self._table_name = table_name
+        self._transaction_client = transaction_client
+
+    def put_plan_if_absent(self, *, work: DeploymentWork, result: PlanExecutionResult) -> None:
+        if not isinstance(work, DeploymentWork):
+            raise TypeError("work must be a DeploymentWork")
+        if not isinstance(result, PlanExecutionResult):
+            raise TypeError("result must be a PlanExecutionResult")
+        # The worker already checked the result against the work scope; re-bind here
+        # so a store call from another path cannot write a foreign plan.
+        plan = result.plan
+        if plan.deployment_id != work.deployment_id or plan.commit_sha != work.commit_sha:
+            raise ValueError("plan is outside the deployment work")
+        if plan.artifact.customer_id != work.customer_id:
+            raise ValueError("plan is outside the customer scope")
+        values = marshal_item(
+            {
+                ":plan_hash": plan.plan_hash,
+                ":plan_artifact": plan.artifact.to_dict(),
+                ":binary_artifact": result.binary_artifact.to_dict(),
+                ":state_version": result.state_version.to_dict(),
+                ":plan_run": result.plan_run.to_dict(),
+            }
+        )
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": self._table_name,
+                            "Key": marshal_item(
+                                {
+                                    "PK": f"CUSTOMER#{work.customer_id}",
+                                    "SK": f"DEPLOYMENT#{work.deployment_id}",
+                                }
+                            ),
+                            "UpdateExpression": (
+                                "SET plan_hash = :plan_hash, plan_artifact = :plan_artifact, "
+                                "binary_artifact = :binary_artifact, "
+                                "state_version = :state_version, plan_run = :plan_run"
+                            ),
+                            # 배포가 존재하고(PK/SK) 아직 plan이 없을 때만 채운다. 재시도가 같은
+                            # 값을 다시 쓰려 하면 조건 실패가 나지만, 그건 이미 저장됐다는 뜻이라
+                            # 정상 흡수한다(멱등).
+                            "ConditionExpression": (
+                                "attribute_exists(PK) AND attribute_not_exists(plan_hash)"
+                            ),
+                            "ExpressionAttributeValues": values,
+                        }
+                    }
+                ]
+            )
+        except Exception as error:
+            if _error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                # 이미 plan이 채워졌거나(멱등 재시도) 배포가 없다. 후자는 create 경로가
+                # 보장하므로 여기서는 멱등 흡수로 처리한다.
+                return
+            raise RepositoryError("deployment plan write failed") from None
+
+
+class DynamoDbDeploymentRunStore:
+    """Record the dispatched apply run once, idempotently (ADR-0019 §5).
+
+    A dispatch acknowledgment carries no `run_id`; it only confirms the apply
+    workflow was requested. It is stored under a deterministic
+    `DEPLOYMENT#{deployment_id}#DISPATCH` key so a duplicate dispatch at the same
+    revision does not create a second record.
+    """
+
+    def __init__(
+        self, *, table_name: str, transaction_client: DynamoTransactionClient
+    ) -> None:
+        if not isinstance(table_name, str) or not table_name.strip():
+            raise ValueError("table_name must be a non-empty string")
+        if transaction_client is None:
+            raise TypeError("transaction_client is required")
+        self._table_name = table_name
+        self._transaction_client = transaction_client
+
+    def put_receipt_if_absent(
+        self, *, work: DeploymentWork, receipt: ApplyDispatchReceipt
+    ) -> None:
+        if not isinstance(work, DeploymentWork):
+            raise TypeError("work must be a DeploymentWork")
+        if not isinstance(receipt, ApplyDispatchReceipt):
+            raise TypeError("receipt must be an ApplyDispatchReceipt")
+        if (
+            receipt.deployment_id != work.deployment_id
+            or receipt.repository_id != work.repository_id
+        ):
+            raise ValueError("apply dispatch receipt is outside the deployment work")
+        item = {
+            "PK": f"CUSTOMER#{work.customer_id}",
+            "SK": f"DEPLOYMENT#{work.deployment_id}#DISPATCH",
+            "entity_type": "DEPLOYMENT_APPLY_DISPATCH",
+            "customer_id": work.customer_id,
+            "deployment_id": receipt.deployment_id,
+            "repository_id": receipt.repository_id,
+            "workflow_path": receipt.workflow_path,
+            "version": 1,
+        }
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": marshal_item(item),
+                            "ConditionExpression": (
+                                "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+                            ),
+                        }
+                    }
+                ]
+            )
+        except Exception as error:
+            if _error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                return  # 같은 dispatch가 이미 기록됨(멱등).
+            raise RepositoryError("deployment apply dispatch write failed") from None
+
+
+class DynamoDbDeploymentVerificationStore:
+    """Record the authoritative verified run facts once (ADR-0019 §7, DATABASE.md M3).
+
+    The verified `WorkflowRunFacts` (re-read from the run, never trusted from an
+    Event) are stored under `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` so the same
+    `run_id` is recorded only once. This item is a record, not a state source; the
+    deployment status is still derived at read time.
+    """
+
+    def __init__(
+        self, *, table_name: str, transaction_client: DynamoTransactionClient
+    ) -> None:
+        if not isinstance(table_name, str) or not table_name.strip():
+            raise ValueError("table_name must be a non-empty string")
+        if transaction_client is None:
+            raise TypeError("transaction_client is required")
+        self._table_name = table_name
+        self._transaction_client = transaction_client
+
+    def put_verification_if_absent(
+        self, *, work: DeploymentWork, facts: WorkflowRunFacts
+    ) -> None:
+        if not isinstance(work, DeploymentWork):
+            raise TypeError("work must be a DeploymentWork")
+        if not isinstance(facts, WorkflowRunFacts):
+            raise TypeError("facts must be a WorkflowRunFacts")
+        if facts.repository_id != work.repository_id:
+            raise ValueError("verified run is outside the deployment work")
+        item = {
+            "PK": f"CUSTOMER#{work.customer_id}",
+            "SK": f"DEPLOYMENT#{work.deployment_id}#EVENT#{facts.run_id}",
+            "entity_type": "DEPLOYMENT_WORKFLOW_EVENT",
+            "customer_id": work.customer_id,
+            "deployment_id": work.deployment_id,
+            "version": 1,
+            **facts.to_dict(),
+        }
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": marshal_item(item),
+                            "ConditionExpression": (
+                                "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+                            ),
+                        }
+                    }
+                ]
+            )
+        except Exception as error:
+            if _error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                return  # 같은 run_id는 한 번만 기록된다(멱등).
+            raise RepositoryError("deployment verification write failed") from None
 
 
 def _job_item(job: Job) -> dict[str, object]:

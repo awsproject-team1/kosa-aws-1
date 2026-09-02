@@ -2,7 +2,10 @@
 
 from apps.backend.repositories.deployment import (
     DynamoDbDeploymentApprovalRepository,
+    DynamoDbDeploymentPlanStore,
     DynamoDbDeploymentRepository,
+    DynamoDbDeploymentRunStore,
+    DynamoDbDeploymentVerificationStore,
 )
 from apps.backend.repositories.dynamodb import (
     DynamoDbAssessmentWorkflowRepository,
@@ -39,7 +42,10 @@ __all__ = [
     "DuplicateJobError",
     "DynamoDbAssessmentWorkflowRepository",
     "DynamoDbDeploymentApprovalRepository",
+    "DynamoDbDeploymentPlanStore",
     "DynamoDbDeploymentRepository",
+    "DynamoDbDeploymentRunStore",
+    "DynamoDbDeploymentVerificationStore",
     "DynamoDbPolicyApprovalRepository",
     "DynamoDbRemediationExceptionRepository",
     "DynamoDbRemediationWorkRepository",
