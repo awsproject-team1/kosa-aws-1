@@ -6,6 +6,7 @@ from apps.backend.repositories.dynamodb import (
     DynamoDbJobRepository,
 )
 from apps.backend.repositories.policy_approval import DynamoDbPolicyApprovalRepository
+from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 from apps.backend.repositories.ports import (
     ArtifactCollisionError,
     ArtifactIntegrityError,
@@ -37,6 +38,7 @@ __all__ = [
     "DynamoDbAssessmentWorkflowRepository",
     "DynamoDbDeploymentApprovalRepository",
     "DynamoDbPolicyApprovalRepository",
+    "DynamoDbPolicySourceUploadRepository",
     "DynamoDbRemediationExceptionRepository",
     "DynamoDbRemediationWorkRepository",
     "DynamoDbJobRepository",
