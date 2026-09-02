@@ -44,6 +44,7 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
         *,
         table_name: str,
         transaction_client: DynamoTransactionClient,
+        table: "DynamoReadTable | None" = None,
         now: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
@@ -53,8 +54,43 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
             raise TypeError("transaction_client is required")
         self._table_name = table_name
         self._transaction_client = transaction_client
+        # read 경로(`get_approval`)는 자동 un/marshal되는 resource `table`을 쓴다. write만 하는
+        # 호출자는 `table`을 주입하지 않아도 되며, 그 경우 read가 fail-closed된다.
+        self._table = table
         self._now = now or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: str(uuid4()))
+
+    def get_approval(self, *, customer_id: str, deployment_id: str) -> DeploymentApproval | None:
+        """Read the stored approval for a deployment (ADR-0019 §5·§7).
+
+        승인 item의 key는 결정적(`DEPLOYMENT#{deployment_id}#APPROVAL#approval-{deployment_id}`)
+        이므로 한 번의 `get_item`으로 읽는다. read table이 주입되지 않았으면 확인할 수 없으므로
+        fail-closed한다.
+        """
+        for value, name in ((customer_id, "customer_id"), (deployment_id, "deployment_id")):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        if self._table is None:
+            raise RepositoryError("approval read requires a resource table")
+        approval_id = f"approval-{deployment_id}"
+        try:
+            item = self._table.get_item(
+                Key={
+                    "PK": f"CUSTOMER#{customer_id}",
+                    "SK": f"DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}",
+                },
+                ConsistentRead=True,
+            ).get("Item")
+        except Exception:
+            raise RepositoryError("deployment approval read failed") from None
+        if item is None:
+            return None
+        if not isinstance(item, Mapping) or item.get("entity_type") != "DEPLOYMENT_APPROVAL":
+            raise StoredDataError("stored deployment approval item is invalid")
+        approval = _approval_from_item(item)
+        if approval.deployment_id != deployment_id:
+            raise StoredDataError("stored deployment approval scope is invalid")
+        return approval
 
     def record_approval(
         self, *, customer_id: str, approval: DeploymentApproval, readiness: DeploymentReadiness
@@ -374,6 +410,19 @@ def _outbox_item(entry: WorkflowOutboxEntry) -> dict[str, object]:
         "GSI2PK": "OUTBOX#PENDING",
         "GSI2SK": f"JOB#{entry.job_id}",
     }
+
+
+def _approval_from_item(item: Mapping[str, object]) -> DeploymentApproval:
+    """Rebuild a DeploymentApproval from its stored item (body = approval.to_dict())."""
+    try:
+        return DeploymentApproval(
+            deployment_id=_text(item, "deployment_id"),
+            approved_by=_text(item, "approved_by"),
+            commit_sha=_text(item, "commit_sha"),
+            plan_hash=_text(item, "plan_hash"),
+        )
+    except (TypeError, ValueError, KeyError):
+        raise StoredDataError("stored deployment approval item is invalid") from None
 
 
 def _record_from_item(item: Mapping[str, object]) -> DeploymentRecord:

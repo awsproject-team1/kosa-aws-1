@@ -28,6 +28,14 @@ class DeploymentApprovalRepository(Protocol):
         """Persist an immutable approval and its audit record atomically."""
         ...
 
+    def get_approval(self, *, customer_id: str, deployment_id: str) -> DeploymentApproval | None:
+        """Return the stored approval for a deployment, or None when it is absent.
+
+        D의 Deployment Worker가 apply 계열 command에서 승인 사실을 다시 읽어 검증하는 read
+        경로다(ADR-0019 §5·§7). 승인은 A가 record하는 사실이며 D는 만들지 않고 대조만 한다.
+        """
+        ...
+
 
 class DeploymentApprovalService:
     """Authorize and persist only a C-ready approval bound to D's exact plan."""
