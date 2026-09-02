@@ -2,6 +2,13 @@
 
 ## Current
 
+- M3 D 실행 경계를 PR #49로 올렸다(base `dev`, `feature/m3-d-execution-ports`). ADR-0019
+  `Accepted` 근거로 `plan_hash` 허용 목록 투영·destructive 판정 공용 함수, D 실행 port 4종과
+  반환형(`PlanRequestOutcome`/`TerraformStateVersion`), revision-bound `DeploymentWorker`,
+  live GitHub/AWS 어댑터 3종, 고객용 `ci/terraform/` plan/apply workflow template을 기능별
+  커밋으로 담았다. 검증: ruff 252 files, Unit 548 / Contract 123 / Integration 9 / Security 72.
+  D·A·C·Security 리뷰 대기. **남은 D 조각(customer runtime 배선)은 A의 Deployment endpoint가
+  `dev`에 병합된 뒤 착수한다.** 최종적으로 M3 통합 PR로 A/B/C/Shared와 함께 병합한다.
 - 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
   그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
   억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
