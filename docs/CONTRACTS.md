@@ -362,9 +362,15 @@ exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지
 - 억제 여부는 조치 판정과 **같은 술어**(`select_in_force_exception()`)로 정한다. 두 경계가 각자
   판정하면 화면의 "억제됨"과 `RemediationDecision.SUPPRESSED`가 갈리고, 어느 쪽이 거짓인지 알 수
   없다. 겹치는 예외의 우선순위(리소스 단위 > Rule 전체, 같으면 `exception_id` 순)도 공유한다
-- 평가 시각은 `Finding.evaluated_at`에서 읽는다. provenance가 없는 옛 record는 **억제하지 않는다**
-  — 없는 평가 시각을 조회 시각으로 대체하면 나중에 승인된 예외가 옛 위반을 덮는 경로가 그대로
-  열린다. 근거가 없으면 위반이 보이는 쪽으로 닫는다
+- 평가 시각은 `Finding.evaluated_at_utc`로 읽는다. 문자열 `evaluated_at`을 소비자가 각자 파싱하면
+  같은 값에 서로 다른 파싱 규칙이 생기므로, `RemediationException.approved_at_utc`와 같은 방식으로
+  Contract가 한 번만 정의한다. provenance가 없는 옛 record는 **억제하지 않는다** — 없는 평가 시각을
+  조회 시각으로 대체하면 나중에 승인된 예외가 옛 위반을 덮는 경로가 그대로 열린다. 근거가 없으면
+  위반이 보이는 쪽으로 닫는다
+- `FindingSuppression`의 필드 검증은 Contract 공용 헬퍼(`require_non_empty_string`,
+  `require_optional_non_empty_string`, `require_offset_aware_timestamp`)를 쓴다. 세 헬퍼는
+  `packages.contracts`의 공개 export이며, 경계 밖에서 같은 규칙을 다시 쓰지 않게 하는 것이 목적이다.
+  `expires_at`은 화면에 "언제까지"로 노출되므로 표시 경계에서도 offset-aware timestamp를 요구한다
 - `at`은 조회 시각이다. 만료를 이 시각으로 판정하므로 같은 Assessment라도 조회 시점에 따라 억제
   표시가 사라질 수 있다. 그것이 의도다
 - 억제 표시는 재평가를 막지 않는다. 검증 Assessment의 계획·Coverage·Readiness는 예외와 무관하게

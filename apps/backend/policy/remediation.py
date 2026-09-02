@@ -18,7 +18,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from packages.contracts import EvaluationPerspective, EvaluationStatus, Finding
+from packages.contracts import (
+    EvaluationPerspective,
+    EvaluationStatus,
+    Finding,
+    require_non_empty_string,
+    require_offset_aware_timestamp,
+    require_optional_non_empty_string,
+)
 from packages.contracts.remediation_policy import (
     ManualReviewCode,
     RemediationAction,
@@ -300,16 +307,15 @@ class FindingSuppression:
     ticket_reference: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("finding_id", "exception_id", "expires_at"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("finding_id", "exception_id"):
+            require_non_empty_string(getattr(self, name), name)
         if not isinstance(self.reason, RemediationExceptionReason):
             raise TypeError("reason must be a RemediationExceptionReason")
-        if self.ticket_reference is not None and (
-            not isinstance(self.ticket_reference, str) or not self.ticket_reference.strip()
-        ):
-            raise ValueError("ticket_reference must be a non-empty string or None")
+        # 화면에 "언제까지"로 노출되는 값이므로 표시 경계에서도 Contract와 같은 형식을 요구한다.
+        # 지금은 이미 검증된 `RemediationException.expires_at`에서만 채워지지만, 다른 호출자가
+        # 생겼을 때 offset 없는 문자열이 만료일로 표시되면 읽는 사람마다 만료 시점이 달라진다.
+        require_offset_aware_timestamp(self.expires_at, "expires_at")
+        require_optional_non_empty_string(self.ticket_reference, "ticket_reference")
 
 
 def annotate_suppressed_findings(
@@ -347,7 +353,7 @@ def annotate_suppressed_findings(
             raise TypeError("findings must contain Finding values")
         if finding.evaluated_at is None:
             continue
-        evaluated_at = _finding_evaluated_at(finding)
+        evaluated_at = finding.evaluated_at_utc
         exception = select_in_force_exception(
             finding,
             customer_id=customer_id,
@@ -367,17 +373,3 @@ def annotate_suppressed_findings(
             )
         )
     return tuple(notes)
-
-
-def _finding_evaluated_at(finding: Finding) -> datetime:
-    """Read the Finding's evaluation time as an offset-aware moment.
-
-    `Finding`이 이미 검증한 값이라 여기서 형식을 다시 판정하지 않는다. 다만 offset이 없는 값이
-    어떤 경로로든 들어오면 만료·승인 순서 비교가 실행 환경의 로컬 시간에 좌우되므로, 조용히
-    억제하지 않고 거부한다.
-    """
-    assert finding.evaluated_at is not None
-    moment = datetime.fromisoformat(finding.evaluated_at)
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        raise ValueError("finding evaluated_at must carry an explicit UTC offset")
-    return moment

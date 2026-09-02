@@ -306,6 +306,24 @@ class ReadTimeSuppressionTests(unittest.TestCase):
     def test_no_exceptions_means_no_annotations(self) -> None:
         self.assertEqual(_annotate([_finding()], exceptions=()), ())
 
+    def test_the_evaluation_time_is_read_through_the_contract_property(self) -> None:
+        """파싱 규칙이 Contract 한 곳에만 있어야 표시와 판정이 같은 시각을 본다."""
+        finding = _finding()
+
+        self.assertEqual(finding.evaluated_at_utc, EVALUATED_AT)
+        with self.assertRaisesRegex(ValueError, "no evaluation provenance"):
+            _ = _finding(assessed_commit_sha=None, evaluated_at=None).evaluated_at_utc
+
+    def test_a_suppression_note_requires_an_offset_aware_expiry(self) -> None:
+        """만료일은 화면에 노출된다. offset이 없으면 읽는 사람마다 만료 시점이 달라진다."""
+        with self.assertRaisesRegex(ValueError, "expires_at must carry an explicit UTC offset"):
+            FindingSuppression(
+                finding_id="finding-001",
+                exception_id="exception-001",
+                reason=RemediationExceptionReason.ACCEPTED_RISK,
+                expires_at="2026-12-31T00:00:00",
+            )
+
     def test_the_read_time_must_be_offset_aware(self) -> None:
         with self.assertRaisesRegex(ValueError, "at must be offset-aware"):
             _annotate([_finding()], at=datetime(2026, 9, 1, 12, 0))
