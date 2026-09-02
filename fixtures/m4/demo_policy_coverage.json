@@ -1,0 +1,122 @@
+{
+  "schema_version": "m4-demo-policy-coverage-v1",
+  "scenario_id": "wordpress-lamp-s3-governance-v1",
+  "policy_profile_id": "profile-mvp-baseline",
+  "policy_profile_version": "v2",
+  "resource_type": "AWS::S3::Bucket",
+  "rules": [
+    {
+      "rule_id": "S3-PUBLIC-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "block_public_access",
+      "control_ids": ["ISMS-P-2.10.2", "ISMS-P-2.10.3"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-B",
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-A",
+        "isms-p-2023@2023-10-31#control/2.10.3",
+        "isms-p-2023@2023-10-31#control/2.10.2"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-public-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-public-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-public-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-public-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-public-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-public-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    },
+    {
+      "rule_id": "S3-ACL-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "object_ownership_enforced",
+      "control_ids": ["ISMS-P-2.6.2", "ISMS-P-2.10.2"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-C",
+        "isms-p-2023@2023-10-31#control/2.6.2",
+        "isms-p-2023@2023-10-31#control/2.10.2"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-acl-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-acl-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-acl-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-acl-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-acl-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-acl-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    },
+    {
+      "rule_id": "S3-POLICY-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "bucket_policy_restricted",
+      "control_ids": ["ISMS-P-2.6.2", "ISMS-P-2.10.2"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-D",
+        "isms-p-2023@2023-10-31#control/2.6.2",
+        "isms-p-2023@2023-10-31#control/2.10.2"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-policy-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-policy-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-policy-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-policy-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-policy-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-policy-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    },
+    {
+      "rule_id": "S3-ENCRYPT-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "default_encryption",
+      "control_ids": ["ISMS-P-2.7.1"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-F",
+        "isms-p-2023@2023-10-31#control/2.7.1"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-encrypt-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-encrypt-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-encrypt-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-encrypt-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-encrypt-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-encrypt-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    },
+    {
+      "rule_id": "S3-TLS-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "tls_only",
+      "control_ids": ["ISMS-P-2.7.1"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/5.1-G",
+        "isms-p-2023@2023-10-31#control/2.7.1"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-tls-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-tls-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-tls-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-tls-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-tls-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-tls-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    },
+    {
+      "rule_id": "S3-LOGGING-001",
+      "rule_version": "2026-08-31",
+      "demo_toggle": "access_logging",
+      "control_ids": ["ISMS-P-2.9.4", "ISMS-P-2.10.2"],
+      "policy_evidence_references": [
+        "internal-cloud-security-checklist@2026-08-24#part2/7.1-G",
+        "isms-p-2023@2023-10-31#control/2.9.4",
+        "isms-p-2023@2023-10-31#control/2.10.2"
+      ],
+      "golden_cases": [
+        {"case_id": "golden-s3-logging-iac-001", "phase": "INITIAL", "perspective": "IAC"},
+        {"case_id": "golden-s3-logging-actual-001", "phase": "INITIAL", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-s3-logging-drift-001", "phase": "INITIAL", "perspective": "DRIFT"},
+        {"case_id": "golden-post-deploy-s3-logging-iac-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "IAC"},
+        {"case_id": "golden-post-deploy-s3-logging-actual-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "AWS_ACTUAL"},
+        {"case_id": "golden-post-deploy-s3-logging-drift-001", "phase": "POST_DEPLOY_VERIFICATION", "perspective": "DRIFT"}
+      ]
+    }
+  ]
+}
