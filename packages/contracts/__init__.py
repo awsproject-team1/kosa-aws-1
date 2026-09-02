@@ -1,5 +1,10 @@
 """Executable transport contracts shared across platform boundaries."""
 
+from packages.contracts._validation import (
+    require_non_empty_string,
+    require_offset_aware_timestamp,
+    require_optional_non_empty_string,
+)
 from packages.contracts.assessments import (
     SCORE_ANCHORS,
     AssessmentComparison,
@@ -160,4 +165,7 @@ __all__ = [
     "TerraformPlan",
     "WorkflowCommand",
     "WorkflowTask",
+    "require_non_empty_string",
+    "require_offset_aware_timestamp",
+    "require_optional_non_empty_string",
 ]
