@@ -21,7 +21,11 @@
   `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
   before/after projection을 구현했고 36개(6 Rule × 3 perspective × Initial/Post-Deploy phase) Golden
   fixture gate를 확인했다.
-  ADR-0019(승인 배포 실행 경계)는 계속 `Proposed`이며 아래 Blocked가 적용된다.
+  ADR-0019(승인 배포 실행 경계)를 `Accepted`로 확정했다(2026-09-02). A·D·Security가 서명 PR
+  리뷰 approve로 서명했고, 같은 PR에서 상태 전환과 `docs/API.md`·`CONTRACTS.md`·`DATABASE.md`·
+  `DESIGN.md`·C4 계획 표기의 구현 표기 이관을 함께 커밋했다. 이 서명은 A(PR #40)와 D 조각이
+  병렬로 base 삼도록 독립 PR로 분리했다. 이로써 M2 A audit 정본화, M2/M3 D live plan/apply,
+  M3 A Deployment 생성·상태 API의 차단이 풀렸다.
 - M1 sandbox readiness 보강 완료: live Worker가 등록된 M1 Model Profile ID를 work에 직접 결합하고,
   deployment workflow가 명시적 live/fixture mode·selector/ARN/account/Region/40자 commit을 customer
   deployment credential 설정 전에 fail-closed 검증함. 실제 고객 배포는 아래 Blocked 해소 전 시작하지 않음
@@ -66,7 +70,7 @@
   가능해졌다. cfn-lint E-level 0. **RemediationApiService와 DeploymentApiService는 이번 범위에서
   제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
   프로덕션 구현이 없고(테스트 fake만), 후자는 `DeploymentPlanReader.get_approval_input` 구현이
-  아예 없으며 D의 plan 저장(ADR-0019 `Proposed`)에 의존한다.
+  아예 없으며 D의 plan 저장(당시 ADR-0019 `Proposed`, 이후 `Accepted`)에 의존한다.
 
 - M1 A `record_candidate_extraction` 재시도 idempotency (PR #44 리뷰 대응 3): C의 추출 Worker가
   at-least-once로 같은 결과를 재전송하면 `attribute_not_exists` 조건이 transaction을 취소해 정상
@@ -403,14 +407,11 @@
   prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
   derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
   generic benchmark 결과를 M1 gate 통과로 간주하지 않음
-- **M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이
-  모두 채워져 있다. 남은 것은 A·D·Security의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의
-  리뷰 approve**로 받는다 (CONTRIBUTING: Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다).
-  서명 전에는 M2 A가 `AuditEventType`/기존 audit 필드를 정규화하거나 D가 live plan/apply 경로를,
-  M3 A가 Deployment 생성·후속 전이를 구현하지 않는다.
-  *Owner:* D + A + Security. *Blocks:* M2 A(audit 정본화), M2 D(live plan), M3 D(plan/apply 실행),
-  M3 A(Deployment 생성·상태 API), M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract는
-  이 ADR 자체가 막지 않지만 한시적 순서에 따라 M2의 `dev` 병합 후 시작한다.**
+- ~~**M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`)**~~ **해소됨
+  (2026-09-02): ADR-0019 `Accepted`.** A·D·Security가 서명 PR 리뷰 approve로 서명했다. 이로써
+  M2 A audit 정본화, M2/M3 D live plan/apply, M3 A Deployment 생성·상태 API가 구현 가능해졌다.
+  구현 커밋은 서명 뒤에 A(PR #40)와 D 브랜치에서 병렬로 이어 붙이고, 완료 시 관련 milestone
+  항목을 `[x]`로 옮긴다.
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
   input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A는
   `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
@@ -464,7 +465,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Proposed` — 합의 전에 live plan 경로를 구현하면 A/C의 재검증과 값이 어긋난다)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Accepted`로 확정됨 — live plan 경로 구현 가능, 구현 대기)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.
@@ -475,7 +476,7 @@
 
 **결정:** ADR-0020은 `Accepted`다. 검증은 새 immutable Assessment, 원 평가 계획 전체 재실행,
 동일 Profile/rubric, Code의 Finding Resolution 및 fail-closed comparison을 사용한다. ADR-0019의
-plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Proposed`다.
+plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확정됐다(구현 대기).
 
 - [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
   *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를

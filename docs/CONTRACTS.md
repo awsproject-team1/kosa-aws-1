@@ -430,9 +430,10 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 
 ## M3 contract additions
 
-ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019의
-A/D-owned Contract는 아직 구현되지 않았다. 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은
-개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인 구조가 재발한다.
+ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019도
+`Accepted`가 됐으므로 아래 A/D-owned Contract를 구현할 수 있다(서명 직후이며 구현 커밋은 이어서
+추가한다). 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은 개념이 두 곳에 생기면 ADR-0018이
+제거한 "판정 정본이 둘"인 구조가 재발한다.
 
 | 추가 | 소유 | 의미 |
 | --- | --- | --- |
@@ -463,7 +464,8 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
 `REMEDIATION_EXCEPTION_APPROVED`를 더한 다섯이며, M3의 `DEPLOYMENT_REQUESTED`,
 `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 합의와 함께 추가한다.
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 서명(`Accepted`)에 따라 M3
+구현 커밋에서 추가한다.
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야

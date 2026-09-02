@@ -108,7 +108,7 @@ Backend가 발급한다.
 
 ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable 저장과 endpoint 배선은 아직
 구현되지 않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment
-상태 기계는 계속 `Proposed`다.
+상태 기계는 `Accepted`이므로 아래 정의대로 구현한다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -305,6 +305,6 @@ generates the Job ID, and owns `created_at`, `updated_at`, revision, and `expire
 | Audit/approval retention, Object Lock, and CloudTrail audit-destination lifecycle policy | A + Security | Before customer deployment | Compliance controls |
 | Per-assessment result volume and pagination threshold | C + A | Assessment implementation | Query/pagination limits |
 | Additional reporting/search index requirements | A/B/C/D | Before UI reporting implementation | GSI additions |
-| Deployment item 필드와 상태 전이, workflow event key (ADR-0019) | A + D | M3 착수 전 | Deployment 상태 저장·조회, apply 재검증 |
-| Terraform state bucket/lock table 소유와 state key 분리 (ADR-0019) | D + Security | M3 착수 전 | plan-apply 재현성, 고객 bootstrap 확장 |
+| Deployment item 필드와 상태 전이, workflow event key (ADR-0019) | A + D | ~~M3 착수 전~~ **결정됨: ADR-0019 `Accepted`** | Deployment 상태 저장·조회, apply 재검증 (M3 구현 대기) |
+| Terraform state bucket/lock table 소유와 state key 분리 (ADR-0019) | D + Security | ~~M3 착수 전~~ **결정됨: ADR-0019 `Accepted`** | plan-apply 재현성, 고객 bootstrap 확장 (M3 구현 대기) |
 | 검증 Assessment 필드 확장(`phase`, `source_assessment_id`, `deployment_id`) (ADR-0020) | C + A | M3 착수 전 | Post-Deploy Verification 저장, before/after 비교 |
