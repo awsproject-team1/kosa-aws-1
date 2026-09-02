@@ -10,7 +10,9 @@ class AuditEventTypeContractTest(unittest.TestCase):
         self.assertEqual(
             {member.value for member in AuditEventType},
             {
+                "DEPLOYMENT_REQUESTED",
                 "DEPLOYMENT_APPROVED",
+                "DEPLOYMENT_REJECTED",
                 "POLICY_SOURCE_APPROVED",
                 "POLICY_PROFILE_PUBLISHED",
                 "REMEDIATION_DECIDED",
