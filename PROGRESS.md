@@ -55,6 +55,22 @@
 
 ## Completed
 
+- M3 D live plan/apply 실행 경로 (ADR-0019 `Accepted` 이후): `plan_hash`의 유일한 산출 근거를
+  `packages/contracts/terraform_plan.py`에 두었다. `terraform show -json`을 `resource_changes[]`의
+  11개 허용 필드로 투영하고(허용 목록이라 Terraform/Provider가 필드를 늘려도 hash가 안 흔들린다,
+  address/key 정렬·compact ASCII·no trailing newline·NaN/Inf 거부) 그 canonical 바이트의 SHA-256을
+  낸다. A 승인 재검증·C readiness·D apply 재검증이 같은 함수를 부른다. `has_destructive_changes`는
+  `delete` 또는 비어 있지 않은 `replace_paths`로 판정한다(§1). apply용 `TERRAFORM_PLAN_BINARY`
+  ArtifactType(hash 대상 아님), D 내부 `PlanRequestPort`와 반환형 `PlanRequestOutcome`
+  (plan + state `lineage`·`serial`을 쌍으로 묶는 `TerraformStateVersion` + `PlanReadinessInput`)을
+  추가했다. `apps/backend/deployment/worker.py`의 `DeploymentWorker`가 세 command를 소비해 command당
+  하나의 injected D port만 부른다 — `RUN_DEPLOYMENT`→plan, `PLAN_COMPLETED`→idempotent apply
+  dispatch(§5), `APPLY_COMPLETED`→run 재조회 후 승인 사실(repository/workflow_path/ref/plan_hash/
+  conclusion) 대조 뒤에만 Actual 재조회(§7, ADR-0020 §8). work는 queue payload가 아니라
+  (job_id, revision)으로 다시 읽고, EventBridge payload만으로 상태를 확정하지 않으며, 승인 사실과
+  하나라도 다르면 재시도 없이 차단한다. D는 승인·정책 판정을 하지 않고 상태 전이·`DeploymentStatus`
+  파생은 A 소유로 남긴다. live GitHub/Terraform SDK adapter와 customer runtime 배선은 다음 조각이다.
+
 - M3 D 실행 port 계약·Mock 병렬 구현 (ADR-0019 §5·§7 근거, CONTRACTS.md 확정 시그니처): D가
   소유하고 A/C가 주입받는 `ApplyDispatchPort`/`WorkflowRunReader`/`ActualRereadPort` Protocol과
   반환형 `ApplyRunReference`/`VerifiedRunOutcome`/`AwsResourceSnapshot`(`packages/contracts/`),
@@ -481,7 +497,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Accepted`로 확정됨 — live plan 경로 구현 가능, 구현 대기)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 destructive 판정은 ADR-0019 `Accepted`로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR·Terraform plan SDK adapter와 customer runtime 배선)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.
@@ -506,8 +522,12 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   Resolution의 결정적 projection 및 18개 Post-Deploy Golden fixture 구현. durable Assessment/endpoint
   wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
-  재검증, AWS Actual 재조회 *(plan_hash 허용 목록 투영, state `lineage`·`serial`, saved plan apply,
-  run 재조회 — ADR-0019 §1, §2, §5, §7)*
+  재검증, AWS Actual 재조회 *(코드 경계 완료: `plan_hash` 허용 목록 투영·destructive 판정 공용 함수
+  (`packages/contracts/terraform_plan.py`), state `lineage`·`serial` 쌍 대조(`TerraformStateVersion`),
+  `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 그리고 세 command를 injected
+  port로 분기하며 idempotent apply dispatch·run 재조회 후 승인 사실 대조·apply 후 Actual 재조회를
+  하는 `DeploymentWorker` — ADR-0019 §1·§2·§5·§7. **남은 조각:** live GitHub Actions OIDC/Terraform
+  SDK adapter와 customer runtime 배선, `ci/terraform/` workflow template)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.
