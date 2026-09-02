@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from apps.backend.assessment import GoldenDatasetRunner
+from apps.backend.policy.context import RESOURCE_EVIDENCE_PREFIXES
 from packages.contracts import (
     AssessmentPhase,
     EvaluationPerspective,
@@ -17,6 +18,22 @@ from packages.contracts.model_profiles import ModelProfile, ModelProfileRole
 
 
 class M1GoldenCaseTest(unittest.TestCase):
+    @staticmethod
+    def _allowed_policy_evidence_references() -> set[str]:
+        rules_root = Path(__file__).parents[2] / "fixtures" / "rules"
+        return {
+            (f"{reference['source_id']}@{reference['source_version']}#{reference['locator']}")
+            for path in rules_root.glob("rules.*.json")
+            for rule in json.loads(path.read_text())
+            for reference in rule["source_references"]
+        }
+
+    @classmethod
+    def _is_allowed_evidence_reference(cls, reference: str) -> bool:
+        if reference.startswith(RESOURCE_EVIDENCE_PREFIXES):
+            return True
+        return reference in cls._allowed_policy_evidence_references()
+
     @staticmethod
     def _cases() -> list[GoldenDatasetCase]:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
@@ -47,6 +64,30 @@ class M1GoldenCaseTest(unittest.TestCase):
         )
         self.assertEqual({case.rubric_version for case in cases}, {"m1-three-perspective-v1"})
 
+    def test_all_fixture_evidence_uses_an_allowed_resource_or_policy_reference(self) -> None:
+        root = Path(__file__).parents[2] / "fixtures" / "m1"
+        raw_cases = [
+            json.loads((root / name).read_text())
+            for name in (
+                "golden_dataset_iac_s3_public.json",
+                "golden_dataset_drift_s3_public.json",
+            )
+        ]
+        raw_cases.extend(json.loads((root / "golden_dataset_cases.json").read_text()))
+        raw_cases.extend(json.loads((root / "golden_dataset_post_deploy_cases.json").read_text()))
+
+        violations = [
+            f"{raw['case_id']}: {reference}"
+            for raw in raw_cases
+            for reference in raw["expected_evidence_references"]
+            if not self._is_allowed_evidence_reference(reference)
+        ]
+        self.assertEqual(
+            [],
+            violations,
+            "Golden evidence must be an allowed resource reference or a Rule fixture SourceReference",
+        )
+
     def test_m1_profile_pins_the_same_rebaselined_rubric_and_golden_version(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
         data = json.loads((root / "assessment_model_profile.json").read_text())
@@ -60,7 +101,10 @@ class M1GoldenCaseTest(unittest.TestCase):
             golden_dataset_version=data["golden_dataset_version"],
         )
         self.assertEqual(profile.rubric_version, "m1-three-perspective-v1")
-        self.assertEqual(profile.golden_dataset_version, "m1-s3-six-rule-three-perspective-v1")
+        self.assertEqual(
+            profile.golden_dataset_version,
+            "m3-s3-initial-post-deploy-six-rule-three-perspective-v1",
+        )
 
     def test_iac_and_drift_fixtures_pass_the_repeated_quality_gate(self) -> None:
         class FixtureEvaluator:
@@ -83,27 +127,49 @@ class M1GoldenCaseTest(unittest.TestCase):
         for case in self._cases():
             self.assertTrue(GoldenDatasetRunner(FixtureEvaluator()).evaluate(case).passes_m0_gate)
 
-    def test_six_m1_rules_have_all_three_perspective_cases(self) -> None:
+    def test_six_rules_have_all_three_perspective_cases_in_both_assessment_phases(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
-        cases = json.loads((root / "golden_dataset_cases.json").read_text())
-        self.assertIsInstance(cases, list)
-        assert isinstance(cases, list)
-        triples = {(case["rule_id"], case["perspective"]) for case in cases}
-        rules = {rule_id for rule_id, _ in triples}
+        initial_cases = json.loads((root / "golden_dataset_cases.json").read_text())
+        verification_cases = json.loads(
+            (root / "golden_dataset_post_deploy_cases.json").read_text()
+        )
+        self.assertIsInstance(initial_cases, list)
+        self.assertIsInstance(verification_cases, list)
+        assert isinstance(initial_cases, list)
+        assert isinstance(verification_cases, list)
+        cases = [*initial_cases, *verification_cases]
+        coordinates = {(case["phase"], case["rule_id"], case["perspective"]) for case in cases}
+        rules = {rule_id for _, rule_id, _ in coordinates}
         self.assertEqual(len(rules), 6)
         self.assertEqual(
-            triples,
+            coordinates,
             {
-                (rule_id, perspective)
+                (phase, rule_id, perspective)
+                for phase in ("INITIAL", "POST_DEPLOY_VERIFICATION")
                 for rule_id in rules
                 for perspective in ("IAC", "AWS_ACTUAL", "DRIFT")
             },
         )
         self.assertTrue(all(case["rubric_version"] == "m1-three-perspective-v1" for case in cases))
+        expected_outcomes = {
+            (case["expected_status"], case["expected_score_min"], case["expected_score_max"])
+            for case in verification_cases
+        }
+        self.assertIn(("PASS", 100, 100), expected_outcomes)
+        self.assertTrue(
+            any(
+                case["expected_status"] == "FAIL" and case["expected_score_max"] < 100
+                for case in verification_cases
+            ),
+            "post-deploy gate must include an unresolved FAIL case",
+        )
 
-    def test_all_six_by_three_cases_pass_the_repeated_quality_gate(self) -> None:
+    def test_all_six_by_three_by_two_phase_cases_pass_the_repeated_quality_gate(self) -> None:
         root = Path(__file__).parents[2] / "fixtures" / "m1"
-        fixture_cases = json.loads((root / "golden_dataset_cases.json").read_text())
+        fixture_cases = [
+            *json.loads((root / "golden_dataset_cases.json").read_text()),
+            *json.loads((root / "golden_dataset_post_deploy_cases.json").read_text()),
+        ]
 
         class FixtureEvaluator:
             def evaluate_case(self, case: GoldenDatasetCase) -> EvaluationResult:

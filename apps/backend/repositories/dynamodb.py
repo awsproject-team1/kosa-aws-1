@@ -18,6 +18,7 @@ from apps.backend.repositories.ports import (
 )
 from packages.contracts import (
     ApiError,
+    AuditEventType,
     JobCurrentStep,
     JobStatus,
     RemediationAction,
@@ -413,7 +414,7 @@ def _item_from_remediation_audit(
         "SK": f"AUDIT#{occurred_at}#REMEDIATION#{remediation_id}",
         "entity_type": "AUDIT_EVENT",
         "customer_id": customer_id,
-        "event_type": "REMEDIATION_DECIDED",
+        "event_type": AuditEventType.REMEDIATION_DECIDED.value,
         "remediation_id": remediation_id,
         "finding_id": decision.finding_id,
         "action": decision.action.value,

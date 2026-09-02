@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from apps.backend.deployment import DeploymentApprovalRepository
 from apps.backend.repositories.errors import RepositoryError
-from packages.contracts import DeploymentApproval
+from packages.contracts import AuditEventType, DeploymentApproval
 from packages.contracts.remediation import DeploymentReadiness
 
 
@@ -67,7 +67,7 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
             "event_id": event_id,
             "occurred_at": occurred_at,
             "version": 1,
-            "action": "DEPLOYMENT_APPROVED",
+            "event_type": AuditEventType.DEPLOYMENT_APPROVED.value,
             "deployment_id": approval.deployment_id,
             "finding_id": readiness.finding_id,
             "commit_sha": approval.commit_sha,

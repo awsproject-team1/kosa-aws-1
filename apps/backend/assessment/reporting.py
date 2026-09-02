@@ -17,6 +17,7 @@ from packages.contracts import (
     EvaluationResult,
     EvaluationStatus,
     Finding,
+    PlannedEvaluation,
     ReadinessScore,
 )
 
@@ -31,23 +32,31 @@ class AssessmentReportStoreError(RuntimeError):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AssessmentEvaluationPlan:
-    """Server-generated applicable Resource × Rule × Perspective count."""
+    """Server-generated applicable Resource × Rule × Perspective set.
+
+    The set is the plan; the Coverage denominator is derived from it rather than
+    stored beside it, so the count and the set can never disagree (ADR-0020 §5).
+    """
 
     customer_id: str
     assessment_id: str
-    planned_evaluations: int
+    planned_coordinates: tuple[PlannedEvaluation, ...]
 
     def __post_init__(self) -> None:
         for field_name in ("customer_id", "assessment_id"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} must be a non-empty string")
-        if isinstance(self.planned_evaluations, bool) or not isinstance(
-            self.planned_evaluations, int
-        ):
-            raise TypeError("planned_evaluations must be an integer")
-        if self.planned_evaluations <= 0:
-            raise ValueError("planned_evaluations must be greater than zero")
+        if not isinstance(self.planned_coordinates, tuple) or not self.planned_coordinates:
+            raise ValueError("planned_coordinates must be a non-empty tuple")
+        if not all(isinstance(value, PlannedEvaluation) for value in self.planned_coordinates):
+            raise TypeError("planned_coordinates must contain PlannedEvaluation values")
+        if len(set(self.planned_coordinates)) != len(self.planned_coordinates):
+            raise ValueError("planned_coordinates must not contain duplicates")
+
+    @property
+    def planned_evaluations(self) -> int:
+        return len(self.planned_coordinates)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -130,6 +139,9 @@ class DynamoDbAssessmentReportStore:
                     "customer_id": plan.customer_id,
                     "assessment_id": plan.assessment_id,
                     "planned_evaluations": plan.planned_evaluations,
+                    "planned_coordinates": [
+                        coordinate.to_dict() for coordinate in plan.planned_coordinates
+                    ],
                     "completed_evaluations": 0,
                 },
                 ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
@@ -157,7 +169,7 @@ class DynamoDbAssessmentReportStore:
         )
         if not isinstance(plan, Mapping):
             raise AssessmentReportNotFoundError("assessment evaluation plan not found")
-        expected, completed = _plan_from_item(plan, customer_id, assessment_id)
+        expected, completed, planned = _plan_from_item(plan, customer_id, assessment_id)
         results = tuple(
             _result_from_item(item, customer_id, assessment_id)
             for item in items
@@ -181,10 +193,29 @@ class DynamoDbAssessmentReportStore:
             results=results,
             findings=findings,
             coverage=coverage,
-            readiness_score=calculate_readiness_score(
-                results=results, planned_evaluations=expected
+            readiness_score=(
+                None
+                if planned is None
+                else calculate_readiness_score(results=results, planned_evaluations=planned)
             ),
         )
+
+    def get_planned_evaluations(
+        self, *, customer_id: str, assessment_id: str
+    ) -> tuple[PlannedEvaluation, ...]:
+        """Return the durable planned set the comparison boundary compares against.
+
+        A plan that predates the stored set is not silently reconstructed: the set
+        is not recoverable from results, so the caller must see the absence rather
+        than compare against a fabricated plan (ADR-0020 §5).
+        """
+        _non_empty_string(customer_id, "customer_id")
+        _non_empty_string(assessment_id, "assessment_id")
+        plan = self._get_plan(customer_id=customer_id, assessment_id=assessment_id)
+        _, _, planned = _plan_from_item(plan, customer_id, assessment_id)
+        if planned is None:
+            raise AssessmentReportNotFoundError("assessment plan has no planned evaluations")
+        return planned
 
     def get_assessment_job_id(self, *, customer_id: str, assessment_id: str) -> str:
         _non_empty_string(customer_id, "customer_id")
@@ -222,7 +253,7 @@ class DynamoDbAssessmentReportStore:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer from 1 through 100")
         plan = self._get_plan(customer_id=customer_id, assessment_id=assessment_id)
-        expected, completed = _plan_from_item(plan, customer_id, assessment_id)
+        expected, completed, planned = _plan_from_item(plan, customer_id, assessment_id)
         if completed is None:
             # Plans written before the transactional counter need a temporary
             # compatibility scan to keep their Coverage semantics unchanged.
@@ -249,7 +280,7 @@ class DynamoDbAssessmentReportStore:
             # Readiness is intentionally unavailable until every applicable
             # evaluation is durable.  Once complete, derive it from all results
             # rather than trusting any page-local slice.
-            if completed == expected:
+            if completed == expected and planned is not None:
                 completed_results = tuple(
                     _result_from_item(item, customer_id, assessment_id)
                     for item in self._query_prefix_items(
@@ -257,7 +288,7 @@ class DynamoDbAssessmentReportStore:
                     )
                 )
                 readiness_score = calculate_readiness_score(
-                    results=completed_results, planned_evaluations=expected
+                    results=completed_results, planned_evaluations=planned
                 )
         start_key = _decode_cursor(cursor, customer_id, assessment_id)
         arguments: dict[str, object] = {
@@ -403,18 +434,64 @@ class DynamoDbAssessmentReportStore:
 
 def _plan_from_item(
     item: Mapping[str, object], customer_id: str, assessment_id: str
-) -> tuple[int, int | None]:
+) -> tuple[int, int | None, tuple[PlannedEvaluation, ...] | None]:
     if item.get("customer_id") != customer_id or item.get("assessment_id") != assessment_id:
         raise AssessmentReportStoreError("assessment plan scope is invalid")
     value = item.get("planned_evaluations")
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AssessmentReportStoreError("assessment plan is invalid")
+    coordinates = _plan_coordinates_from_item(item)
+    if coordinates is not None and len(coordinates) != value:
+        raise AssessmentReportStoreError("assessment plan count does not match its coordinates")
     completed = item.get("completed_evaluations")
     if completed is None:
-        return value, None
+        return value, None, coordinates
     if isinstance(completed, bool) or not isinstance(completed, int) or not 0 <= completed <= value:
         raise AssessmentReportStoreError("assessment completed counter is invalid")
-    return value, completed
+    return value, completed, coordinates
+
+
+def _plan_coordinates_from_item(
+    item: Mapping[str, object],
+) -> tuple[PlannedEvaluation, ...] | None:
+    """Return the planned set, or None for a plan written before it was stored.
+
+    A plan without the set cannot be compared or scored — the count it does carry
+    cannot tell a missing evaluation from an unplanned one that replaced it. The
+    read paths degrade to "readiness unavailable" rather than reconstructing a set
+    that is not recoverable from results (ADR-0020 §5).
+    """
+    raw = item.get("planned_coordinates")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise AssessmentReportStoreError("assessment plan coordinates are invalid")
+    coordinates: list[PlannedEvaluation] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            raise AssessmentReportStoreError("assessment plan coordinates are invalid")
+        resource_id = entry.get("resource_id")
+        rule_id = entry.get("rule_id")
+        perspective = entry.get("perspective")
+        if (
+            not isinstance(resource_id, str)
+            or not isinstance(rule_id, str)
+            or not isinstance(perspective, str)
+        ):
+            raise AssessmentReportStoreError("assessment plan coordinates are invalid")
+        try:
+            coordinates.append(
+                PlannedEvaluation(
+                    resource_id=resource_id,
+                    rule_id=rule_id,
+                    perspective=EvaluationPerspective(perspective),
+                )
+            )
+        except (TypeError, ValueError):
+            raise AssessmentReportStoreError("assessment plan coordinates are invalid") from None
+    if len(set(coordinates)) != len(coordinates):
+        raise AssessmentReportStoreError("assessment plan coordinates contain duplicates")
+    return tuple(coordinates)
 
 
 def _result_from_item(

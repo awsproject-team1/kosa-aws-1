@@ -18,6 +18,7 @@ from packages.contracts import (
     RemediationContext,
     RemediationDecision,
     RemediationStartResponse,
+    RemediationSyncTarget,
 )
 
 
@@ -104,6 +105,38 @@ class RemediationContractTest(unittest.TestCase):
         )
         self.assertTrue(response.accepted)
         self.assertEqual(response.to_dict()["job"]["remediation_id"], "rem-001")
+
+
+class RemediationSyncTargetContractTest(unittest.TestCase):
+    def test_the_sync_port_return_type_is_shared_rather_than_owned_by_c(self) -> None:
+        """D implements `SyncAction`; its return type must not sit inside C's app package."""
+        from apps.backend.remediation import RemediationSyncTarget as reexported
+
+        self.assertIs(reexported, RemediationSyncTarget)
+        self.assertEqual(RemediationSyncTarget.__module__, "packages.contracts.remediation")
+
+    def test_requires_every_selector_the_later_plan_input_binds_to(self) -> None:
+        target = RemediationSyncTarget(
+            finding_id="fnd-001",
+            customer_id="cust-001",
+            repository_id="repo-001",
+            commit_sha="commit-001",
+        )
+
+        self.assertEqual(target.commit_sha, "commit-001")
+        for name in ("finding_id", "customer_id", "repository_id", "commit_sha"):
+            with self.assertRaises(ValueError):
+                RemediationSyncTarget(
+                    **{
+                        **{
+                            "finding_id": "fnd-001",
+                            "customer_id": "cust-001",
+                            "repository_id": "repo-001",
+                            "commit_sha": "commit-001",
+                        },
+                        name: " ",
+                    }
+                )
 
 
 if __name__ == "__main__":

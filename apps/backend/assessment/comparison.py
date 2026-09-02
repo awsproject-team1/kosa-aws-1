@@ -16,24 +16,8 @@ from packages.contracts import (
     EvaluationStatus,
     FindingResolution,
     FindingResolutionResult,
+    PlannedEvaluation,
 )
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PlannedEvaluation:
-    """One immutable applicable coordinate, without a Rule-version comparison claim."""
-
-    resource_id: str
-    rule_id: str
-    perspective: EvaluationPerspective
-
-    def __post_init__(self) -> None:
-        for name in ("resource_id", "rule_id"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must be a non-empty string")
-        if not isinstance(self.perspective, EvaluationPerspective):
-            raise TypeError("perspective must be an EvaluationPerspective")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -63,6 +47,30 @@ class ComparisonAssessment:
             raise ValueError("report assessment_id does not match comparison assessment")
         if self.report.next_cursor is not None or self.report.findings_next_cursor is not None:
             raise ValueError("report must contain complete results and findings")
+        planned_coordinates = set(self.planned_evaluations)
+        result_coordinates = {
+            PlannedEvaluation(
+                resource_id=result.resource_id,
+                rule_id=result.rule_id,
+                perspective=result.perspective,
+            )
+            for result in self.report.results
+        }
+        if result_coordinates != planned_coordinates:
+            raise ValueError("report results must exactly match planned_evaluations")
+        completed_coordinates = {
+            PlannedEvaluation(
+                resource_id=result.resource_id,
+                rule_id=result.rule_id,
+                perspective=result.perspective,
+            )
+            for result in self.report.results
+            if result.status is not EvaluationStatus.EXECUTION_ERROR
+        }
+        if self.report.coverage.planned_evaluations != len(planned_coordinates) or (
+            self.report.coverage.completed_evaluations != len(completed_coordinates)
+        ):
+            raise ValueError("report coverage does not match planned_evaluations")
 
 
 def compare_post_deploy_assessments(

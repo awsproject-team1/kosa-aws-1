@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from apps.backend.repositories.dynamodb import DynamoTable, DynamoTransactionClient
 from apps.backend.repositories.ports import DuplicateJobError, RepositoryError, StoredDataError
 from packages.contracts import (
+    AuditEventType,
     Finding,
     RemediationException,
     RemediationExceptionReason,
@@ -38,7 +39,7 @@ class DynamoDbRemediationExceptionRepository:
             "SK": f"AUDIT#{exception.approved_at}#REMEDIATION_EXCEPTION#{exception.exception_id}",
             "entity_type": "AUDIT_EVENT",
             "customer_id": exception.customer_id,
-            "event_type": "REMEDIATION_EXCEPTION_APPROVED",
+            "event_type": AuditEventType.REMEDIATION_EXCEPTION_APPROVED.value,
             "exception_id": exception.exception_id,
             "rule_id": exception.rule_id,
             "rule_version": exception.rule_version,

@@ -24,7 +24,7 @@
   "severity": "LOW | MEDIUM | HIGH | CRITICAL",
   "score": 85,
   "rationale": "string",
-  "evidence_references": ["aws:s3:bucket/example#read-resource", "isms-p-2023#control/5.2.1"],
+  "evidence_references": ["aws:s3:bucket/example#read-resource", "isms-p-2023@2023.1#control/5.2.1"],
   "rule_version": "string",
   "rubric_version": "string",
   "model_profile_id": "string"
@@ -60,7 +60,7 @@ Snapshot과 해당 Rule·Profile 정보만 전달한다. 모델 응답은 `statu
 `evidence_references` 네 필드의 JSON으로 한정된다. Resource/Rule/Perspective/Severity/Version과
 Model Profile은 Runtime이 authoritative input에서 재구성하고, evidence는 Snapshot과 Rule이
 허용한 locator의 부분집합만 허용한다. 정책 근거의 정규형은
-`{source_id}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
+`{source_id}@{source_version}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
 `aws:` namespace를 사용하므로 정책 원문 근거와 구분된다.
 
 S3 MVP의 `AWS_ACTUAL` Evidence는 C가 D의 `AwsResourceTool.READ_RESOURCE`로
@@ -134,8 +134,6 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 
 - `PolicySource`: 승인된 정책 원문의 ID, 종류(`INTERNAL_POLICY`/`ISMS_P`), 버전과
   S3 Artifact ID/content hash
-- `SourceReference`: 정책 원문 안의 locator와 content hash. `evidence_reference`는
-  `{source_id}#{locator}` 정규형으로 Rule과 평가 Evidence를 추적한다.
 - `SourceReference`: 정책 원문 안의 locator와 content hash, 그리고 그 locator가 유효한
   `source_version`. 원문이 개정되면 같은 locator라도 다른 내용을 가리키므로 Rule과 Control은
   항상 Source version까지 고정한다. 평가 Evidence는 `evidence_reference`
@@ -427,26 +425,41 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
 ```
 
-`AuditEventType`은 감사 event의 **종류**를 담는 enum이고 정본 필드명은 `event_type`이다.
-`action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가 한 item에서 `event_type`
-(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고 있어, `action`으로
-통일하면 두 값이 같은 키를 다툰다. 이관 대상은 현재 `action` 필드명을 쓰는 세 곳
+`AuditEventType`(`packages/contracts/audit.py`)은 감사 event의 **종류**를 담는 StrEnum이고 정본
+필드명은 `event_type`이다. `action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가
+한 item에서 `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고
+있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. `action`을 종류 필드로 쓰던 세 곳
 (`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
-`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)이며, 이미 `event_type`을 쓰는
-`REMEDIATION_DECIDED`·`REMEDIATION_EXCEPTION_APPROVED`는 그대로 둔다. 읽는 코드가 없어 write-only
-변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. M3에서 `DEPLOYMENT_REQUESTED`,
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)을 `event_type`으로 개명해, 다섯 writer가 모두
+같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
+`REMEDIATION_EXCEPTION_APPROVED`를 더한 다섯이며, M3의 `DEPLOYMENT_REQUESTED`,
 `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가되므로 값이 늘기 전에 선행한다.
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 합의와 함께 추가한다.
 
-`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
-역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
-옮긴다.
+`PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
+단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야
+`INDETERMINATE`를 표현할 수 있다(ADR-0020 §4). `AssessmentEvaluationPlan`은 이 좌표의 **집합**을
+갖고 개수는 집합에서 파생하므로 둘이 어긋날 수 없다. `calculate_readiness_score`는 개수가 아니라
+이 집합을 받아 완료 집합과 비교한다 — 개수 비교는 계획에 없던 평가가 누락된 평가의 자리를 채운
+경우를 통과시킨다. `AssessmentCoverage`의 개수 필드는 그대로다.
+
+`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형이므로 C의 앱 모듈이 아니라
+`packages/contracts/remediation.py`에 있다. 역할 경계를 넘는 타입이 한 역할의 앱 코드에 있으면
+다른 역할이 그 내부 모듈을 import해야 한다. `apps.backend.remediation`의 재노출은 유지한다.
 
 `AssessmentComparison`은 두 immutable Assessment의 Coverage/Readiness와 Finding Resolution을
 읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
 `model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
 `ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
-비교 가능 근거가 아니다.
+비교 가능 근거가 아니다. 비교 입력 report는 pagination cursor가 없어야 하고, 결과 좌표 집합과
+Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불완전하거나 손상된 projection은
+비교 전에 fail-closed로 거부한다. 이는 두 complete Assessment의 plan/profile/rubric/score 차이에서
+반환하는 `comparable: false`와 구별되는 입력 validation이며, API는 이를 validation 오류로 변환한다.
+
+`fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
+`fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각
+six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
+정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
 
 내부 `Assessment` selector는 `phase`를 항상 저장한다. public `POST /assessments`는 Client가 phase를
 보낼 수 없고 Backend가 `INITIAL`을 명시한다. `POST_DEPLOY_VERIFICATION`은 서로 다른

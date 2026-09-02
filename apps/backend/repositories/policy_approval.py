@@ -7,7 +7,12 @@ from uuid import uuid4
 
 from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.errors import RepositoryError
-from packages.contracts import PolicyProfile, PolicySourceApproval, RuleCandidate
+from packages.contracts import (
+    AuditEventType,
+    PolicyProfile,
+    PolicySourceApproval,
+    RuleCandidate,
+)
 
 
 class DynamoTransactionClient(Protocol):
@@ -70,7 +75,7 @@ class DynamoDbPolicyApprovalRepository:
             "event_id": event_id,
             "occurred_at": occurred_at,
             "version": 1,
-            "action": "POLICY_SOURCE_APPROVED",
+            "event_type": AuditEventType.POLICY_SOURCE_APPROVED.value,
             "source_id": approval.source_id,
             "source_version": approval.source_version,
             "approved_by": approval.approved_by,
@@ -135,7 +140,7 @@ class DynamoDbPolicyApprovalRepository:
             "event_id": event_id,
             "occurred_at": occurred_at,
             "version": 1,
-            "action": "POLICY_PROFILE_PUBLISHED",
+            "event_type": AuditEventType.POLICY_PROFILE_PUBLISHED.value,
             "policy_profile_id": profile.policy_profile_id,
             "policy_profile_version": profile.version,
             "published_by": published_by,
