@@ -11,6 +11,7 @@ from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploa
 from packages.contracts import (
     AssessmentPhase,
     PolicyRule,
+    PolicyRuleReference,
     PolicySource,
     PolicySourceKind,
     PolicySourceUploadRequest,
@@ -180,7 +181,12 @@ class PolicyIngestionLifecycleTest(unittest.TestCase):
 
         reviews = ReviewRepository({("cust-a", "source-1", "v1"): document})
         approvals = PolicyApprovalApiService(reviews)
-        approvals.approve(admin_a, source_id="source-1", source_version="v1")
+        approvals.approve(
+            admin_a,
+            source_id="source-1",
+            source_version="v1",
+            approved_rules=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
         profile = approvals.publish(
             admin_a,
             source_id="source-1",
