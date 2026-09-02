@@ -152,19 +152,22 @@ revision을 지정할 수 없다.
 adapter와 customer Lambda runtime composition은 아직 연결 대상이다. 현재 A/C API·repository·Worker
 경계는 mock/fixture로 통합 가능하지만 외부 실행이 live라고 주장하지 않는다.
 
-## Planned M3 approved-apply and verification endpoints
+## M3 approved-apply and verification endpoints
 
-아래 endpoint는 아직 노출되지 않았다. ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply
-경계는 모두 `Accepted`이며, 남은 것은 endpoint의 durable input 조회·배선이라는 A/D 통합 구현이다.
-현재 노출된 것은 `/deployments/{deploymentId}/approve` 하나이며, 그것도 injected service가 있을
-때만 handler에 배선된다.
+ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두 `Accepted`다. 아래 A endpoint는
+구현·배선됐다. `POST /remediations/{id}/deployments`와 `POST /deployments/{id}/reject`는 durable
+저장으로 완결 배선됐고, `POST /deployments/{id}/approve`·`GET /deployments/{id}`·
+`GET /deployments/{id}/verification`은 handler에 노출되나 D live plan·검증 데이터를 조립하는 reader
+(승인 plan reader, DeploymentFacts reader, 비교 입력 reader)가 D live adapter 통합에서 오므로 그 전에는
+fail-closed한다. `GET /audit-events`는 아직 미구현이다.
 
-| Method | Planned path | Purpose |
-| --- | --- | --- |
-| `POST` | `/remediations/{remediationId}/deployments` | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
-| `GET` | `/deployments/{deploymentId}` | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
-| `GET` | `/deployments/{deploymentId}/verification` | Post-Deploy Verification의 before/after 비교 projection 조회 |
-| `GET` | `/audit-events` | Admin 전용 감사 이력 조회 |
+| Method | Path | 상태 | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/remediations/{remediationId}/deployments` | 배선됨 | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
+| `GET` | `/deployments/{deploymentId}` | 배선됨(facts reader 대기) | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
+| `GET` | `/deployments/{deploymentId}/verification` | 배선됨(비교 입력 reader 대기) | Post-Deploy Verification의 before/after 비교 projection 조회 |
+| `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
+| `GET` | `/audit-events` | 대기 | Admin 전용 감사 이력 조회 |
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
   지정하지 않는다. A는 저장된 `RemediationDecision`이 actionable인지, C Worker 결과가 있는지,
@@ -193,7 +196,8 @@ adapter와 customer Lambda runtime composition은 아직 연결 대상이다. �
 - 검증 결과는 원 Assessment를 덮어쓰지 않는다. Post-Deploy Verification은 `phase`,
   `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
 
-경로와 wire shape는 구현 PR의 Producer/Consumer Contract Review에서 최종 확정한다.
+경로와 wire shape는 이 A endpoint 구현에서 확정됐다. D live adapter 통합 시 reader 조립기를 붙여
+approve/get/verification의 fail-closed를 해소하고, `/audit-events`는 후속에서 추가한다.
 
 ## Error envelope
 

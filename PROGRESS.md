@@ -2,6 +2,13 @@
 
 ## Current
 
+- M3 A Deployment endpoint를 D 실행 Contract(PR #49) 위에 구현했다(`feature/m3-a-deployment-endpoints`).
+  `DeploymentStatus`+`derive_deployment_status()`(저장 안 함, durable 사실 파생), `Action`
+  START/REJECT_DEPLOYMENT와 `AuditEventType` DEPLOYMENT_REQUESTED/REJECTED, `DeploymentRecord` store
+  (생성=DEPLOYMENT+JOB+OUTBOX(RUN_DEPLOYMENT)+audit 한 transaction, reject=terminal REJECTION+Job
+  CANCELLED), 그리고 4개 endpoint(생성·조회·검증조회·Admin reject)와 composition root 배선.
+  생성·reject는 durable 배선이 끝났고, approve/get/verification은 D live reader 조립기 통합 전까지
+  fail-closed다. 문서(API/CONTRACTS/DATABASE) 동기화. 후속 PR 검토 대기
 - M3 D 실행 경계를 PR #49로 올렸다(base `dev`, `feature/m3-d-execution-ports`). ADR-0019
   `Accepted` 근거로 `plan_hash` 허용 목록 투영·destructive 판정 공용 함수, D 실행 port 4종과
   반환형(`PlanRequestOutcome`/`TerraformStateVersion`), revision-bound `DeploymentWorker`,
@@ -532,9 +539,11 @@
 동일 Profile/rubric, Code의 Finding Resolution 및 fail-closed comparison을 사용한다. ADR-0019의
 plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확정됐다(구현 대기).
 
-- [ ] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
-  *(Deployment 생성 endpoint와 `GET /deployments/{id}`가 없으면 승인 화면이 `commit_sha`/`plan_hash`를
-  얻을 수 없다 — ADR-0019 §4, ADR-0020 §7)*
+- [x] **A — Platform/Backend:** Approval 권한 검증, 상태 전이, Audit/Observability, 결과 조회 API
+  *(Deployment 생성 `POST /remediations/{id}/deployments`, `GET /deployments/{id}`(파생 상태),
+  `GET /deployments/{id}/verification`(비교), Admin `POST /deployments/{id}/reject`와 record store를
+  D 실행 Contract(PR #49) 위에 구현. 생성·reject는 durable 배선, approve/get/verification은 D live
+  reader 조립기 대기로 fail-closed — ADR-0019 §4·§8, ADR-0020 §7)*
 - [x] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(검증 phase의 Profile
   version pin 해석과 6개 S3 Rule 적용 가능성을 회귀로 고정하고, 예외의 조회 시점 표시 경계
   `annotate_suppressed_findings()`를 조치 판정과 같은 술어로 구현 — ADR-0020 §2, §6. 조회 API

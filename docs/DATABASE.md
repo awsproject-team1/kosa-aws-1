@@ -124,6 +124,14 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
   `GSI2PK = CUSTOMER#{customer_id}#DEPLOYMENT_STATUS#{status}`로 materialize하며, 그때까지 채우지
   않는다.
+- Deployment 생성은 `DEPLOYMENT#{deployment_id}` item, `JOB#{job_id}`, `OUTBOX#JOB#{job_id}`
+  (`RUN_DEPLOYMENT`), `DEPLOYMENT_REQUESTED` audit event를 **하나의 조건부 transaction**으로 쓴다
+  (`attribute_not_exists`). 생성 시점에는 plan facts(`plan_hash`·plan/binary artifact·state)가
+  아직 없고 PLAN_COMPLETED 이후 채워지며, 그 값들은 all-present-or-all-absent다. Deployment record가
+  없으면 Job도 없다.
+- 거절은 결정적 키 `DEPLOYMENT#{deployment_id}#REJECTION` item과 `DEPLOYMENT_REJECTED` audit,
+  Job의 `CANCELLED` 전이를 한 transaction으로 쓴다. 결정적 키가 재거절과 같은 `plan_hash` 재승인을
+  막는다 (ADR-0019 §8).
 - Plan/Apply 완료 Event는 Queue payload에 값을 싣지 않고 이 event item으로 저장한다. Queue에는 계속
   `job_id`, `expected_revision`, `command`만 흐른다. Event detail은 신뢰 대상이 아니라 기록이며, D
   Worker가 `run_id`로 GitHub Actions run을 다시 읽어 대조한 결과만 Deployment 상태로 전이된다.
