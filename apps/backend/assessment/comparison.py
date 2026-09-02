@@ -16,24 +16,8 @@ from packages.contracts import (
     EvaluationStatus,
     FindingResolution,
     FindingResolutionResult,
+    PlannedEvaluation,
 )
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PlannedEvaluation:
-    """One immutable applicable coordinate, without a Rule-version comparison claim."""
-
-    resource_id: str
-    rule_id: str
-    perspective: EvaluationPerspective
-
-    def __post_init__(self) -> None:
-        for name in ("resource_id", "rule_id"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must be a non-empty string")
-        if not isinstance(self.perspective, EvaluationPerspective):
-            raise TypeError("perspective must be an EvaluationPerspective")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -12,9 +12,11 @@ from packages.contracts.assessments import (
     Finding,
     FindingResolution,
     FindingResolutionResult,
+    PlannedEvaluation,
     ReadinessScore,
     ScoringMode,
 )
+from packages.contracts.audit import AuditEventType
 from packages.contracts.deployments import (
     ApplyRunReference,
     ArtifactReference,
@@ -74,6 +76,7 @@ from packages.contracts.remediation import (
     PlanReadinessInput,
     RemediationContext,
     RemediationStartResponse,
+    RemediationSyncTarget,
 )
 from packages.contracts.remediation_policy import (
     ManualReviewCode,
@@ -97,6 +100,7 @@ __all__ = [
     "AssessmentCoverage",
     "AssessmentComparison",
     "AssessmentPhase",
+    "AuditEventType",
     "ComparisonIneligibilityReason",
     "AwsResourceOperation",
     "AwsResourceQuery",
@@ -134,10 +138,12 @@ __all__ = [
     "PolicySourceKind",
     "PolicySourceUploadRequest",
     "PlanReadinessInput",
+    "PlannedEvaluation",
     "ReadinessScore",
     "RemediationContext",
     "RemediationPatch",
     "RemediationStartResponse",
+    "RemediationSyncTarget",
     "ManualReviewCode",
     "RemediationAction",
     "RemediationDecision",

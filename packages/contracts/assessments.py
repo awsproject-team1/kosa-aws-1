@@ -263,6 +263,33 @@ class ReadinessScore:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PlannedEvaluation:
+    """One planned applicable coordinate, fixed by the server before evaluation.
+
+    The Assessment plan is this set, not a count. `rule_version` is deliberately
+    absent: a coordinate whose Rule version changed must still pair up across two
+    Assessments so the comparison can report it as `INDETERMINATE` (ADR-0020 §4).
+    """
+
+    resource_id: str
+    rule_id: str
+    perspective: EvaluationPerspective
+
+    def __post_init__(self) -> None:
+        for name in ("resource_id", "rule_id"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.perspective, EvaluationPerspective):
+            raise TypeError("perspective must be an EvaluationPerspective")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "resource_id": self.resource_id,
+            "rule_id": self.rule_id,
+            "perspective": self.perspective.value,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class FindingResolutionResult:
     """One stable Resource × Rule × Perspective comparison result."""
 

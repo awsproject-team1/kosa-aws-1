@@ -29,8 +29,11 @@ patching the IaC and syncing the current commit.
 
 Because Coverage counts `Resource × Rule × Perspective`, an Assessment that
 evaluates more than one perspective must not let the first task decide the
-immutable denominator. `AssessmentResourceWork.planned_evaluations` carries the
-server-computed total when it cannot be derived from a single resolved Rule set.
+immutable denominator. `AssessmentResourceWork.planned_coordinates` carries the
+server-fixed plan when it cannot be derived from a single resolved Rule set.
+ADR-0020 §5 later replaced the count this field once carried with the
+`(resource_id, rule_id, perspective)` set, so the denominator and the comparison
+boundary read the same plan.
 
 ## Consequences
 
