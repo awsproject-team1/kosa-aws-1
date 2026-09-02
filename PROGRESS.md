@@ -133,8 +133,9 @@
   5 run customer observation gate(60 Bedrock + 30 Code-derived DRIFT)를 추가했다. Case/perspective/전체
   90% 기준, score spread 10 이하, 실행 오류 0, exact approved Profile/artifact/run binding을
   fail-closed로 검증하며 공개 report는 민감 원문 없이 aggregate/digest만 가진다. 실제 customer
-  evidence는 ADR-0022 handoff에 따라 A/D protected run이 제공할 때만 생성한다. 전체 검증: Unit 638,
-  Contract 136, Security 74, Integration 9, Ruff 272 files.
+  evidence는 ADR-0022 handoff에 따라 A/D protected run이 제공할 때만 생성한다. 모든 Bedrock 호출이
+  실패한 완전한 입력은 p95 `null`인 품질 FAIL(exit 1)로 보고한다. 전체 검증: Unit 639,
+  Contract 136, Security 74, Integration 9, Ruff 275 files.
 
 - M4 D 데모 IaC 참조·시나리오와 폐루프 runbook 문서 완결 (ADR-0021 §1·§3): 데모 Terraform은 별도
   고객 sandbox repository에 두고 이 저장소에는 참조만 남긴다는 결정에 따라, `docs/M4-DEMO-IAC-REFERENCE.md`

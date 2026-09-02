@@ -1,5 +1,7 @@
 import hashlib
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from copy import deepcopy
@@ -158,6 +160,55 @@ class M4GoldenReleaseQualityTest(unittest.TestCase):
 
         self.assertFalse(report.passes)
         self.assertEqual(report.maximum_case_score_spread, 11)
+
+    def test_all_bedrock_errors_are_a_quality_failure_with_no_latency(self) -> None:
+        data = self._bundle_data()
+        for observation in data["observations"]:
+            if observation["execution_kind"] == "BEDROCK":
+                observation.update(
+                    status="EXECUTION_ERROR",
+                    score=0,
+                    evidence_references=[],
+                    evaluation_output_sha256=None,
+                    latency_ms=None,
+                    input_tokens=None,
+                    output_tokens=None,
+                    error_code="BEDROCK_PROVIDER_ERROR",
+                )
+            else:
+                observation.update(
+                    status="EXECUTION_ERROR",
+                    score=0,
+                    evidence_references=[],
+                )
+
+        report = self._evaluate(data)
+
+        self.assertFalse(report.passes)
+        self.assertIsNone(report.bedrock_p95_latency_ms)
+        self.assertEqual(report.execution_errors, 90)
+        self.assertIn("Bedrock p95 latency: 관측 없음", render_golden_release_markdown(report))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            observations_path = root / "observations.json"
+            observations_path.write_text(json.dumps(data), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "evaluate_m4_golden_release_gate.py"),
+                    "--observations",
+                    str(observations_path),
+                    "--output-dir",
+                    str(root / "report"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("M4 Golden release gate: FAIL", result.stdout)
 
     def test_drift_cannot_claim_a_bedrock_invocation(self) -> None:
         data = self._bundle_data()

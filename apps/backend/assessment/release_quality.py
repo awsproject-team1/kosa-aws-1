@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -147,7 +146,7 @@ class GoldenReleaseQualityReport:
     code_derived_count: int
     total_input_tokens: int
     total_output_tokens: int
-    bedrock_p95_latency_ms: int
+    bedrock_p95_latency_ms: int | None
     case_reports: tuple[CaseQualityReport, ...]
     perspective_reports: tuple[PerspectiveQualityReport, ...]
     status_accuracy: float
@@ -430,7 +429,12 @@ def render_golden_release_markdown(report: GoldenReleaseQualityReport) -> str:
         f"- Case/반복/Observation: {report.case_count} / {report.repetitions} / {report.observation_count}",
         f"- Bedrock 호출/Code 파생: {report.bedrock_call_count} / {report.code_derived_count}",
         f"- Input/Output token: {report.total_input_tokens} / {report.total_output_tokens}",
-        f"- Bedrock p95 latency: {report.bedrock_p95_latency_ms} ms",
+        "- Bedrock p95 latency: "
+        + (
+            f"{report.bedrock_p95_latency_ms} ms"
+            if report.bedrock_p95_latency_ms is not None
+            else "관측 없음 (모든 Bedrock 호출 실패)"
+        ),
         "",
         "| 관점 | Case | 상태 정확도 | Score 정확도 | Evidence 정확도 | 최소 일치율 | 최대 Score 편차 | 오류 | Gate |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -742,10 +746,11 @@ def _observation_digest(observations: tuple[GoldenReleaseObservation, ...]) -> s
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _nearest_rank_p95(values: list[int]) -> int:
+def _nearest_rank_p95(values: list[int]) -> int | None:
     if not values:
-        raise GoldenReleaseQualityError("release evidence has no Bedrock latency values")
-    return values[math.ceil(0.95 * len(values)) - 1]
+        return None
+    rank = (95 * len(values) + 99) // 100
+    return values[rank - 1]
 
 
 def _ratio(values: object) -> float:

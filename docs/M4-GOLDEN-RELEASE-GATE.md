@@ -51,6 +51,8 @@ A의 customer runtime exporter는 다음 top-level JSON을 private 파일로 만
 - IAC/AWS_ACTUAL 성공 observation: `execution_kind=BEDROCK`, latency/input/output token과 output hash 필수
 - DRIFT observation: `execution_kind=CODE_DERIVED`, latency/token은 `null`, 같은 Rule/run의 IAC/Actual과 결정적으로 일치
 - provider 실패: raw error message 없이 stable `error_code`; Gate는 실패
+- 모든 Bedrock 호출이 실패해 성공 latency가 없으면 입력은 완전한 품질 미달로 처리하고,
+  공개 report의 `bedrock_p95_latency_ms`는 `null`이며 CLI는 exit 1을 반환한다.
 - 금지: raw Prompt/response/rationale, 실제 resource ID, account/Role/credential, repository URL, policy/IaC body
 
 Private input은 public repository에 커밋하지 않는다. 보호 저장소의 object version/digest와 run URL을 release packet에 기록한다.
