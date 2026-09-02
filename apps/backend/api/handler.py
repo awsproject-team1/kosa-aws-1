@@ -6,7 +6,11 @@ import json
 from collections.abc import Mapping
 
 from apps.backend.api.assessments import AssessmentReportApiService
-from apps.backend.api.deployments import DeploymentApiService, DeploymentApprovalRequest
+from apps.backend.api.deployments import (
+    DeploymentApiService,
+    DeploymentApprovalRequest,
+    DeploymentRejectRequest,
+)
 from apps.backend.api.jobs import (
     AssessmentRequest,
     JobApiService,
@@ -22,6 +26,7 @@ from apps.backend.auth import InvalidIdentityClaims, Principal
 from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
 from packages.contracts import (
     ApiErrorResponse,
+    DeploymentRejectionReason,
     PolicyRuleReference,
     PolicySourceUploadRequest,
     RemediationExceptionReason,
@@ -165,6 +170,18 @@ class JobHttpHandler:
                     raise RequestValidationError("remediation body is invalid")
                 remediation = self._remediations.create_remediation(principal, finding_id)
                 return _response(202 if remediation.accepted else 200, remediation.to_dict())
+            if (
+                method == "POST"
+                and path.startswith("/remediations/")
+                and path.endswith("/deployments")
+            ):
+                remediation_id = path.removeprefix("/remediations/").removesuffix("/deployments")
+                if not remediation_id or "/" in remediation_id or self._deployments is None:
+                    raise JobNotFoundError("remediation not found")
+                if event.get("body") not in (None, "", "{}"):
+                    raise RequestValidationError("deployment body is invalid")
+                job = self._deployments.create_deployment(principal, remediation_id)
+                return _response(202, job.to_response().to_dict())
             if method == "POST" and path.startswith("/deployments/") and path.endswith("/approve"):
                 deployment_id = path.removeprefix("/deployments/").removesuffix("/approve")
                 if not deployment_id or "/" in deployment_id or self._deployments is None:
@@ -175,6 +192,36 @@ class JobHttpHandler:
                     raise RequestValidationError("approval body is invalid") from error
                 return _response(
                     200, self._deployments.approve(principal, deployment_id, request).to_dict()
+                )
+            if method == "POST" and path.startswith("/deployments/") and path.endswith("/reject"):
+                deployment_id = path.removeprefix("/deployments/").removesuffix("/reject")
+                if not deployment_id or "/" in deployment_id or self._deployments is None:
+                    raise JobNotFoundError("deployment not found")
+                try:
+                    reject_request = _deployment_reject_request(event.get("body"))
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("reject body is invalid") from error
+                return _response(
+                    200,
+                    self._deployments.reject(principal, deployment_id, reject_request).to_dict(),
+                )
+            if (
+                method == "GET"
+                and path.startswith("/deployments/")
+                and path.endswith("/verification")
+            ):
+                deployment_id = path.removeprefix("/deployments/").removesuffix("/verification")
+                if not deployment_id or "/" in deployment_id or self._deployments is None:
+                    raise JobNotFoundError("deployment not found")
+                return _response(
+                    200, self._deployments.get_verification(principal, deployment_id).to_dict()
+                )
+            if method == "GET" and path.startswith("/deployments/"):
+                deployment_id = path.removeprefix("/deployments/")
+                if not deployment_id or "/" in deployment_id or self._deployments is None:
+                    raise JobNotFoundError("deployment not found")
+                return _response(
+                    200, self._deployments.get_deployment(principal, deployment_id).to_dict()
                 )
             if method == "GET" and path.startswith("/jobs/"):
                 job_id = path.removeprefix("/jobs/")
@@ -264,6 +311,19 @@ def _deployment_approval_request(raw_body: object) -> DeploymentApprovalRequest:
     if set(body) != {"commit_sha", "plan_hash"}:
         raise ValueError("approval body fields are invalid")
     return DeploymentApprovalRequest(commit_sha=body["commit_sha"], plan_hash=body["plan_hash"])
+
+
+def _deployment_reject_request(raw_body: object) -> DeploymentRejectRequest:
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    allowed = {"reason", "ticket_reference"}
+    if set(body) - allowed or "reason" not in body:
+        raise ValueError("reject body fields are invalid")
+    return DeploymentRejectRequest(
+        reason=DeploymentRejectionReason(body["reason"]),
+        ticket_reference=body.get("ticket_reference"),
+    )
 
 
 def _policy_upload_request(raw_body: object) -> PolicySourceUploadRequest:
