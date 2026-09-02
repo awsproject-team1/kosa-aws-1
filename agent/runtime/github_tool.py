@@ -9,10 +9,14 @@ read만 노출하며 write나 mutation을 표현할 수 없다. 접근은 승인
 AI 입력에 위임해서는 안 된다.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from packages.contracts import IaCSnapshot
+
+_GITHUB_OWNER = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
+_GITHUB_REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class GitHubToolError(RuntimeError):
@@ -25,6 +29,26 @@ class GitHubToolScopeError(GitHubToolError):
 
 class GitHubSnapshotNotFoundError(GitHubToolError):
     """요청한 IaC snapshot이 read 상태에 존재하지 않을 때 발생한다."""
+
+
+def require_github_repository_full_name(value: object) -> str:
+    """Validate one canonical GitHub ``owner/repository`` path identity."""
+    if not isinstance(value, str):
+        raise ValueError("GitHub repository full name must be a string")
+    parts = value.split("/")
+    if len(parts) != 2:
+        raise ValueError("GitHub repository full name must use owner/repository")
+    owner, repository = parts
+    if len(owner) > 39 or _GITHUB_OWNER.fullmatch(owner) is None:
+        raise ValueError("GitHub repository owner is invalid")
+    if (
+        len(repository) > 100
+        or repository in {".", ".."}
+        or _GITHUB_REPOSITORY.fullmatch(repository) is None
+        or re.search(r"[A-Za-z0-9]", repository) is None
+    ):
+        raise ValueError("GitHub repository name is invalid")
+    return value
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

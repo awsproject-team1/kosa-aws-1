@@ -79,6 +79,13 @@ For one S3 target, the configuration JSON shape is:
 ]
 ```
 
+`github_repository` is a canonical GitHub path identity, not a URL. The owner is
+1–39 ASCII alphanumeric characters with optional single internal hyphens. The
+repository is 1–100 ASCII letters, digits, `.`, `_`, or `-`, includes at least
+one alphanumeric character, and is not `.` or `..`. Whitespace, control
+characters, query/fragment text, escapes, backslashes, and extra path segments
+are rejected before credentials are configured and again by the Worker.
+
 The GitHub Secret contains a short-lived GitHub App installation token with
 `Contents: Read-only` on the one configured repository. The customer must renew
 it before expiry through its App-token rotation process; neither a PAT nor the
@@ -142,7 +149,8 @@ sanitized gate result before customer deployment.
 
    Example selector shape: `{"<customer-id>":[{"repository_id":"<product-repository-id>","policy_profile_id":"profile-mvp-baseline"}]}`.
    `M1_ASSESSMENT_MODE` is a protected Environment variable, not a dispatch input.
-   The workflow validates mode, selector equality, exact ARN sets and credential-role
+   The workflow validates mode, selector equality, canonical GitHub repository
+   identity, exact ARN sets and credential-role
    disjointness, account, the approved Model Profile Region, and the lowercase
    40-character workload commit before configuring customer deployment credentials.
    The separately approved artifact-preparation identity has already created or
@@ -171,6 +179,6 @@ sanitized gate result before customer deployment.
    persisted Findings/Readiness Score. Record only customer-controlled evidence
    references and the workflow run URL.
 
-If the configured commit, repository, customer, account, Role, or secret does
-not match, the Worker fails closed. It never falls back to an unconfigured
+If the configured commit, canonical repository identity, customer, account, Role, or secret does
+not match, the Worker fails closed. It never falls back to an unconfigured or malformed
 repository or account in live M1 mode.

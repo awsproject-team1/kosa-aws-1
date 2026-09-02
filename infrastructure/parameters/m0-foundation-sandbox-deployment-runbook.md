@@ -45,7 +45,8 @@ Environment 또는 고객 승인 채널에서만 공유하며, 이 저장소와 
 Stop before dispatch if any item is missing, the revision differs from the reviewed revision, either
 Environment lacks required reviewers or the same valid `EXPECTED_AWS_ACCOUNT_ID`, the deployment
 Environment lacks an explicit `M1_ASSESSMENT_MODE`, live mode lacks any required M1 Secret, the
-live deployment Region differs from `fixtures/m1/assessment_model_profile.json`, either credential
+live deployment Region differs from `fixtures/m1/assessment_model_profile.json`, the configured
+GitHub identity is not a canonical `owner/repository`, either credential
 Secret ARN set overlaps the other, the artifact bucket is not versioned or owned by that account,
 or the OIDC trust boundary cannot be attested.
 
@@ -74,7 +75,8 @@ either value manually.
 `M1_ASSESSMENT_MODE` is not a workflow input. The second protected Environment
 must define it as `live` or `fixture`. Before customer deployment credentials
 are configured, the deployment job validates the selector/runtime tuple sets,
-protected reference ARN sets and their credential-role disjointness, account,
+canonical GitHub `owner/repository` identity, protected reference ARN sets and
+their credential-role disjointness, account,
 approved Model Profile Region, and immutable workload commit. The separately
 approved artifact-preparation identity has already created or verified the
 immutable package at this point. The validator prints only field names on

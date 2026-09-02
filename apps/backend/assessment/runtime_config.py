@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from agent.runtime.github_tool import require_github_repository_full_name
+
 
 class M1RuntimeConfigurationError(ValueError):
     """Live M1 configuration is absent, malformed, or outside approved scope."""
@@ -48,6 +50,7 @@ class M1AssessmentTarget:
                 raise ValueError(f"{name} must be a non-empty string")
         if re.fullmatch(r"[0-9a-f]{40}", self.commit_sha) is None:
             raise ValueError("commit_sha must be a lowercase 40-character Git SHA")
+        require_github_repository_full_name(self.github_repository)
 
 
 class M1RuntimeConfiguration:

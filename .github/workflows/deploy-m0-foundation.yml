@@ -218,7 +218,7 @@ jobs:
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
 
       - name: Validate assessment deployment configuration
-        run: python3 scripts/validate_m1_deployment_config.py
+        run: python3 -m scripts.validate_m1_deployment_config
 
       - name: Configure customer deployment credentials
         # v6.2.3

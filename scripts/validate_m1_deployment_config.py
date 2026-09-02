@@ -14,6 +14,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from agent.runtime.github_tool import require_github_repository_full_name
+
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
 TARGET_FIELDS = frozenset(
     {
@@ -121,7 +123,7 @@ def validate_environment(environment: Mapping[str, str]) -> str:
             raise DeploymentConfigurationError("aws_read_role_arn must be an approved IAM role ARN")
         if not _repository_name(target["github_repository"]):
             raise DeploymentConfigurationError(
-                "github_repository must use the owner/repository form"
+                "github_repository must be a canonical owner/repository name"
             )
         github_secret_arns.add(target["github_token_secret_id"])
         external_id_secret_arns.add(target["aws_external_id_secret_id"])
@@ -238,8 +240,11 @@ def _role_arn(value: str, account_id: str) -> bool:
 
 
 def _repository_name(value: str) -> bool:
-    parts = value.split("/")
-    return len(parts) == 2 and all(part and not part.isspace() for part in parts)
+    try:
+        require_github_repository_full_name(value)
+    except ValueError:
+        return False
+    return True
 
 
 def main() -> int:
