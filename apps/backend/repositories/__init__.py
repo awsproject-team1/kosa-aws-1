@@ -1,5 +1,6 @@
 """AWS-independent persistence ports and injected AWS adapters."""
 
+from apps.backend.repositories.audit import DynamoDbAuditEventReader
 from apps.backend.repositories.deployment import (
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
@@ -38,6 +39,7 @@ __all__ = [
     "AssessmentWorkflowRepository",
     "DuplicateJobError",
     "DynamoDbAssessmentWorkflowRepository",
+    "DynamoDbAuditEventReader",
     "DynamoDbDeploymentApprovalRepository",
     "DynamoDbDeploymentRepository",
     "DynamoDbPolicyApprovalRepository",

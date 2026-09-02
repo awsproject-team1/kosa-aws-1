@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from apps.backend.api.assessments import AssessmentReportApiService
+from apps.backend.api.audit import AuditEventApiService
 from apps.backend.api.deployments import DeploymentApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
@@ -26,6 +27,7 @@ from apps.backend.jobs import (
 )
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
+    DynamoDbAuditEventReader,
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
     DynamoDbPolicyApprovalRepository,
@@ -100,11 +102,21 @@ def _http_handler() -> JobHttpHandler:
             now=lambda: datetime.now(UTC),
         ),
         deployments=_deployment_components(repository),
+        audit_events=_audit_components(),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
     )
+
+
+def _audit_components() -> AuditEventApiService:
+    """Wire the Admin-only audit trail reader (GET /audit-events).
+
+    read-only: the reader only queries the metadata table's CUSTOMER# partition
+    for AUDIT# items. No write surface — audit events are immutable.
+    """
+    return AuditEventApiService(DynamoDbAuditEventReader(_metadata_table()))
 
 
 def _deployment_components(

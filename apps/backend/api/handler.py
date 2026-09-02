@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 from apps.backend.api.assessments import AssessmentReportApiService
+from apps.backend.api.audit import AuditEventApiService
 from apps.backend.api.deployments import (
     DeploymentApiService,
     DeploymentApprovalRequest,
@@ -26,6 +27,7 @@ from apps.backend.auth import InvalidIdentityClaims, Principal
 from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
 from packages.contracts import (
     ApiErrorResponse,
+    AuditEventType,
     DeploymentRejectionReason,
     PolicyRuleReference,
     PolicySourceUploadRequest,
@@ -43,6 +45,7 @@ class JobHttpHandler:
         remediations: RemediationApiService | None = None,
         remediation_exceptions: RemediationExceptionApiService | None = None,
         deployments: DeploymentApiService | None = None,
+        audit_events: AuditEventApiService | None = None,
         policy_sources: PolicySourceApiService | None = None,
         policy_approvals: PolicyApprovalApiService | None = None,
         policy_reader: object | None = None,
@@ -68,6 +71,9 @@ class JobHttpHandler:
         if deployments is not None and not isinstance(deployments, DeploymentApiService):
             raise TypeError("deployments must be a DeploymentApiService or None")
         self._deployments = deployments
+        if audit_events is not None and not isinstance(audit_events, AuditEventApiService):
+            raise TypeError("audit_events must be an AuditEventApiService or None")
+        self._audit_events = audit_events
         if policy_sources is not None and not isinstance(policy_sources, PolicySourceApiService):
             raise TypeError("policy_sources must be a PolicySourceApiService or None")
         if policy_approvals is not None and not isinstance(
@@ -223,6 +229,19 @@ class JobHttpHandler:
                 return _response(
                     200, self._deployments.get_deployment(principal, deployment_id).to_dict()
                 )
+            if method == "GET" and path == "/audit-events":
+                if self._audit_events is None:
+                    raise JobNotFoundError("audit events route not found")
+                try:
+                    limit, cursor, event_type = _audit_events_query(
+                        event.get("queryStringParameters")
+                    )
+                    page = self._audit_events.list_events(
+                        principal, limit=limit, cursor=cursor, event_type=event_type
+                    )
+                except (TypeError, ValueError) as error:
+                    raise RequestValidationError("audit events query is invalid") from error
+                return _response(200, page.to_dict())
             if method == "GET" and path.startswith("/jobs/"):
                 job_id = path.removeprefix("/jobs/")
                 if not job_id or "/" in job_id:
@@ -414,6 +433,36 @@ def _report_page_request(raw_query: object) -> tuple[int, str | None, str | None
     ):
         raise RequestValidationError("assessment report findings cursor is invalid")
     return limit, cursor, findings_cursor
+
+
+def _audit_events_query(
+    raw_query: object,
+) -> tuple[int | None, str | None, AuditEventType | None]:
+    """Parse the GET /audit-events query allow-list (limit, cursor, event_type)."""
+    if raw_query is None:
+        return None, None, None
+    query = _mapping(raw_query)
+    if set(query) - {"limit", "cursor", "event_type"}:
+        raise RequestValidationError("audit events query is invalid")
+    limit: int | None = None
+    limit_raw = query.get("limit")
+    if limit_raw is not None:
+        if not isinstance(limit_raw, str) or not limit_raw.isdigit():
+            raise RequestValidationError("audit events limit is invalid")
+        limit = int(limit_raw)
+    cursor = query.get("cursor")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor):
+        raise RequestValidationError("audit events cursor is invalid")
+    event_type_raw = query.get("event_type")
+    event_type: AuditEventType | None = None
+    if event_type_raw is not None:
+        if not isinstance(event_type_raw, str):
+            raise RequestValidationError("audit events event_type is invalid")
+        try:
+            event_type = AuditEventType(event_type_raw)
+        except ValueError as error:
+            raise RequestValidationError("audit events event_type is invalid") from error
+    return limit, cursor, event_type
 
 
 def _mapping(value: object) -> Mapping[str, object]:
