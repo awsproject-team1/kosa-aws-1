@@ -11,7 +11,11 @@ class ArtifactType(StrEnum):
     TERRAFORM_SNAPSHOT = "TERRAFORM_SNAPSHOT"
     AWS_SNAPSHOT = "AWS_SNAPSHOT"
     REMEDIATION_PATCH = "REMEDIATION_PATCH"
+    # The `show -json` allow-list projection whose SHA-256 is `plan_hash` (ADR-0019 §1).
     TERRAFORM_PLAN = "TERRAFORM_PLAN"
+    # The saved binary plan `terraform apply` consumes; never a hash target because
+    # Terraform does not guarantee its byte stability (ADR-0019 §1).
+    TERRAFORM_PLAN_BINARY = "TERRAFORM_PLAN_BINARY"
     GOLDEN_DATASET = "GOLDEN_DATASET"
 
 
