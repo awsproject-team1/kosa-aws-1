@@ -11,6 +11,10 @@ class DeploymentApprovalError(ValueError):
     """Raised when a deployment cannot enter the human-approval state."""
 
 
+class DeploymentConflictError(ValueError):
+    """Raised when a deployment cannot be created from the stored remediation."""
+
+
 class DeploymentApprovalRepository(Protocol):
     """A persistence seam; implementations must conditionally write exact bindings."""
 

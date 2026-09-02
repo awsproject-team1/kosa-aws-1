@@ -224,6 +224,26 @@ class CloudFormationSecurityTest(unittest.TestCase):
         statements = live_policy_condition[1]["PolicyDocument"]["Statement"]
         self.assertEqual(len(statements), 3)
 
+    def test_api_runtime_can_dispatch_deployment_work(self) -> None:
+        """The API composition root requires this exact queue URL at cold start."""
+        function = self.resources["ApiRuntimeFunction"]
+        variables = _properties(function)["Environment"]["Variables"]
+        self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
+
+    def test_deployment_http_routes_are_explicitly_jwt_protected(self) -> None:
+        """Handler branches are unreachable unless API Gateway declares each route."""
+        expected = {
+            "PostRemediationDeploymentsRoute": "POST /remediations/{remediationId}/deployments",
+            "GetDeploymentRoute": "GET /deployments/{deploymentId}",
+            "GetDeploymentVerificationRoute": "GET /deployments/{deploymentId}/verification",
+            "PostDeploymentRejectRoute": "POST /deployments/{deploymentId}/reject",
+        }
+        for name, route_key in expected.items():
+            route = _properties(self.resources[name])
+            self.assertEqual(route["RouteKey"], route_key)
+            self.assertEqual(route["AuthorizationType"], "JWT")
+            self.assertEqual(route["AuthorizerId"], "HttpApiAuthorizer")
+
     @staticmethod
     def _contains_artifact_bucket_reference(value: object) -> bool:
         if isinstance(value, dict):

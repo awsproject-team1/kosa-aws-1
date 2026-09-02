@@ -472,6 +472,7 @@ Resources:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
 
@@ -629,6 +630,40 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /remediation-exceptions"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # M3 deployment routes. API Gateway is an explicit allow-list; handler routes
+  # alone are not reachable from the customer-facing HTTP API.
+  PostRemediationDeploymentsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /remediations/{remediationId}/deployments"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetDeploymentRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /deployments/{deploymentId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetDeploymentVerificationRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /deployments/{deploymentId}/verification"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  PostDeploymentRejectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /deployments/{deploymentId}/reject"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]

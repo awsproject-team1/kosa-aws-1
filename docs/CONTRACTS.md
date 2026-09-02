@@ -380,6 +380,14 @@ exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지
   표시가 사라질 수 있다. 그것이 의도다
 - 억제 표시는 재평가를 막지 않는다. 검증 Assessment의 계획·Coverage·Readiness는 예외와 무관하게
   원 Assessment의 집합을 그대로 재실행한다 (ADR-0020 §2)
+- 배선 지점은 `GET /assessments/{id}/report`다. A의 `AssessmentReportApiService`가 report page의
+  Finding에 대해 고객 예외를 조회 시각 기준으로 join해 `AssessmentReport.suppressions`
+  (`FindingSuppression` 목록)로 실어 응답한다. `GET /deployments/{id}/verification`의
+  `AssessmentComparison`은 순수 비교라 예외를 join하지 않는다 — 억제 표시 축은 Finding별 표시이고
+  비교 축은 coordinate별 `FindingResolutionResult`로 서로 다르다. 예외 reader를 읽지 못하면 억제
+  없이(위반이 보이는 쪽으로) 응답한다. Finding item의 `evaluated_at`/`assessed_commit_sha` provenance는
+  조회 경로에서 반드시 복원되어야 하며, 복원하지 않으면 모든 Finding이 provenance 부재로 억제에서
+  제외된다
 
 ## M2 A/C remediation and readiness boundary
 
@@ -390,7 +398,9 @@ D의 Patch/Plan port에 안전하게 연결한다. customer workload write나 Ap
 - `RemediationDecision`은 API, 저장소, Worker가 사용하는 **유일한 action 정본**이다.
   `RemediationStrategy`는 존재하지 않는다.
 - C의 `RemediationContext`는 authoritative `Finding`, exact `IaCSnapshot`, deduplicated evidence
-  references만 보존한다. IAC/AWS_ACTUAL identity와 evidence를 검증하지만 action은 판정하지 않는다.
+  references와 선택적 `source_assessment_id`를 보존한다. 후자는 M3 Deployment가 검증할 immutable
+  before-state identity이며 Finding ID에서 추정하지 않는다. IAC/AWS_ACTUAL identity와 evidence를
+  검증하지만 action은 판정하지 않는다.
 - A는 context/target/customer exception을 읽고 B의 `RemediationPolicy.decide()`를 호출한다.
   Actionable decision만 revision-zero Job과 최소 Outbox를 만들고 context/decision/audit와 원자 저장한다.
 - `MANUAL_REVIEW`/`SUPPRESSED`는 정상 decision 응답이다. decision/audit만 기록하고 Job/Outbox는 없다.
@@ -442,9 +452,10 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 
 | 추가 | 소유 | 의미 |
 | --- | --- | --- |
-| `DeploymentStatus` + `derive_deployment_status()` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
-| `AuditEventType`에 `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 정본 필드명은 `event_type`이다 |
-| `Action`에 `START_DEPLOYMENT`(User)/`REJECT_DEPLOYMENT`(Admin) | A | 구현됨 (ADR-0019 §4, §8) |
+| `DeploymentStatus` + `derive_deployment_status()` + `DeploymentFacts` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않고 durable 사실에서 read 시 계산 (ADR-0019 §8) |
+| `Action.START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `AuditEventType.DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 감사 event 정본 필드명은 `event_type` (ADR-0019 §4·§8) |
+| `DeploymentRecord`/`DeploymentRejection` + Deployment 생성/조회/reject endpoint | A | 구현됨. 생성·reject는 durable 배선, 조회·검증조회는 facts/comparison reader 조립기 대기 (ADR-0019 §4·§8, ADR-0020 §7) |
+| `plan_verification_assessment()` + Assessment `phase`/correlation/scope-pin 영속화 + Worker phase 복원 | A | 구현됨. 검증 Assessment를 원 Assessment의 Profile version·planned 집합·Model Profile·rubric에 고정하고 fail-closed로 저장·복원 (ADR-0020 §2·§3) |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
 | `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
 | `plan_hash` 투영 + `has_destructive_changes` (`packages/contracts/terraform_plan.py`) | Contract | 구현됨. `show -json`의 허용 목록 투영을 A/C/D가 같은 함수로 계산 (ADR-0019 §1) |
@@ -463,7 +474,9 @@ Terraform/Provider가 출력 필드를 늘려도 조용히 hash에 들어오지 
 `DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
 순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
 apply run reference, verification 결과에서 read 시 계산한다. 저장하면 `JobStatus`·`JobCurrentStep`과
-같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). 표현 값의 전이는 다음과 같다.
+같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). apply 시작 전 Job이 terminal(`FAILED`/`CANCELLED`)
+이면 진행 중 step으로 표시하지 않고 `MANUAL_REVIEW`로 파생한다(거절은 그보다 먼저 `REJECTED`로
+잡힌다). 표현 값의 전이는 다음과 같다.
 
 ```text
 PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
@@ -474,13 +487,14 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 `AuditEventType`(`packages/contracts/audit.py`)은 감사 event의 **종류**를 담는 StrEnum이고 정본
 필드명은 `event_type`이다. `action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가
 한 item에서 `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고
-있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. 현재 값은 `DEPLOYMENT_REQUESTED`,
-`DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `POLICY_SOURCE_APPROVED`, `POLICY_PROFILE_PUBLISHED`,
-`REMEDIATION_DECIDED`, `REMEDIATION_EXCEPTION_APPROVED`의 일곱이다. M3 Contract 동결에서
-`DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 추가했다(생성 endpoint의 `DEPLOYMENT_REQUESTED` write와
-reject endpoint의 `DEPLOYMENT_REJECTED` write는 A의 후속 endpoint 배선에서 이 어휘를 사용한다).
-apply 실행 단계의 `APPLY_DISPATCHED`·`APPLY_COMPLETED`·`APPLY_FAILED`·`POST_DEPLOY_VERIFIED`·
-`MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서 추가한다.
+있어, `action`으로 통일하면 두 값이 같은 키를 다툰다. `action`을 종류 필드로 쓰던 세 곳
+(`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)을 `event_type`으로 개명해, 다섯 writer가 모두
+같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
+`REMEDIATION_EXCEPTION_APPROVED`와 A가 구현한 `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더한
+일곱이다. apply 실행 단계의 `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서
+추가한다.
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야

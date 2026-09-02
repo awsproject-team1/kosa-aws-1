@@ -126,6 +126,11 @@ def _context(value: Mapping[str, object]) -> RemediationContext:
         evidence_references=_strings(
             value.get("evidence_references"), "context evidence_references"
         ),
+        source_assessment_id=(
+            None
+            if value.get("source_assessment_id") is None
+            else _string(value.get("source_assessment_id"), "source_assessment_id")
+        ),
     )
 
 

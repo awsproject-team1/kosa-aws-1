@@ -5,12 +5,17 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Protocol
 
 from apps.backend.assessment.coverage import calculate_coverage
 from apps.backend.assessment.readiness import calculate_readiness_score
+
+# Import the display-only suppression note directly from its module rather than the
+# policy package root: policy.remediation depends only on packages.contracts, so this
+# stays acyclic (assessment already depends on policy, never the reverse).
+from apps.backend.policy.remediation import FindingSuppression
 from packages.contracts import (
     AssessmentCoverage,
     EvaluationPerspective,
@@ -70,6 +75,10 @@ class AssessmentReport:
     readiness_score: ReadinessScore | None
     next_cursor: str | None = None
     findings_next_cursor: str | None = None
+    # Read-time suppression notes for the findings on this page (ADR-0020 §6).
+    # A display-only join, never persisted; the empty default means "no exception
+    # is in force", which is the correct shape for stores that do not supply them.
+    suppressions: tuple[FindingSuppression, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.assessment_id, str) or not self.assessment_id.strip():
@@ -96,6 +105,19 @@ class AssessmentReport:
             not isinstance(self.findings_next_cursor, str) or not self.findings_next_cursor
         ):
             raise ValueError("findings_next_cursor must be a non-empty string or None")
+        if not isinstance(self.suppressions, tuple) or not all(
+            isinstance(note, FindingSuppression) for note in self.suppressions
+        ):
+            raise TypeError("suppressions must be a tuple of FindingSuppression values")
+
+    def with_suppressions(self, suppressions: tuple[FindingSuppression, ...]) -> AssessmentReport:
+        """Return a copy carrying the read-time suppression notes for this page.
+
+        The store builds the report from durable facts; the read-time join happens
+        in the API service, which has the customer's exceptions and the read clock.
+        Returning a copy keeps the store pure and the report immutable.
+        """
+        return replace(self, suppressions=suppressions)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -108,6 +130,7 @@ class AssessmentReport:
             ),
             "next_cursor": self.next_cursor,
             "findings_next_cursor": self.findings_next_cursor,
+            "suppressions": [note.to_dict() for note in self.suppressions],
         }
 
 
@@ -548,6 +571,13 @@ def _finding_from_item(item: Mapping[str, object], customer_id: str, assessment_
             score=score,
             rationale=item["rationale"],
             evidence_references=tuple(evidence),
+            # Restore evaluation provenance. Without it every read-back Finding has
+            # evaluated_at=None, and annotate_suppressed_findings() skips those
+            # (ADR-0020 §6), so read-time suppression would never appear. The two
+            # fields are stored together by Finding.to_dict() and must be restored
+            # together; a legacy item that stored neither round-trips to None.
+            assessed_commit_sha=item.get("assessed_commit_sha"),
+            evaluated_at=item.get("evaluated_at"),
         )
     except (KeyError, TypeError, ValueError):
         raise AssessmentReportStoreError("finding is invalid") from None
