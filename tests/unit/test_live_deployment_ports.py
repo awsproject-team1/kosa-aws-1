@@ -207,6 +207,7 @@ class WorkflowRunReaderTest(unittest.TestCase):
 class _FakeResourceTool(AwsResourceTool):
     def __init__(self) -> None:
         self.reads: list[str] = []
+        self.lists: list[str] = []
 
     def read_resource(self, query: AwsResourceQuery) -> AwsResourceView:
         self.reads.append(query.resource_id or "")
@@ -218,7 +219,15 @@ class _FakeResourceTool(AwsResourceTool):
         )
 
     def list_resources(self, query: AwsResourceQuery):
-        raise NotImplementedError
+        self.lists.append(query.resource_type)
+        return [
+            AwsResourceView(
+                aws_account_id=query.aws_account_id,
+                resource_type=query.resource_type,
+                resource_id=f"{query.resource_type}-1",
+                attributes={"encryption": {"enabled": True}},
+            )
+        ]
 
 
 class ActualRereadTest(unittest.TestCase):
@@ -230,26 +239,49 @@ class ActualRereadTest(unittest.TestCase):
             commit_sha=COMMIT,
         )
 
-    def _port(self, publish=None) -> LiveActualRereadPort:
+    def _port(self, publish=None, tool=None) -> LiveActualRereadPort:
         return LiveActualRereadPort(
             customer_id=CUSTOMER_ID,
             aws_account_id=AWS_ACCOUNT_ID,
-            resource_tool=_FakeResourceTool(),
+            resource_tool=tool or _FakeResourceTool(),
+            resource_types=("aws_s3_bucket", "aws_iam_role"),
             publish=publish,
         )
 
     def test_protocol_conformance(self) -> None:
         self.assertIsInstance(self._port(), ActualRereadPort)
 
-    def test_reread_triggers_publish_callback(self) -> None:
-        seen: list[tuple[str, RemediationSyncTarget]] = []
-        port = self._port(publish=lambda dep, tgt: seen.append((dep, tgt)))
+    def test_reread_reads_actual_via_resource_tool(self) -> None:
+        # 재조회는 주입된 read-only Resource Tool을 반드시 호출해야 한다(publish 유무 무관).
+        tool = _FakeResourceTool()
+        port = self._port(tool=tool)
         result = port.reread_actual(
             customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID, sync_target=self._sync_target()
         )
         self.assertIsNone(result)
+        self.assertEqual(tool.lists, ["aws_s3_bucket", "aws_iam_role"])
+
+    def test_reread_publishes_reread_views(self) -> None:
+        tool = _FakeResourceTool()
+        seen: list[tuple[str, RemediationSyncTarget, object]] = []
+        port = self._port(publish=lambda dep, tgt, views: seen.append((dep, tgt, views)), tool=tool)
+        port.reread_actual(
+            customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID, sync_target=self._sync_target()
+        )
+        self.assertEqual(tool.lists, ["aws_s3_bucket", "aws_iam_role"])
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][0], DEPLOYMENT_ID)
+        # 두 resource type에서 각각 하나씩, 재조회된 view가 콜백으로 넘어간다.
+        self.assertEqual(len(seen[0][2]), 2)
+
+    def test_requires_at_least_one_resource_type(self) -> None:
+        with self.assertRaises(ValueError):
+            LiveActualRereadPort(
+                customer_id=CUSTOMER_ID,
+                aws_account_id=AWS_ACCOUNT_ID,
+                resource_tool=_FakeResourceTool(),
+                resource_types=(),
+            )
 
     def test_rejects_out_of_scope(self) -> None:
         with self.assertRaises(LiveDeploymentPortError):

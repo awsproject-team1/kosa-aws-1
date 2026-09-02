@@ -18,11 +18,11 @@ GitHub Actions REST API와 read-only AWS Resource Tool을 호출하지만, 어�
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from agent.runtime.aws_resource_tool import AwsResourceTool
+from agent.runtime.aws_resource_tool import AwsResourceTool, AwsResourceView
 from agent.runtime.github_tool import require_github_repository_full_name
 from apps.backend.deployment.ports import (
     ActualRereadPort,
@@ -31,6 +31,8 @@ from apps.backend.deployment.ports import (
 )
 from packages.contracts import (
     ApplyDispatchReceipt,
+    AwsResourceOperation,
+    AwsResourceQuery,
     DeploymentApproval,
     TerraformPlan,
     TerraformStateVersion,
@@ -179,8 +181,10 @@ class LiveActualRereadPort(ActualRereadPort):
     """apply 후 AWS Actual을 M1 read-only Resource Tool로 다시 읽는 live 어댑터.
 
     정본 port는 반환값이 없다(`None`) — 재조회한 Actual은 검증 Assessment가 다시 평가한다
-    (ADR-0020). 이 어댑터는 sync target의 리소스를 read-only로 조회해 그 결과를 검증 입력으로
-    넘기는 콜백에 전달한다. write 표면이 없다(ADR-0007).
+    (ADR-0020). 이 어댑터는 승인된 (customer_id, aws_account_id) scope 안에서 주입된 read-only
+    Resource Tool로 `resource_types`를 `LIST_RESOURCES` 조회하고, 그 결과를 검증 입력으로 넘기는
+    콜백에 전달한다. write 표면이 없다(ADR-0007). 조회 자체가 이 어댑터의 작업이므로 publish
+    콜백 유무와 무관하게 Actual 재조회가 실제로 수행된다.
     """
 
     def __init__(
@@ -189,13 +193,26 @@ class LiveActualRereadPort(ActualRereadPort):
         customer_id: str,
         aws_account_id: str,
         resource_tool: AwsResourceTool,
-        publish: Callable[[str, RemediationSyncTarget], None] | None = None,
+        resource_types: Sequence[str],
+        publish: (
+            Callable[[str, RemediationSyncTarget, Sequence[AwsResourceView]], None] | None
+        ) = None,
     ) -> None:
         self._customer_id = _require_non_empty(customer_id, "customer_id")
         self._aws_account_id = _require_non_empty(aws_account_id, "aws_account_id")
         if not isinstance(resource_tool, AwsResourceTool):
             raise TypeError("resource_tool must be an AwsResourceTool")
+        # 재조회할 resource type이 없으면 조회 자체가 no-op가 되어 apply 후 Actual이 갱신되지
+        # 않는다. 최소 하나의 type을 요구해 이 port가 항상 실제 읽기를 수행하게 강제한다.
+        if isinstance(resource_types, str) or not isinstance(resource_types, Sequence):
+            raise TypeError("resource_types must be a sequence of resource type strings")
+        frozen_types = tuple(
+            _require_non_empty(item, "resource_types item") for item in resource_types
+        )
+        if not frozen_types:
+            raise ValueError("resource_types must not be empty")
         self._resource_tool = resource_tool
+        self._resource_types = frozen_types
         self._publish = publish
 
     def reread_actual(
@@ -208,10 +225,21 @@ class LiveActualRereadPort(ActualRereadPort):
             raise TypeError("sync_target must be a RemediationSyncTarget")
         if sync_target.customer_id != self._customer_id:
             raise LiveDeploymentPortError("sync_target is outside the tool scope")
-        # 재조회 결과는 검증 Assessment 입력으로 넘긴다. 이 어댑터는 조회 트리거만 담당하고
-        # 평가/판정은 하지 않는다(ADR-0020). publish 콜백이 없으면 트리거만 관측된다.
+        # 승인된 scope 안에서 실제 Actual을 read-only로 다시 읽는다. 이 조회가 이 어댑터의
+        # 유일한 작업이며, 평가/판정은 하지 않는다(ADR-0007·ADR-0020).
+        views: list[AwsResourceView] = []
+        for resource_type in self._resource_types:
+            query = AwsResourceQuery(
+                customer_id=self._customer_id,
+                aws_account_id=self._aws_account_id,
+                operation=AwsResourceOperation.LIST_RESOURCES,
+                resource_type=resource_type,
+            )
+            views.extend(self._resource_tool.list_resources(query))
+        # 재조회 결과는 검증 Assessment 입력으로 넘긴다. publish 콜백이 없으면 재조회는 수행되되
+        # 결과가 관측되지 않을 뿐, 조회 자체는 항상 일어난다.
         if self._publish is not None:
-            self._publish(deployment_id, sync_target)
+            self._publish(deployment_id, sync_target, tuple(views))
 
 
 class _RunReadFailure(Exception):

@@ -116,6 +116,40 @@ class TerraformPlanProjectionTest(unittest.TestCase):
         with self.assertRaisesRegex(PlanProjectionError, "address"):
             project_plan_changes(show_json([broken]))
 
+    def test_rejects_document_missing_resource_changes(self) -> None:
+        # A missing `resource_changes` is a corrupt plan; it must not default to
+        # an empty (and therefore non-destructive) projection.
+        document = {"format_version": "1.2", "terraform_version": "1.9.5"}
+        with self.assertRaisesRegex(PlanProjectionError, "resource_changes"):
+            project_plan_changes(document)
+        with self.assertRaisesRegex(PlanProjectionError, "resource_changes"):
+            has_destructive_changes(document)
+
+    def test_rejects_entry_missing_change(self) -> None:
+        broken = {
+            "address": "aws_s3_bucket.logs",
+            "mode": "managed",
+            "type": "aws_s3_bucket",
+            "name": "logs",
+        }
+        with self.assertRaisesRegex(PlanProjectionError, "change"):
+            project_plan_changes(show_json([broken]))
+
+    def test_rejects_change_missing_actions(self) -> None:
+        # A missing `change.actions` would read as non-destructive; reject it so a
+        # corrupt plan cannot bypass the destructive-change manual-review gate.
+        broken = {
+            "address": "aws_s3_bucket.logs",
+            "mode": "managed",
+            "type": "aws_s3_bucket",
+            "name": "logs",
+            "change": {"before": None, "after": {"acl": "private"}},
+        }
+        with self.assertRaisesRegex(PlanProjectionError, "actions"):
+            project_plan_changes(show_json([broken]))
+        with self.assertRaisesRegex(PlanProjectionError, "actions"):
+            has_destructive_changes(show_json([broken]))
+
     def test_binary_plan_artifact_type_is_distinct_from_hashed_projection(self) -> None:
         self.assertNotEqual(ArtifactType.TERRAFORM_PLAN, ArtifactType.TERRAFORM_PLAN_BINARY)
 

@@ -246,6 +246,13 @@ class DeploymentWorker:
             raise DeploymentWorkerError("plan is outside the customer scope")
         if plan.artifact.repository_id not in (None, work.repository_id):
             raise DeploymentWorkerError("plan is outside the repository scope")
+        # PlanExecutionResult already binds the binary to the plan artifact, so
+        # confirming the binary against the same work scope leaves no gap where a
+        # foreign binary could reach apply.
+        if result.binary_artifact.customer_id != work.customer_id:
+            raise DeploymentWorkerError("plan binary is outside the customer scope")
+        if result.binary_artifact.repository_id not in (None, work.repository_id):
+            raise DeploymentWorkerError("plan binary is outside the repository scope")
         self._plan_store.put_plan_if_absent(work=work, result=result)
         return result
 

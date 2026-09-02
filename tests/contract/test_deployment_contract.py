@@ -148,13 +148,18 @@ class PlanExecutionResultContractTest(unittest.TestCase):
         )
 
     def _binary(
-        self, artifact_type: ArtifactType = ArtifactType.TERRAFORM_PLAN_BINARY
+        self,
+        artifact_type: ArtifactType = ArtifactType.TERRAFORM_PLAN_BINARY,
+        *,
+        customer_id: str = "cust-001",
+        repository_id: str | None = None,
     ) -> ArtifactReference:
         return ArtifactReference(
             artifact_id="art-plan-bin-001",
             artifact_type=artifact_type,
             content_sha256="binary-digest-001",
-            customer_id="cust-001",
+            customer_id=customer_id,
+            repository_id=repository_id,
         )
 
     def test_bundles_plan_binary_and_state(self) -> None:
@@ -172,6 +177,22 @@ class PlanExecutionResultContractTest(unittest.TestCase):
             PlanExecutionResult(
                 plan=self._plan(),
                 binary_artifact=self._binary(ArtifactType.TERRAFORM_PLAN),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            )
+
+    def test_rejects_binary_from_a_different_customer(self) -> None:
+        with self.assertRaisesRegex(ValueError, "customer_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(customer_id="cust-other"),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            )
+
+    def test_rejects_binary_from_a_different_repository(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repository_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(repository_id="repo-other"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
             )
 

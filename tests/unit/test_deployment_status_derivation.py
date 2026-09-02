@@ -85,6 +85,42 @@ class DeriveDeploymentStatusTest(unittest.TestCase):
             DeploymentStatus.MANUAL_REVIEW,
         )
 
+    def test_failed_job_does_not_present_as_forward_progress(self) -> None:
+        # A Job that failed during planning must not read as PLAN_REQUESTED.
+        self.assertIs(
+            derive_deployment_status(
+                facts(job_status=JobStatus.FAILED, current_step=JobCurrentStep.TERRAFORM_PLAN)
+            ),
+            DeploymentStatus.MANUAL_REVIEW,
+        )
+
+    def test_cancelled_job_does_not_present_as_forward_progress(self) -> None:
+        # A non-reject cancellation must not read as still advancing.
+        self.assertIs(
+            derive_deployment_status(
+                facts(
+                    job_status=JobStatus.CANCELLED,
+                    current_step=JobCurrentStep.PRE_DEPLOY_VALIDATION,
+                )
+            ),
+            DeploymentStatus.MANUAL_REVIEW,
+        )
+
+    def test_succeeded_apply_verifies_even_if_job_marked_terminal(self) -> None:
+        # A successful apply is owned by the verification branch; a terminal
+        # job_status must not override an already-succeeded apply.
+        self.assertIs(
+            derive_deployment_status(
+                facts(
+                    job_status=JobStatus.COMPLETED,
+                    is_approved=True,
+                    apply_outcome=ApplyOutcome.SUCCEEDED,
+                    verification_outcome=VerificationOutcome.COMPARABLE,
+                )
+            ),
+            DeploymentStatus.VERIFIED,
+        )
+
     def test_applied_before_verification_starts(self) -> None:
         self.assertIs(
             derive_deployment_status(

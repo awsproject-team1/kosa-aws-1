@@ -12,6 +12,13 @@
   Integration 9 / Security 72. `plan_run_id`를 dispatch input으로 채우는 경로는 정본
   `ApplyDispatchPort` 시그니처에 자리가 없어 A Contract 확장이 필요함을 `ci/terraform/README.md`에
   명시했다. 남은 D 조각(customer runtime 배선)은 A Deployment endpoint의 `dev` 병합 뒤 착수한다.
+  2차 리뷰(P1 3건·P2 1건)도 반영했다: (1) `terraform_plan.py` 투영이 `resource_changes`/`change`/
+  `actions` 누락을 fail-closed로 거부해 손상된 plan이 destructive 게이트를 우회하지 못하게 하고,
+  (2) `PlanExecutionResult`가 binary artifact의 customer_id/repository_id를 plan artifact와 대조하며
+  worker도 이를 재확인하고, (3) `LiveActualRereadPort`가 주입된 read-only Resource Tool의
+  `list_resources`를 실제 호출(생성자 `resource_types` 추가)해 apply 후 Actual 재조회를 수행하고,
+  (4) `derive_deployment_status`가 `job_status`를 반영해 `FAILED`/`CANCELLED` Job을 `MANUAL_REVIEW`로
+  표시한다. 검증: ruff 253 files, Unit 532 / Contract 133 OK.
 - 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
   그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
   억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로

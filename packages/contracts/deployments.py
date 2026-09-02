@@ -213,6 +213,13 @@ class PlanExecutionResult:
             raise TypeError("binary_artifact must be an ArtifactReference")
         if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
             raise ValueError("binary_artifact must be a TERRAFORM_PLAN_BINARY")
+        # The binary plan and its hashed projection must describe the same
+        # deployment. Without this, a result could bundle one customer/repo's plan
+        # with another's binary and still apply against the wrong account scope.
+        if self.binary_artifact.customer_id != self.plan.artifact.customer_id:
+            raise ValueError("binary_artifact customer_id must match the plan artifact")
+        if self.binary_artifact.repository_id != self.plan.artifact.repository_id:
+            raise ValueError("binary_artifact repository_id must match the plan artifact")
         if not isinstance(self.state_version, TerraformStateVersion):
             raise TypeError("state_version must be a TerraformStateVersion")
 
@@ -455,6 +462,17 @@ def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
     # Terminal reject wins over everything else.
     if facts.is_rejected:
         return DeploymentStatus.REJECTED
+
+    # A terminally failed or cancelled Job must never present as forward progress.
+    # A successful apply is handled by the verification branch below; a Job that
+    # failed or was cancelled before that routes to MANUAL_REVIEW so it is never
+    # auto-retried and never shown as still advancing (ADR-0019 §8). Reject was
+    # already handled above, so a CANCELLED here is a non-reject cancellation.
+    if facts.apply_outcome is not ApplyOutcome.SUCCEEDED and facts.job_status in (
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    ):
+        return DeploymentStatus.MANUAL_REVIEW
 
     # Verification stage (only reached after a successful apply).
     if facts.apply_outcome is ApplyOutcome.SUCCEEDED:

@@ -49,7 +49,12 @@ def project_plan_changes(show_json: Mapping[str, object]) -> list[dict[str, obje
     """
     if not isinstance(show_json, Mapping):
         raise PlanProjectionError("show_json must be a mapping")
-    resource_changes = show_json.get("resource_changes", [])
+    # A missing or non-list `resource_changes` is a corrupt plan, not an empty one.
+    # Defaulting it to `[]` would let a truncated `show -json` project cleanly and
+    # then read as non-destructive, silently bypassing the destructive-change gate.
+    if "resource_changes" not in show_json:
+        raise PlanProjectionError("show_json must carry a resource_changes list")
+    resource_changes = show_json["resource_changes"]
     if not isinstance(resource_changes, Sequence) or isinstance(resource_changes, str | bytes):
         raise PlanProjectionError("resource_changes must be a list")
 
@@ -57,9 +62,17 @@ def project_plan_changes(show_json: Mapping[str, object]) -> list[dict[str, obje
     for entry in resource_changes:
         if not isinstance(entry, Mapping):
             raise PlanProjectionError("each resource change must be a mapping")
-        change = entry.get("change", {})
+        # `change` and `change.actions` must be present: `actions` is the sole
+        # basis of `has_destructive_changes`, so a missing one cannot default to
+        # a value that reads as non-destructive.
+        if "change" not in entry:
+            raise PlanProjectionError("each resource change must carry a change object")
+        change = entry["change"]
         if not isinstance(change, Mapping):
             raise PlanProjectionError("resource change `change` must be a mapping")
+        actions = change.get("actions")
+        if not isinstance(actions, Sequence) or isinstance(actions, str | bytes):
+            raise PlanProjectionError("resource change `change.actions` must be a list")
         projected_entry: dict[str, object] = {
             field: entry.get(field) for field in _TOP_LEVEL_FIELDS
         }
@@ -105,10 +118,10 @@ def has_destructive_changes(show_json: Mapping[str, object]) -> bool:
     for entry in project_plan_changes(show_json):
         change = entry["change"]
         assert isinstance(change, dict)
-        actions = change.get("actions")
-        if isinstance(actions, Sequence) and not isinstance(actions, str | bytes):
-            if "delete" in actions:
-                return True
+        # `project_plan_changes` already guarantees `actions` is a non-string list.
+        actions = change["actions"]
+        if "delete" in actions:
+            return True
         replace_paths = change.get("replace_paths")
         if isinstance(replace_paths, Sequence) and not isinstance(replace_paths, str | bytes):
             if len(replace_paths) > 0:
