@@ -2,6 +2,38 @@
 
 ## Current
 
+- `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
+  그 run 좌표가 필요한데(ADR-0019 §1), 정본 port에 실을 자리가 없어 live apply dispatch가
+  GitHub API 422로 거부되던 상태였다. `PlanExecutionResult.plan_run`(`WorkflowRunReference`)을
+  추가해 plan 시점 run 좌표를 durable하게 남기고, `DeploymentWork.plan_run` → `dispatch_apply(...,
+  plan_run=)` → `plan_run_id` input으로 이어 배선했다. plan과 apply는 사람 승인을 사이에 둔 서로
+  다른 실행이라 dispatch 시점에 만들어낼 수 없다. 세 경계(Contract·Worker·live 어댑터)가 각각 run
+  좌표의 배포·저장소 scope를 확인해, 다른 배포의 plan artifact를 적용하면서 나머지 승인 값은 전부
+  일치하는 상태를 막는다. A 부재로 B가 대행했으므로 A 복귀 시 Contract 확장 재확인 필요
+
+- M3 D 실행 경계를 PR #49로 올렸고 리뷰(P1 5건)를 반영했다(base `dev`,
+  `feature/m3-d-execution-ports`). #48(A Contract 동결)을 병합해 정본 Contract를 소비한다 —
+  중복 `terraform_plan.py`/D port/반환형을 제거하고 `PlanExecutionResult`/`ApplyDispatchReceipt`/
+  `WorkflowRunFacts`/`WorkflowConclusion`/`WorkflowRunReference`를 쓴다. `DeploymentWorker`는
+  `APPLY_COMPLETED`에서 apply를 재dispatch하지 않고 저장된 `run_reference`(실제 GitHub run_id)로
+  재조회하며, plan 시점 state와 실행 시점 state를 workflow에서 실제 비교하고, apply는 별도 plan
+  run의 artifact를 `plan_run_id`로 받는다. 검증: ruff 253 files, Unit 526 / Contract 128 /
+  Integration 9 / Security 72. `plan_run_id`를 dispatch input으로 채우는 경로는 정본
+  `ApplyDispatchPort` 시그니처에 자리가 없어 A Contract 확장이 필요함을 `ci/terraform/README.md`에
+  명시했다. 남은 D 조각(customer runtime 배선)은 A Deployment endpoint의 `dev` 병합 뒤 착수한다.
+  2차 리뷰(P1 3건·P2 1건)도 반영했다: (1) `terraform_plan.py` 투영이 `resource_changes`/`change`/
+  `actions` 누락을 fail-closed로 거부해 손상된 plan이 destructive 게이트를 우회하지 못하게 하고,
+  (2) `PlanExecutionResult`가 binary artifact의 customer_id/repository_id를 plan artifact와 대조하며
+  worker도 이를 재확인하고, (3) `LiveActualRereadPort`가 주입된 read-only Resource Tool의
+  `list_resources`를 실제 호출(생성자 `resource_types` 추가)해 apply 후 Actual 재조회를 수행하고,
+  (4) `derive_deployment_status`가 `job_status`를 반영해 `FAILED`/`CANCELLED` Job을 `MANUAL_REVIEW`로
+  표시한다. 검증: ruff 253 files, Unit 532 / Contract 133 OK.
+- 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
+  그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
+  억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
+  화면의 억제와 `SUPPRESSED` 판정이 갈리지 않는다. `evaluated_at`이 없는 옛 Finding은 두 시각
+  규칙을 적용할 수 없어 억제하지 않는다. 함께 §2 재평가 범위(검증 phase Profile version pin,
+  Rule 적용 가능성)를 회귀로 고정했다. 후속 PR 검토 대기
 - M1 C→A policy candidate extraction handoff Contract: `PolicyCandidateExtraction`은 exact `READY`
   normalized document, undecided `RuleCandidate`, extractor ID/version을 immutable하게 묶고 source
   version·locator·hash provenance를 fail-closed로 검증한다. 원문/정규화 text는 Contract에 없으며,
@@ -38,7 +70,9 @@
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
 - M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
   Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
-  분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
+  분기한다. D는 GitHub write 제안 경계(`ProposedPullRequest`)까지 완료했고, live GitHub/Terraform
+  adapter와 customer runtime 배선, OIDC Terraform Plan(`commit_sha`/`plan_hash`)이 남은 조각이다.
+  Plan 조각은 ADR-0019가 `Proposed`인 동안 착수하지 않는다(아래 Blocked)
 - **2026-09-02 일정 단축 운영 합의(M4의 `dev` 병합까지):** 남은 범위는 M2 통합 PR → M3 통합 PR →
   M4 통합 PR 순서로 진행하고, 각 브랜치는 앞 마일스톤이 `dev`에 병합된 뒤 최신 `dev`에서 만든다.
   통합 PR 안에서는 기능·Contract·문서·검증 관심사별 Conventional Commit을 보존하고 squash 없이
@@ -47,18 +81,69 @@
 
 ## Completed
 
-- M3 B 조회 시점 억제의 미래 평가 시각 회귀 수정: 공용 `select_in_force_exception()`이
-  `finding_evaluated_at > at`을 예외 선택 전에 fail-closed로 거부한다. 조회 뒤에 평가된 것으로
-  기록된 Finding이 그 사이 승인된 예외로 억제 표시되는 경로를 막아 `RemediationPolicy.decide()`의
-  시간 순서 불변식과 일치시켰으며, 해당 시나리오의 단위 회귀 테스트를 추가했다.
+- M3 D live 실행 어댑터·workflow template 완결 (ADR-0019 §5·§6·§7, ADR-0007): 세 주입 port의
+  live 어댑터를 `agent/runtime/live_deployment_ports.py`에 추가했다. `LiveApplyDispatchPort`는
+  승인 approval로 GitHub Actions `workflow_dispatch`만 호출하고(유일한 write 표면, input은
+  deployment_id/commit_sha/plan_hash) run 좌표를 결정적으로 유도한다. `LiveWorkflowRunReader`는
+  `run_id`로 run을 GET 재조회하고 404·미완료·`plan_hash` 마커 부재를 예외가 아니라 `not_found`
+  결론 값으로 반환해 EventBridge payload를 신뢰하지 않는다(§7). `LiveActualRereadPort`는 M1
+  read-only AWS Resource Tool을 재사용해 planned 집합으로 좁힌 리소스만 다시 읽는다(write 표면
+  없음). 고객이 1회 설치하는 `ci/terraform/` plan/apply workflow template과, Platform
+  `terraform_plan.py`와 같은 canonical 바이트를 내는 `canonical_plan_hash.py`(두 경로 동일 확인)를
+  추가했다. apply는 saved plan만 적용하고 protected Environment·OIDC Role 분리(Plan/Deployment)·
+  plan_hash와 state `lineage`·`serial` 재검증을 거치며, App에는 `workflows: write`가 없다(§6).
+  worker와 어댑터가 같은 apply workflow path allow-list(`APPLY_WORKFLOW_PATHS`) 하나를 공유한다.
+  남은 것은 customer runtime 배선(composition root 주입)과 실제 sandbox 실행으로, 이는 A의
+  Deployment endpoint(kosa-m3-a)와 보호된 자격 증명에 의존한다.
 
-- 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
-  그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
-  억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
-  화면의 억제와 `SUPPRESSED` 판정이 갈리지 않는다. `evaluated_at`이 없는 옛 Finding은 두 시각
-  규칙을 적용할 수 없어 억제하지 않는다. 함께 §2 재평가 범위(검증 phase Profile version pin,
-  Rule 적용 가능성)를 회귀로 고정했다. PR #43으로 `dev`에 병합됐다.
+- M3 D live plan/apply 실행 경로 (ADR-0019 `Accepted` 이후): `plan_hash`의 유일한 산출 근거를
+  `packages/contracts/terraform_plan.py`에 두었다. `terraform show -json`을 `resource_changes[]`의
+  11개 허용 필드로 투영하고(허용 목록이라 Terraform/Provider가 필드를 늘려도 hash가 안 흔들린다,
+  address/key 정렬·compact ASCII·no trailing newline·NaN/Inf 거부) 그 canonical 바이트의 SHA-256을
+  낸다. A 승인 재검증·C readiness·D apply 재검증이 같은 함수를 부른다. `has_destructive_changes`는
+  `delete` 또는 비어 있지 않은 `replace_paths`로 판정한다(§1). apply용 `TERRAFORM_PLAN_BINARY`
+  ArtifactType(hash 대상 아님), D 내부 `PlanRequestPort`와 반환형 `PlanRequestOutcome`
+  (plan + state `lineage`·`serial`을 쌍으로 묶는 `TerraformStateVersion` + `PlanReadinessInput`)을
+  추가했다. `apps/backend/deployment/worker.py`의 `DeploymentWorker`가 세 command를 소비해 command당
+  하나의 injected D port만 부른다 — `RUN_DEPLOYMENT`→plan, `PLAN_COMPLETED`→idempotent apply
+  dispatch(§5), `APPLY_COMPLETED`→run 재조회 후 승인 사실(repository/workflow_path/ref/plan_hash/
+  conclusion) 대조 뒤에만 Actual 재조회(§7, ADR-0020 §8). work는 queue payload가 아니라
+  (job_id, revision)으로 다시 읽고, EventBridge payload만으로 상태를 확정하지 않으며, 승인 사실과
+  하나라도 다르면 재시도 없이 차단한다. D는 승인·정책 판정을 하지 않고 상태 전이·`DeploymentStatus`
+  파생은 A 소유로 남긴다. live GitHub/Terraform SDK adapter와 customer runtime 배선은 다음 조각이다.
 
+- M3 D 실행 port 계약·Mock 병렬 구현 (ADR-0019 §5·§7 근거, CONTRACTS.md 확정 시그니처): D가
+  소유하고 A/C가 주입받는 `ApplyDispatchPort`/`WorkflowRunReader`/`ActualRereadPort` Protocol과
+  반환형 `ApplyRunReference`/`VerifiedRunOutcome`/`AwsResourceSnapshot`(`packages/contracts/`),
+  결정적 Mock 어댑터를 추가했다. dispatch는 같은 approval로 재호출돼도 새 run을 만들지 않고
+  (idempotent), run 재조회 실패는 예외가 아니라 값으로 표현하며, Actual 재조회는 read-only scope
+  강제다. live plan/apply 경로와 `plan_hash` 투영은 ADR-0019 `Accepted` 대기로 제외한다.
+
+- M2 D GitHub write 제안 경계 (ADR-0007 read-only 원칙 유지): 승인된 `RemediationPatch` 하나에서
+  Branch/Commit/PR 좌표를 결정적으로 *제안*하는 `GitHubWriteTool` port와 `ProposedPullRequest`,
+  단일 (customer_id, repository_id) scope 강제(`require_patch_scope`), patch 좌표 기반 결정적
+  branch 유도(`derive_head_branch`), 결정적 Mock 어댑터를 추가했다. 실제 write/commit/PR 생성·
+  apply 표면은 노출하지 않으며(제안만), Terraform Plan(OIDC)·`commit_sha`/`plan_hash` 산출은
+  ADR-0019 서명 이후 다음 조각이다.
+
+- M3 Contract 동결 (ADR-0019 파생 공용 Contract): ADR-0019가 `Accepted`가 되어 열린 A/D-owned
+  Contract를 기능별 커밋으로 구현했다. (1) `plan_hash`를 `terraform show -json`의 `resource_changes[]`
+  허용 목록(11개 필드) 투영의 SHA-256으로 정의하고(`packages/contracts/terraform_plan.py`),
+  A 승인·C readiness·D apply 재검증이 같은 함수를 호출해 값이 어긋날 수 없게 했다.
+  `has_destructive_changes`도 같은 투영에서 파생하고 `TERRAFORM_PLAN_BINARY` ArtifactType을 더했다.
+  (2) D 실행 port 4종(`PlanRequestPort`/`ApplyDispatchPort`/`WorkflowRunReader`/`ActualRereadPort`)을
+  `@runtime_checkable` Protocol로 고정하고 반환형(`PlanExecutionResult`, `ApplyDispatchReceipt`,
+  `WorkflowRunFacts`)과 `TerraformStateVersion`(lineage+serial 쌍)을 Contract에 두어 A/C가 fixture로
+  병렬 진입할 수 있게 했다. (3) `DeploymentStatus`를 저장하지 않고 durable 사실에서 read 시 계산하는
+  순수 함수 `derive_deployment_status()`(`DeploymentFacts` 입력)로 구현했다(ADR-0019 §8, 불변식 #9).
+  (4) `Action`에 `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin), `AuditEventType`에
+  `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더했다. `docs/CONTRACTS.md`를 구현에 맞춰 동기화했고
+  ruff·Unit·Contract·Security·Integration 검증을 통과했다. A endpoint 배선은 Next다. 후속 PR 검토 대기
+- M3 B 조회 시점 억제의 미래 평가 시각 회귀 수정 (PR #47, `dev` 병합): 공용
+  `select_in_force_exception()`이 `finding_evaluated_at > at`을 예외 선택 전에 fail-closed로
+  거부한다. 조회 뒤에 평가된 것으로 기록된 Finding이 그 사이 승인된 예외로 억제 표시되는 경로를
+  막아 `RemediationPolicy.decide()`의 시간 순서 불변식과 일치시켰으며, 해당 시나리오의 단위 회귀
+  테스트를 추가했다.
 - M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
   low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
   쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
@@ -354,13 +439,12 @@
   `GET /deployments/{deploymentId}/verification`을 `compare_post_deploy_assessments()`에 배선한다
   (ADR-0020 §1·§7). 계획 집합 주입은 `DynamoDbAssessmentReportStore.get_planned_evaluations()`로
   이미 가능하다
-- **M3 Contract 동결 — ADR-0019 Accepted 이후:** `DeploymentStatus` enum과
-  `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
-  `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
-  `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin 전용), D 실행 port 시그니처 4종
-  (`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`, `ActualRereadPort`)과 그 반환형.
-  **port 시그니처를 맨 앞에 둔다** — 확정되는 순간 A·C가 Protocol + fixture로 병렬 진입한다.
-  M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
+- **M3 A endpoint 배선 (Contract 동결 이후):** Deployment 생성 `POST /remediations/{id}/deployments`,
+  `GET /deployments/{id}`, `GET /deployments/{id}/verification`, `POST /deployments/{id}/reject`를
+  방금 동결한 Contract(`DeploymentStatus`/`derive_deployment_status()`, D port, `plan_hash` 투영,
+  `START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED`) 위에 올린다.
+  검증 조회는 `compare_post_deploy_assessments()`에 complete `ComparisonAssessment` 두 개를
+  fail-closed로 배선한다 (ADR-0019 §4·§8, ADR-0020 §1·§7).
 - **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
   `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
@@ -471,7 +555,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 Terraform state/lock 전제는 ADR-0019 `Accepted`로 확정됨 — live plan 경로 구현 가능, 구현 대기)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 destructive 판정은 ADR-0019 `Accepted`로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR·Terraform plan SDK adapter와 customer runtime 배선)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.
@@ -496,8 +580,14 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   Resolution의 결정적 projection 및 18개 Post-Deploy Golden fixture 구현. durable Assessment/endpoint
   wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
-  재검증, AWS Actual 재조회 *(plan_hash 허용 목록 투영, state `lineage`·`serial`, saved plan apply,
-  run 재조회 — ADR-0019 §1, §2, §5, §7)*
+  재검증, AWS Actual 재조회 *(D 소유 코드·어댑터·template 완료: `plan_hash` 허용 목록 투영·destructive
+  판정 공용 함수(`packages/contracts/terraform_plan.py`), state `lineage`·`serial` 쌍 대조,
+  `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 세 command를 injected port로
+  분기하는 `DeploymentWorker`, 세 live 어댑터(`agent/runtime/live_deployment_ports.py`)와 고객용
+  `ci/terraform/` plan/apply workflow template·canonical `plan_hash` 스크립트 — ADR-0019
+  §1·§2·§5·§6·§7. **남은 조각(A/보호된 자격 증명 의존):** customer runtime 배선(composition root의
+  live 어댑터 주입)과 실제 sandbox E2E 실행. 이는 A의 Deployment 생성·상태 endpoint(kosa-m3-a)와
+  protected Environment/OIDC Role 설정 뒤에 이어진다)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.

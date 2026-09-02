@@ -1,0 +1,125 @@
+# Terraform plan workflow template (ADR-0019 §1, §2, §6).
+#
+# 고객 관리자가 이 파일을 자신의 IaC repository의 `.github/workflows/terraform-plan.yml`로
+# 복사해 설치한다. Platform(GitHub App)은 이 파일을 만들거나 수정하지 않는다.
+#
+# 이 workflow는 승인 대상 plan을 만든다:
+#   - refreshed saved plan(binary)을 만들고,
+#   - `terraform show -json`을 허용 목록으로 투영한 canonical 바이트의 SHA-256을 plan_hash로 낸다.
+#   - plan 시점의 state `lineage`/`serial`을 함께 기록한다(§2, apply 직전 재검증 근거).
+#
+# 아래 <PLACEHOLDER>는 고객 관리자가 자신의 bootstrap 산출물로 채운다.
+name: terraform-plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: Platform이 발급한 Deployment 식별자
+        required: true
+        type: string
+      commit_sha:
+        description: 계획 대상 default-branch merge commit
+        required: true
+        type: string
+
+# OIDC로 AWS Role을 assume하기 위한 최소 권한. workflows/contents write 없음(§6).
+permissions:
+  id-token: write
+  contents: read
+
+# run name에 deployment/commit을 담아 Platform이 재조회 시 식별할 수 있게 한다(§7).
+run-name: "terraform-plan deployment=${{ inputs.deployment_id }} commit=${{ inputs.commit_sha }}"
+
+concurrency:
+  # 한 Deployment의 plan은 직렬화한다.
+  group: terraform-plan-${{ inputs.deployment_id }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.9.5" # §1: Terraform version 고정 (.terraform.lock.hcl과 함께)
+  AWS_REGION: "<AWS_REGION_PLACEHOLDER>"
+  TF_PLAN_ROLE_ARN: "<TERRAFORM_PLAN_ROLE_ARN_PLACEHOLDER>"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Configure AWS credentials via OIDC (plan role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform (pinned)
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (shared state backend)
+        # state key는 (repository_id, workspace)로 분리한다(§2). workspace 이름은
+        # {customer_id}-{repository_id}이며 bootstrap이 만든 backend를 가리킨다.
+        run: terraform init -input=false
+
+      - name: Terraform fmt/validate (platform-side CI_VALIDATION, not customer CI)
+        run: |
+          terraform fmt -check
+          terraform validate
+
+      - name: Record state lineage and serial (§2)
+        id: state
+        # plan 시점 lineage/serial을 출력이자 artifact 파일로 남긴다. apply는 이 파일을 받아
+        # 실행 시점 state와 실제로 대조한다(§2). serial 단독이 아니라 lineage와 쌍으로 남긴다.
+        run: |
+          terraform state pull > /tmp/state.json
+          lineage="$(jq -r '.lineage' /tmp/state.json)"
+          serial="$(jq -r '.serial' /tmp/state.json)"
+          echo "lineage=$lineage" >> "$GITHUB_OUTPUT"
+          echo "serial=$serial" >> "$GITHUB_OUTPUT"
+          jq -n --arg lineage "$lineage" --argjson serial "$serial" \
+            '{lineage: $lineage, serial: $serial}' > plan.state.json
+
+      - name: Terraform plan (saved binary plan only)
+        # apply는 이 saved plan만 적용한다(§1). 재계산 금지.
+        run: terraform plan -input=false -out=tfplan.binary
+
+      - name: Emit canonical JSON projection and plan_hash (§1)
+        id: hash
+        # `terraform show -json`의 전체 원본은 감사용으로 보관하고, hash 대상은 허용 목록으로
+        # 투영한 canonical 바이트다. Platform의 packages/contracts/terraform_plan.py와 같은 규칙:
+        # resource_changes[]의 11개 허용 필드, address/key 정렬, compact ASCII, no trailing newline.
+        run: |
+          terraform show -json tfplan.binary > plan.full.json
+          python3 ci/terraform/canonical_plan_hash.py plan.full.json > plan.canonical.json
+          echo "plan_hash=$(sha256sum plan.canonical.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan artifacts (saved binary + full json + canonical + state)
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.deployment_id }}
+          path: |
+            tfplan.binary
+            plan.full.json
+            plan.canonical.json
+            plan.state.json
+          retention-days: 7
+
+      # 완료 신호는 Platform으로 게시하되 정본이 아니다(§7). Platform이 run_id로 재조회해
+      # plan_hash/state를 대조한다. 게시 step은 고객 bootstrap이 제공하는 OIDC 대상에 맞춘다.
+      - name: Publish plan-completed signal (deployment/commit/plan_hash/run_id/conclusion only)
+        if: always()
+        run: |
+          echo "deployment_id=${{ inputs.deployment_id }}"
+          echo "commit_sha=${{ inputs.commit_sha }}"
+          echo "plan_hash=${{ steps.hash.outputs.plan_hash }}"
+          echo "state_lineage=${{ steps.state.outputs.lineage }}"
+          echo "state_serial=${{ steps.state.outputs.serial }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "conclusion=${{ job.status }}"

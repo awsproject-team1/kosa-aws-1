@@ -1,0 +1,136 @@
+# Terraform apply workflow template (ADR-0019 §1, §2, §5, §6, §7).
+#
+# 고객 관리자가 이 파일을 자신의 IaC repository의 `.github/workflows/terraform-apply.yml`로
+# 복사해 설치한다. Platform의 LiveApplyDispatchPort가 이 workflow를 workflow_dispatch로
+# 트리거하며, Platform은 완료 Event를 신뢰하지 않고 run_id로 이 run을 재조회한다(§7).
+#
+# 경계:
+#   - 승인된 saved plan(binary)만 apply한다(§1). apply 시점 재계산 금지.
+#   - dispatch 직전과 실행 시작 시 state lineage/serial이 plan 시점과 모두 같을 때만 apply한다(§2).
+#   - run name에 plan_hash=<hash>를 담아 Platform이 승인 사실과 대조할 수 있게 한다(§7).
+#
+# `plan_run_id`는 Platform이 채운다. apply는 자기 run이 아니라 plan run의 saved artifact를
+# 적용하므로(§1), `PlanExecutionResult.plan_run`에 durable하게 남은 run 좌표를
+# `LiveApplyDispatchPort`가 dispatch input으로 전달한다. 네 입력은 아래 선언과 정확히 일치한다.
+
+name: terraform-apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: Platform이 발급한 Deployment 식별자
+        required: true
+        type: string
+      commit_sha:
+        description: 승인된 default-branch merge commit
+        required: true
+        type: string
+      plan_hash:
+        description: 승인된 plan의 canonical 투영 SHA-256
+        required: true
+        type: string
+      plan_run_id:
+        # 필수로 유지한다. 비면 `download-artifact`가 plan run이 아니라 현재 run에서 artifact를
+        # 찾아 "어떤 plan을 apply하는가"가 불분명해진다. 값은 Platform이 항상 채운다.
+        description: plan artifact를 만든 terraform-plan workflow run의 id (§1, 다른 run의 artifact)
+        required: true
+        type: string
+
+# actions:read는 다른 run의 artifact를 내려받기 위해 필요하다(§1). contents:write는 없다(§6).
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+# run name에 plan_hash를 담는다. Platform의 LiveWorkflowRunReader가 이 이름에서 plan_hash를
+# 뽑아 승인 사실과 대조한다(§7). Event를 신뢰하지 않으므로 run 자체에 대조 근거를 둔다.
+run-name: "terraform-apply deployment=${{ inputs.deployment_id }} plan_hash=${{ inputs.plan_hash }}"
+
+concurrency:
+  # 한 Deployment의 apply는 직렬화해 이중 apply 여지를 줄인다(정본 방어는 Platform의 조건부 전이).
+  group: terraform-apply-${{ inputs.deployment_id }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.9.5"
+  AWS_REGION: "<AWS_REGION_PLACEHOLDER>"
+  TF_APPLY_ROLE_ARN: "<TERRAFORM_DEPLOYMENT_ROLE_ARN_PLACEHOLDER>"
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    # §6: protected Environment + required reviewers를 2차 게이트로 둔다.
+    environment: customer-terraform-apply
+    steps:
+      - name: Checkout approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Download approved plan artifacts from the plan run (§1)
+        # plan은 별도 terraform-plan run에서 만들어졌다. 그 run의 id와 인증으로 artifact를
+        # 내려받는다 — 같은 run 안에서 만든 artifact가 아니므로 run-id/github-token이 필요하다.
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.deployment_id }}
+          run-id: ${{ inputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials via OIDC (deployment role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform (pinned)
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (shared state backend)
+        run: terraform init -input=false
+
+      - name: Re-verify plan_hash against the saved plan (§1)
+        # 승인된 plan_hash와 다운로드한 saved plan의 canonical 투영이 같은지 재확인한다.
+        run: |
+          terraform show -json tfplan.binary > plan.full.json
+          python3 ci/terraform/canonical_plan_hash.py plan.full.json > plan.canonical.json
+          actual="$(sha256sum plan.canonical.json | cut -d' ' -f1)"
+          if [ "$actual" != "${{ inputs.plan_hash }}" ]; then
+            echo "plan_hash mismatch: approved=${{ inputs.plan_hash }} actual=$actual"
+            exit 1
+          fi
+
+      - name: Re-verify state lineage/serial has not moved (§2)
+        # plan 이후 state가 이동/재생성되면 apply하지 않는다. plan 시점 값(plan.state.json)과
+        # 실행 시점 값을 **실제로 비교**해 하나라도 다르면 실패시킨다. serial 단독이 아니라
+        # lineage와 쌍으로 대조한다 — state 재생성 시 lineage가 새로 발급되고 serial이 초기화되므로.
+        # saved plan 강제로 Terraform도 이동을 거부하지만, 여기서 값으로 관측해 먼저 차단한다.
+        run: |
+          terraform state pull > state.now.json
+          plan_lineage="$(jq -r '.lineage' plan.state.json)"
+          plan_serial="$(jq -r '.serial' plan.state.json)"
+          now_lineage="$(jq -r '.lineage' state.now.json)"
+          now_serial="$(jq -r '.serial' state.now.json)"
+          echo "plan  lineage=$plan_lineage serial=$plan_serial"
+          echo "now   lineage=$now_lineage serial=$now_serial"
+          if [ "$plan_lineage" != "$now_lineage" ] || [ "$plan_serial" != "$now_serial" ]; then
+            echo "state moved since plan; refusing to apply (ADR-0019 section 2)"
+            exit 1
+          fi
+
+      - name: Terraform apply (saved plan only, §1)
+        # 승인된 saved plan만 적용한다. apply 시점 재계산 금지.
+        run: terraform apply -input=false tfplan.binary
+
+      - name: Publish apply-completed signal (deployment/commit/plan_hash/run_id/conclusion only, §7)
+        if: always()
+        run: |
+          echo "deployment_id=${{ inputs.deployment_id }}"
+          echo "commit_sha=${{ inputs.commit_sha }}"
+          echo "plan_hash=${{ inputs.plan_hash }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "conclusion=${{ job.status }}"

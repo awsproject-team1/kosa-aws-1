@@ -31,17 +31,42 @@ from agent.runtime.github_write_tool import (
     require_patch_scope,
     require_remediation_patch,
 )
+from agent.runtime.live_deployment_ports import (
+    APPLY_WORKFLOW_PATHS,
+    LiveActualRereadPort,
+    LiveApplyDispatchPort,
+    LiveDeploymentPortError,
+    LiveWorkflowRunReader,
+)
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
+from agent.runtime.mock_deployment_ports import (
+    DeploymentPortError,
+    DeploymentPortScopeError,
+    MockActualRereadPort,
+    MockApplyDispatchPort,
+    MockPlanRequestPort,
+    MockWorkflowRunReader,
+)
 from agent.runtime.mock_github_tool import MockGitHubTool
 from agent.runtime.mock_github_write_tool import MockGitHubWriteTool
+from apps.backend.deployment.ports import (
+    ActualRereadPort,
+    ApplyDispatchPort,
+    PlanRequestPort,
+    WorkflowRunReader,
+)
 
 __all__ = [
+    "ActualRereadPort",
+    "ApplyDispatchPort",
     "AwsResourceNotFoundError",
     "AwsResourceScopeError",
     "AwsResourceTool",
     "AwsResourceToolError",
     "AwsResourceView",
     "AssumeRoleS3ResourceTool",
+    "DeploymentPortError",
+    "DeploymentPortScopeError",
     "GitHubSnapshotNotFoundError",
     "GitHubRestSnapshotTool",
     "GitHubTool",
@@ -50,13 +75,24 @@ __all__ = [
     "GitHubWriteScopeError",
     "GitHubWriteTool",
     "GitHubWriteToolError",
+    "APPLY_WORKFLOW_PATHS",
     "IaCDocument",
     "IaCDocumentReader",
     "IaCSnapshotRequest",
+    "LiveActualRereadPort",
+    "LiveApplyDispatchPort",
+    "LiveDeploymentPortError",
+    "LiveWorkflowRunReader",
+    "MockActualRereadPort",
+    "MockApplyDispatchPort",
     "MockAwsResourceTool",
     "MockGitHubTool",
     "MockGitHubWriteTool",
+    "MockPlanRequestPort",
+    "MockWorkflowRunReader",
+    "PlanRequestPort",
     "ProposedPullRequest",
+    "WorkflowRunReader",
     "derive_head_branch",
     "require_patch_scope",
     "require_read_operation",
