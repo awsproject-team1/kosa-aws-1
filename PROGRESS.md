@@ -49,6 +49,76 @@
 
 ## Completed
 
+- M1 A `record_candidate_extraction` 재시도 idempotency (PR #44 리뷰 대응 3): C의 추출 Worker가
+  at-least-once로 같은 결과를 재전송하면 `attribute_not_exists` 조건이 transaction을 취소해 정상
+  재시도가 오류로 보였다. 이제 충돌 시 이미 저장된 CANDIDATES·PolicySource item이 지금 쓰려는
+  것과 같은 내용이면 흡수하고, 다르면 immutability를 지켜 fail-closed한다
+  (`DynamoDbPolicyCatalogBootstrap`과 같은 관용구, transaction 맥락). read table이 없으면 확인
+  불가하므로 원래 오류를 유지한다. 동일 내용 흡수·상이 내용 거부 unit 테스트 추가.
+
+- M1 A `load_publication` 게시 입력 의미 명확화 (PR #44 리뷰 대응 2): 리뷰는 "필터가
+  `RULE_NOT_APPROVED` 게이트를 앞질러 삼킨다"고 지적했다. 확인 결과 `publish_profile`은 넘어온
+  후보를 전부 Profile에 넣고 미승인이면 거부하므로, 게시 입력 자체가 "승인된 Rule"이어야 한다
+  (미승인 후보를 섞으면 부분 승인 Source가 영영 게시 불가). 따라서 필터는 유지하되 그 의미를
+  "게이트 대신이 아니라 게시 대상 집합을 승인 record로 정의"로 주석·docstring에 명확히 하고,
+  잘못된 설명("게이트가 거른다")을 실제 동작에 맞게 고쳤다. 부분 승인(후보 2건 중 1건 승인) 시
+  게시 입력에 승인된 후보만 온다는 것을 unit 테스트로 고정했다. `publish_profile`의 승인 검사는
+  lifecycle과 승인 record 정합성 이중 방어로 남는다.
+
+- M1 A 승인 API 부분 승인 지원 (PR #44 리뷰 대응 1): `PolicyApprovalApiService.approve`가
+  승인할 `approved_rules`(`(rule_id, version)` 목록)를 받아 `load_review` 후보 중 그 부분집합만
+  골라 `approve_source()`에 넘긴다. 리뷰어가 추출 후보 전량이 아니라 일부만 승인할 수 있어야
+  검토 게이트가 형식으로 남지 않는다(`docs/POLICY_INGESTION.md` 인수 조건 4). handler는
+  `POST .../approve` body(`{"approved_rules": [...]}`)를 파싱하고, 후보에 없는 Rule·빈 목록·중복은
+  거부한다. B 순수 함수(`approve_source`)는 이미 "고른 것만 받는" 형태라 변경하지 않았다.
+  부분 승인·미존재 Rule 거부·빈 선택 거부 unit 테스트 추가. `docs/API.md` 갱신.
+
+- M1 A 승인·게시 API를 배포 Lambda에 배선: `runtime.py`의 `_http_handler`에
+  `_policy_approval_components()`를 추가해 `PolicyApprovalApiService`(write는 low-level
+  `transaction_client`, read는 resource `table` 주입)를 `policy_approvals`로 주입했다.
+  `m0-foundation.yaml`에 `POST /policy-sources/{sourceId}/versions/{version}/approve`와
+  `POST /policy-profiles` 라우트(JWT 인가)를 추가해 handler의 승인·게시 경로가 배포 Lambda에서
+  도달 가능해졌다. 배선 unit 테스트 2건 추가, cfn-lint E-level 0. 다만 후보를 실제 저장하는
+  경로(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 없어 E2E 승인 흐름은
+  그 조각 이후에 완성된다. 이 통합 브랜치는 PR #41의 업로드 배선 커밋 3건을 cherry-pick으로
+  흡수해, 업로드→정규화→승인→게시 API 배선을 한 PR로 담는다(PR #41은 이 PR로 대체).
+
+- M1 A 승인·게시 read 어댑터: `DynamoDbPolicyApprovalRepository`에 `load_review`/`load_publication`을
+  구현했다. `load_review`는 `POLICY_INGESTION` item(문서)과 `#CANDIDATES` item(후보)을 읽어
+  `(NormalizedPolicyDocument, RuleCandidate 튜플)`을 돌려주고, `load_publication`은 후보 규칙 전체와
+  승인 record의 `approved_rules`를 조합해 승인된 후보만 APPROVED로 표시한 뒤 approval·PolicySource와
+  함께 돌려준다. read는 자동 un/marshal되는 resource `table`을 쓰고(생성자 `table` 주입, 없으면
+  read가 fail-closed), write는 기존 low-level `transaction_client`를 그대로 쓴다. 문서 재구성은
+  `policy_ingestion.document_from_item`(get_document에서 추출한 공용 함수)을 재사용하되, 그 모듈이
+  api 계층을 참조해 패키지 초기화와 순환하므로 `load_review` 안에서 지연 import한다. read 3건
+  (문서·후보 복원, 승인 표시, read table 없을 때 fail-closed) unit 테스트를 추가했다.
+
+- M1 A 정책 후보 추출 결과 persistence: C가 PR #42로 넘긴 `PolicyCandidateExtraction`(READY
+  정규화 문서 + 미결정 후보 규칙 전체)을 승인·게시 read 경로가 읽을 형태로 저장하는
+  `DynamoDbPolicyApprovalRepository.record_candidate_extraction`을 추가했다. 두 item을 조건부
+  transaction으로 함께 쓴다 — `POLICY_SOURCE#{sid}#VERSION#{ver}#CANDIDATES`(후보 규칙 전체,
+  `load_review`가 읽음)와 `POLICY_SOURCE#{sid}#VERSION#{ver}`(`PolicySource`, `load_publication`이
+  반환·대조). `POLICY_INGESTION` item이 `READY`이고 artifact 바인딩이 일치할 때만 저장해 추측
+  저장을 막는다. `PolicySource`의 artifact 바인딩은 문서에서 유도하므로 승인 record 바인딩과
+  어긋날 수 없다. 원문·정규화 텍스트는 DynamoDB에 담지 않는다. `docs/DATABASE.md`에 candidate
+  SK를 문서화하고 unit 테스트를 추가했다.
+
+- M1 A 정책 원문 업로드 세션 API를 배포 Lambda에 배선: 도메인 코드(`PolicySourceApiService`,
+  `DynamoDbPolicySourceUploadRepository`)는 이미 dev에 있었으나 composition root
+  (`apps/backend/api/runtime.py`)가 이를 `JobHttpHandler`에 주입하지 않아 `POST
+  /policy-sources/uploads`·`GET /policy-sources/{id}/versions/{v}`·`.../process` 라우트가 배포
+  Lambda에서 404를 반환했다. `_policy_source_components()`를 추가해 `POLICY_SOURCE_BUCKET_NAME`
+  버킷과 tenant-scoped 업로드 세션 리포지토리, 정규화 처리용 S3 reader를 구성하고 `policy_sources`
+  ·`policy_reader`로 주입했다. 서버가 `source_id`/`source_version`을 발급하므로 client는 저장
+  위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`는 `policy_ingestion` 모듈에서 직접
+  import한다(패키지 export는 순환 import를 활성화). 배선 성공·버킷 미설정 fail-closed를 검증하는
+  unit 테스트 2건을 추가했다. 이어 `m0-foundation.yaml`에 업로드 세션 라우트 3건
+  (`POST /policy-sources/uploads`, `GET /policy-sources/{sourceId}/versions/{version}`,
+  `POST .../process`, JWT 인가)과 `ApiRuntimeFunction`의 `POLICY_SOURCE_BUCKET_NAME`(=ArtifactBucket)
+  환경변수, `ApiRuntimeRole`의 tenant-scoped S3 권한(`s3:PutObject`/`s3:GetObject`를 `customers/*`
+  prefix로만)을 추가해 라우트가 배포 Lambda에서 실제 도달 가능해졌다. cfn-lint E-level 0,
+  CloudFormation 보안 테스트 통과.
+
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
   에 두고 `AssessmentEvaluationPlan`이 좌표 집합을 가지며 개수는 거기서 파생하므로 둘이 어긋날 수

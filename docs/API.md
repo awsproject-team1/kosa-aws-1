@@ -26,27 +26,33 @@
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 
-## Planned customer policy ingestion endpoints
+## Customer policy ingestion endpoints
 
-아래 endpoint는 아직 노출되지 않았다. B의 정규화·승인·게시 Contract와 판정은
-`apps/backend/policy/ingestion/`에 구현됐고(`normalize_upload`, `approve_source`,
-`publish_profile`), A의 API/Storage 배선과 C의 AI 추출 품질 Gate가 남아 있다. 상세 workflow와
-인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
+업로드 세션 3개(`uploads`/`process`/status 조회)와 승인(`/approve`)·Profile 게시(`/policy-profiles`)는
+API Gateway 라우트와 Lambda composition root(`apps/backend/api/runtime.py`)에 배선돼 노출된다.
+승인·게시의 검토 read(`load_review`/`load_publication`)는 C가 넘긴 `PolicyCandidateExtraction`을
+저장한 `#CANDIDATES` item에서 후보를 읽는다. 다만 그 후보를 실제로 저장하는 경로
+(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 배선되지 않아, 후보가 없는
+Source를 승인하면 빈 후보로 `EMPTY_PROFILE` 거부가 난다. 상세 workflow와 인수 조건은
+`docs/POLICY_INGESTION.md`를 따른다.
 
-| Method | Planned path | Purpose |
-| --- | --- | --- |
-| `POST` | `/policy-sources/uploads` | JWT-derived customer Scope의 업로드 세션 생성 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 업로드 검증과 비동기 파싱·정규화 시작 |
-| `GET` | `/policy-sources/{sourceId}/versions/{version}` | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 검토된 Source/Control/Rule version 승인 |
-| `POST` | `/policy-profiles` | 승인된 Rule version으로 versioned Policy Profile 게시 |
-| `POST` | `/policy-profiles/{profileId}/versions` | 승인된 Rule version으로 Profile 새 version 게시 |
+| Method | Path | Status | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/policy-sources/uploads` | 배선됨 | JWT-derived customer Scope의 업로드 세션 생성 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
+| `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 배선됨(후보 저장 대기) | 검토된 Source/Control/Rule version 승인 |
+| `POST` | `/policy-profiles` | 배선됨(후보 저장 대기) | 승인된 Rule version으로 versioned Policy Profile 게시 |
+| `POST` | `/policy-profiles/{profileId}/versions` | 대기 | 승인된 Rule version으로 Profile 새 version 게시 |
 
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
 그대로 사용하며 스스로 만들지 않는다.
 
-승인과 Profile 게시는 서로 다른 operation이다. `/approve`는 Source/Control/Rule version을
-확정하고, Profile 게시가 그 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
+승인과 Profile 게시는 서로 다른 operation이다. `/approve`는 body로 승인할 Rule 목록
+(`{"approved_rules": [{"rule_id", "version"}, ...]}`)을 받아 그 부분집합만 확정한다 — 리뷰어가
+추출 후보 6건 중 4건만 고를 수 있어야 하므로, AI 후보 전량에 서명을 찍지 않는다
+(`docs/POLICY_INGESTION.md` 인수 조건 4). 목록에 없는 후보는 CANDIDATE로 남는다. Profile 게시가
+그 승인된 Rule들을 평가 경계로 만든다. 게시는 승인되지 않은 Source·Rule을
 참조하거나 승인된 것과 다른 Source version을 가리키는 Profile을 거부한다. 두 단계를 하나의
 operation으로 합치더라도 이 거부 조건과 audit record 기록은 동일하게 적용한다.
 

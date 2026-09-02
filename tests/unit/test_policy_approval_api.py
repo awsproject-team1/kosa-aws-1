@@ -11,6 +11,7 @@ from packages.contracts import (
     NormalizedDocumentUnit,
     NormalizedPolicyDocument,
     PolicyRule,
+    PolicyRuleReference,
     PolicySource,
     PolicySourceFormat,
     PolicySourceKind,
@@ -45,22 +46,28 @@ DOCUMENT = NormalizedPolicyDocument(
         ),
     ),
 )
-RULE = PolicyRule(
-    rule_id="RULE-1",
-    version="v1",
-    title="Rule",
-    severity=RuleSeverity.HIGH,
-    applicable_phases=(AssessmentPhase.INITIAL,),
-    resource_types=("AWS::S3::Bucket",),
-    source_references=(
-        SourceReference(
-            source_id="source-1",
-            source_version="v1",
-            locator="heading/access/item/1",
-            content_sha256="unit-sha",
+
+
+def _rule(rule_id: str) -> PolicyRule:
+    return PolicyRule(
+        rule_id=rule_id,
+        version="v1",
+        title="Rule",
+        severity=RuleSeverity.HIGH,
+        applicable_phases=(AssessmentPhase.INITIAL,),
+        resource_types=("AWS::S3::Bucket",),
+        source_references=(
+            SourceReference(
+                source_id="source-1",
+                source_version="v1",
+                locator="heading/access/item/1",
+                content_sha256="unit-sha",
+            ),
         ),
-    ),
-)
+    )
+
+
+RULE = _rule("RULE-1")
 
 
 class Repository:
@@ -69,7 +76,8 @@ class Repository:
         self.profile = None
 
     def load_review(self, **kwargs):
-        return DOCUMENT, (RuleCandidate(rule=RULE),)
+        # 두 후보를 돌려줘 부분 승인(하나만 고르기)을 검증할 수 있게 한다.
+        return DOCUMENT, (RuleCandidate(rule=_rule("RULE-1")), RuleCandidate(rule=_rule("RULE-2")))
 
     def record_approval(self, **kwargs):
         self.approval = kwargs
@@ -108,6 +116,7 @@ class PolicyApprovalApiServiceTest(unittest.TestCase):
             self.admin,
             source_id="source-1",
             source_version="v1",
+            approved_rules=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
         )
         profile = self.service.publish(
             self.admin,
@@ -121,12 +130,46 @@ class PolicyApprovalApiServiceTest(unittest.TestCase):
         self.assertEqual(profile.rule_references[0].rule_id, "RULE-1")
         self.assertIsNotNone(self.repository.profile)
 
+    def test_approves_only_the_selected_subset_of_candidates(self) -> None:
+        # load_review는 RULE-1/RULE-2 두 후보를 주지만 리뷰어는 RULE-1만 승인한다.
+        approval = self.service.approve(
+            self.admin,
+            source_id="source-1",
+            source_version="v1",
+            approved_rules=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
+        approved_ids = {reference.rule_id for reference in approval.approved_rules}
+        self.assertEqual(approved_ids, {"RULE-1"})
+        # 승인 record에 저장되는 후보도 고른 것만이다.
+        recorded = {candidate.rule.rule_id for candidate in self.repository.approval["candidates"]}
+        self.assertEqual(recorded, {"RULE-1"})
+
+    def test_approving_a_rule_absent_from_candidates_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.service.approve(
+                self.admin,
+                source_id="source-1",
+                source_version="v1",
+                approved_rules=(PolicyRuleReference(rule_id="RULE-404", version="v1"),),
+            )
+
+    def test_empty_approval_selection_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.service.approve(
+                self.admin, source_id="source-1", source_version="v1", approved_rules=()
+            )
+
     def test_user_cannot_approve_or_publish(self) -> None:
         user = Principal(
             subject="user", client_id="client", customer_id="cust-a", roles=frozenset({Role.USER})
         )
         with self.assertRaises(AuthorizationDenied):
-            self.service.approve(user, source_id="source-1", source_version="v1")
+            self.service.approve(
+                user,
+                source_id="source-1",
+                source_version="v1",
+                approved_rules=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+            )
         with self.assertRaises(AuthorizationDenied):
             self.service.publish(
                 user,

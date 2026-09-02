@@ -242,40 +242,7 @@ class DynamoDbPolicySourceUploadRepository:
         self, *, customer_id: str, source_id: str, source_version: str
     ) -> NormalizedPolicyDocument:
         item = self._get_item(customer_id, source_id, source_version)
-        try:
-            return NormalizedPolicyDocument(
-                source_id=_string(item, "source_id"),
-                source_version=_string(item, "source_version"),
-                artifact_id=_string(item, "artifact_id"),
-                s3_version_id=_string(item, "s3_version_id"),
-                content_sha256=_string(item, "content_sha256"),
-                filename=_string(item, "filename"),
-                declared_media_type=_string(item, "declared_media_type"),
-                byte_size=_integer(item, "byte_size"),
-                status=IngestionStatus(_string(item, "status")),
-                detected_media_type=_optional_string(item, "detected_media_type"),
-                source_format=_optional_enum(item, "source_format", PolicySourceFormat),
-                parser_id=_optional_string(item, "parser_id"),
-                parser_version=_optional_string(item, "parser_version"),
-                normalized_artifact_id=_optional_string(item, "normalized_artifact_id"),
-                normalized_sha256=_optional_string(item, "normalized_sha256"),
-                units=tuple(
-                    NormalizedDocumentUnit(
-                        locator=_string(unit, "locator"),
-                        kind=DocumentUnitKind(_string(unit, "kind")),
-                        text_sha256=_string(unit, "text_sha256"),
-                        text_length=_integer(unit, "text_length"),
-                        origin=_string(unit, "origin"),
-                    )
-                    for unit in _mappings(item, "units")
-                ),
-                warnings=tuple(
-                    ExtractionWarningCode(value) for value in _strings(item, "warnings")
-                ),
-                failure_code=_optional_enum(item, "failure_code", IngestionFailureCode),
-            )
-        except (TypeError, ValueError) as error:
-            raise RuntimeError("policy ingestion record is invalid") from error
+        return document_from_item(item)
 
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str
@@ -293,6 +260,46 @@ class DynamoDbPolicySourceUploadRepository:
         if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
             raise LookupError("policy source version not found")
         return item
+
+
+def document_from_item(item: Mapping[str, object]) -> NormalizedPolicyDocument:
+    """`POLICY_INGESTION` item을 `NormalizedPolicyDocument`로 재구성한다.
+
+    수집 상태 조회(`get_document`)와 승인 read 경로(`load_review`)가 같은 재구성을 쓰도록
+    공용 함수로 둔다. item 형태가 어긋나면 예외 대신 `RuntimeError`로 감싼다.
+    """
+    try:
+        return NormalizedPolicyDocument(
+            source_id=_string(item, "source_id"),
+            source_version=_string(item, "source_version"),
+            artifact_id=_string(item, "artifact_id"),
+            s3_version_id=_string(item, "s3_version_id"),
+            content_sha256=_string(item, "content_sha256"),
+            filename=_string(item, "filename"),
+            declared_media_type=_string(item, "declared_media_type"),
+            byte_size=_integer(item, "byte_size"),
+            status=IngestionStatus(_string(item, "status")),
+            detected_media_type=_optional_string(item, "detected_media_type"),
+            source_format=_optional_enum(item, "source_format", PolicySourceFormat),
+            parser_id=_optional_string(item, "parser_id"),
+            parser_version=_optional_string(item, "parser_version"),
+            normalized_artifact_id=_optional_string(item, "normalized_artifact_id"),
+            normalized_sha256=_optional_string(item, "normalized_sha256"),
+            units=tuple(
+                NormalizedDocumentUnit(
+                    locator=_string(unit, "locator"),
+                    kind=DocumentUnitKind(_string(unit, "kind")),
+                    text_sha256=_string(unit, "text_sha256"),
+                    text_length=_integer(unit, "text_length"),
+                    origin=_string(unit, "origin"),
+                )
+                for unit in _mappings(item, "units")
+            ),
+            warnings=tuple(ExtractionWarningCode(value) for value in _strings(item, "warnings")),
+            failure_code=_optional_enum(item, "failure_code", IngestionFailureCode),
+        )
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("policy ingestion record is invalid") from error
 
 
 def _string(item: Mapping[str, object], name: str) -> str:

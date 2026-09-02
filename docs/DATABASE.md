@@ -46,6 +46,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Policy profile | `CUSTOMER#{customer_id}` | `POLICY_PROFILE#{policy_profile_id}` | Allowed policy/rule boundary |
 | Policy source | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}` | Policy artifact identity, version, hash |
 | Policy ingestion | `CUSTOMER#{customer_id}` | `POLICY_INGESTION#{source_id}#VERSION#{version}` | Upload validation, parser/normalization status and immutable Artifact references |
+| Policy candidate extraction | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#CANDIDATES` | C가 넘긴 후보 규칙(전체 정의)과 extractor 메타. 승인 read 경로가 읽는다. 승인 전 lifecycle |
 | Rule metadata | `CUSTOMER#{customer_id}` | `RULE#{rule_id}#VERSION#{version}` | Published Rule and source reference (candidate lifecycle is managed before publication) |
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
