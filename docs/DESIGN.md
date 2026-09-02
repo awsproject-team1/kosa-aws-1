@@ -227,7 +227,14 @@ Operational and domain metadata uses DynamoDB while large immutable artifacts us
 
 ## Decision records
 
-장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery, AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow, Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology, Customer Policy Ingestion을 다룬다.
+장기 영향을 주는 선택은 `docs/decisions/`에서 관리한다. 현재 ADR은 Repository/Delivery,
+AI Evaluation Boundary, Scoring Reliability, Policy Knowledge, Serverless Workflow,
+Persistence/Artifact Storage, Approved Deployment Boundary, Customer Deployment Topology,
+M0 Contract Fixtures, M0 Platform Foundation, IaC/Actual/Drift 평가, Natural-language
+Orchestration/Model Profiles, SQS Resumable Worker, Artifact Audit/Tenant Isolation,
+Customer Policy Ingestion, M1 Finding/Readiness Projection, Remediation Scope/Exceptions,
+Remediation Consumption Contract, Approved Deployment Execution Boundary, Post-Deploy
+Verification/Comparison, Demo/Release Readiness Gate를 다룬다 (ADR-0001~0021).
 
 ADR-0019(승인 배포 실행 경계)는 `Proposed`로 남아 있다. ADR-0020(Post-Deploy Verification과
 before/after 비교)과 ADR-0021(Demo·Release readiness gate)은 `Accepted`다. 따라서 D의 live
