@@ -28,19 +28,21 @@
 
 ## Customer policy ingestion endpoints
 
-업로드 세션 3개(`uploads`/`process`/status 조회)는 API Gateway 라우트와 Lambda composition
-root(`apps/backend/api/runtime.py`)에 배선돼 노출된다. 승인(`/approve`)과 Profile 게시는 아직
-노출되지 않았다 — write 판정(`approve_source`/`publish_profile`)은 구현됐지만, 그 앞단의 검토 read
-(`load_review`/`load_publication`)가 C의 AI 후보 추출(`RuleCandidate`) 결과 저장에 의존하기
-때문이다. 상세 workflow와 인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
+업로드 세션 3개(`uploads`/`process`/status 조회)와 승인(`/approve`)·Profile 게시(`/policy-profiles`)는
+API Gateway 라우트와 Lambda composition root(`apps/backend/api/runtime.py`)에 배선돼 노출된다.
+승인·게시의 검토 read(`load_review`/`load_publication`)는 C가 넘긴 `PolicyCandidateExtraction`을
+저장한 `#CANDIDATES` item에서 후보를 읽는다. 다만 그 후보를 실제로 저장하는 경로
+(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 배선되지 않아, 후보가 없는
+Source를 승인하면 빈 후보로 `EMPTY_PROFILE` 거부가 난다. 상세 workflow와 인수 조건은
+`docs/POLICY_INGESTION.md`를 따른다.
 
 | Method | Path | Status | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/policy-sources/uploads` | 배선됨 | JWT-derived customer Scope의 업로드 세션 생성 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 대기(C read 의존) | 검토된 Source/Control/Rule version 승인 |
-| `POST` | `/policy-profiles` | 대기(C read 의존) | 승인된 Rule version으로 versioned Policy Profile 게시 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 배선됨(후보 저장 대기) | 검토된 Source/Control/Rule version 승인 |
+| `POST` | `/policy-profiles` | 배선됨(후보 저장 대기) | 승인된 Rule version으로 versioned Policy Profile 게시 |
 | `POST` | `/policy-profiles/{profileId}/versions` | 대기 | 승인된 Rule version으로 Profile 새 version 게시 |
 
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을

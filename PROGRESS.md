@@ -43,6 +43,16 @@
 
 ## Completed
 
+- M1 A 승인·게시 API를 배포 Lambda에 배선: `runtime.py`의 `_http_handler`에
+  `_policy_approval_components()`를 추가해 `PolicyApprovalApiService`(write는 low-level
+  `transaction_client`, read는 resource `table` 주입)를 `policy_approvals`로 주입했다.
+  `m0-foundation.yaml`에 `POST /policy-sources/{sourceId}/versions/{version}/approve`와
+  `POST /policy-profiles` 라우트(JWT 인가)를 추가해 handler의 승인·게시 경로가 배포 Lambda에서
+  도달 가능해졌다. 배선 unit 테스트 2건 추가, cfn-lint E-level 0. 다만 후보를 실제 저장하는
+  경로(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 없어 E2E 승인 흐름은
+  그 조각 이후에 완성된다. 이 통합 브랜치는 PR #41의 업로드 배선 커밋 3건을 cherry-pick으로
+  흡수해, 업로드→정규화→승인→게시 API 배선을 한 PR로 담는다(PR #41은 이 PR로 대체).
+
 - M1 A 승인·게시 read 어댑터: `DynamoDbPolicyApprovalRepository`에 `load_review`/`load_publication`을
   구현했다. `load_review`는 `POLICY_INGESTION` item(문서)과 `#CANDIDATES` item(후보)을 읽어
   `(NormalizedPolicyDocument, RuleCandidate 튜플)`을 돌려주고, `load_publication`은 후보 규칙 전체와

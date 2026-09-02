@@ -10,11 +10,15 @@ from collections.abc import Mapping
 from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
+from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.jobs import AssessmentScopeDenied, OutboxDispatcher, SqsWorkflowDispatcher
-from apps.backend.repositories import DynamoDbAssessmentWorkflowRepository
+from apps.backend.repositories import (
+    DynamoDbAssessmentWorkflowRepository,
+    DynamoDbPolicyApprovalRepository,
+)
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
 
@@ -77,6 +81,7 @@ def _http_handler() -> JobHttpHandler:
         service,
         assessment_reports=AssessmentReportApiService(jobs=repository, reports=reports),
         policy_sources=policy_sources,
+        policy_approvals=_policy_approval_components(),
         policy_reader=policy_reader,
     )
 
@@ -105,6 +110,26 @@ def _policy_source_components() -> tuple[PolicySourceApiService, object]:
         source_version_factory=lambda: f"ver-{uuid.uuid4()}",
     )
     return service, s3_client
+
+
+def _policy_approval_components() -> PolicyApprovalApiService:
+    """정책 Source 승인·Profile 게시 서비스를 구성한다.
+
+    write(승인 record·Profile)는 low-level `transaction_client`로 조건부 transaction을 쓰고,
+    read(`load_review`/`load_publication`)는 자동 un/marshal되는 resource `table`로 읽으므로
+    같은 metadata table을 두 형태로 주입한다.
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    repository = DynamoDbPolicyApprovalRepository(
+        table_name=table_name,
+        transaction_client=boto3.client("dynamodb"),
+        table=_metadata_table(),
+    )
+    return PolicyApprovalApiService(repository)
 
 
 def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWorkflowDispatcher]:
