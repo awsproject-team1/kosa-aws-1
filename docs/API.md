@@ -110,8 +110,7 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   `TerraformPlan`과 정확히 일치할 때만 승인 상태를 기록하며, Apply 직전에 다시 검증한다.
   `plan_hash`가 어떤 바이트의 digest인지(`resource_changes[]`를 허용 목록으로 투영한 canonical
   JSON), Terraform state `lineage`·`serial`을 함께 재검증한다는 점, apply 대상 commit이 default
-  branch의 merge commit이라는 점은 ADR-0019에서 `Proposed` 상태로 정의됐다. 합의 전에는 이 세
-  값을 구현에서 임의로 정하지 않는다.
+  branch의 merge commit이라는 점은 ADR-0019에서 `Accepted`로 확정됐다. 구현은 이 정의를 따른다.
 
 세부 wire shape와 runtime validation은 `packages/contracts/`가 정본이고 M0 예시는
 `fixtures/m0/`에 둔다.
@@ -155,10 +154,10 @@ adapter와 customer Lambda runtime composition은 아직 연결 대상이다. �
 
 ## Planned M3 approved-apply and verification endpoints
 
-아래 endpoint는 아직 노출되지 않았다. ADR-0020 비교 Contract는 `Accepted` 및 구현됐지만, endpoint의
-durable input 조회·배선은 A/D 통합 작업이고 ADR-0019의 Deployment 생성/Apply 경계는 여전히
-`Proposed`다. 현재 노출된 것은 `/deployments/{deploymentId}/approve` 하나이며, 그것도 injected
-service가 있을 때만 handler에 배선된다.
+아래 endpoint는 아직 노출되지 않았다. ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply
+경계는 모두 `Accepted`이며, 남은 것은 endpoint의 durable input 조회·배선이라는 A/D 통합 구현이다.
+현재 노출된 것은 `/deployments/{deploymentId}/approve` 하나이며, 그것도 injected service가 있을
+때만 handler에 배선된다.
 
 | Method | Planned path | Purpose |
 | --- | --- | --- |
