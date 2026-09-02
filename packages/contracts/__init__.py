@@ -21,7 +21,7 @@ from packages.contracts.assessments import (
     ReadinessScore,
     ScoringMode,
 )
-from packages.contracts.audit import AuditEventType
+from packages.contracts.audit import AuditEventPage, AuditEventType, AuditEventView
 from packages.contracts.deployments import (
     ApplyDispatchReceipt,
     ApplyOutcome,
@@ -124,7 +124,9 @@ __all__ = [
     "AssessmentCoverage",
     "AssessmentComparison",
     "AssessmentPhase",
+    "AuditEventPage",
     "AuditEventType",
+    "AuditEventView",
     "ComparisonIneligibilityReason",
     "AwsResourceOperation",
     "AwsResourceQuery",
