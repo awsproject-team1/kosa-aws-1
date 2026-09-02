@@ -6,18 +6,21 @@ import json
 import os
 import uuid
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
+from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.jobs import AssessmentScopeDenied, OutboxDispatcher, SqsWorkflowDispatcher
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbPolicyApprovalRepository,
+    DynamoDbRemediationExceptionRepository,
 )
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
@@ -83,6 +86,31 @@ def _http_handler() -> JobHttpHandler:
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         policy_reader=policy_reader,
+        remediation_exceptions=_remediation_exception_components(),
+    )
+
+
+def _remediation_exception_components() -> RemediationExceptionApiService:
+    """고객 Remediation 예외 등록 서비스를 구성한다.
+
+    예외는 `(customer_id, rule_id, rule_version)`에 묶이고 반드시 만료되며 관리자만 등록한다.
+    예외 record와 audit event를 한 transaction으로 쓰므로 low-level `transaction_client`와
+    resource `table`을 함께 주입한다.
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    repository = DynamoDbRemediationExceptionRepository(
+        boto3.resource("dynamodb").Table(table_name),
+        table_name=table_name,
+        transaction_client=boto3.client("dynamodb"),
+    )
+    return RemediationExceptionApiService(
+        repository=repository,
+        exception_id_factory=lambda: f"rex-{uuid.uuid4()}",
+        now=lambda: datetime.now(UTC),
     )
 
 

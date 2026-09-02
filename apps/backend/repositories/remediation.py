@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 from apps.backend.repositories.dynamodb import DynamoTable, DynamoTransactionClient
+from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.ports import DuplicateJobError, RepositoryError, StoredDataError
 from packages.contracts import (
     AuditEventType,
@@ -131,7 +132,9 @@ def _put(table_name: str, item: dict[str, object]) -> dict[str, object]:
     return {
         "Put": {
             "TableName": table_name,
-            "Item": item,
+            # transact_write_items는 low-level client API라 AttributeValue 형식을 요구한다.
+            # plain dict를 그대로 넘기면 실제 AWS 호출에서 직렬화가 깨진다.
+            "Item": marshal_item(item),
             "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
         }
     }

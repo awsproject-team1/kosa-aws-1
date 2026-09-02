@@ -622,6 +622,16 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 고객 Remediation 예외 등록(관리자 전용, JWT 인가). 예외는 반드시 만료되며
+  # (customer_id, rule_id, rule_version)에 묶인다.
+  PostRemediationExceptionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /remediation-exceptions"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   HttpApiDefaultStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:

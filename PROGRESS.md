@@ -49,6 +49,25 @@
 
 ## Completed
 
+- M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
+  low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
+  쓰는데 이 파일만 누락) 실제 AWS 호출에서 직렬화가 깨질 상태였다. `_put`이 `marshal_item(item)`을
+  쓰도록 고치고, 단위 테스트 기대값을 AttributeValue 형식으로 갱신했으며, 모든 write item 값이
+  AttributeValue로 직렬화되는지 확인하는 회귀 테스트를 추가했다. (query 경로는 resource table의
+  auto-marshal이라 무관)
+
+- M2 A Remediation 예외 등록 API를 배포 Lambda에 배선: `RemediationExceptionApiService`와
+  `DynamoDbRemediationExceptionRepository`는 이미 dev에 있었으나 composition root
+  (`runtime.py`)가 주입하지 않아 `POST /remediation-exceptions`가 배포 Lambda에서 404였다.
+  `_remediation_exception_components()`를 추가해 예외 record와 audit event를 한 transaction으로
+  쓰는 리포지토리(관리자 전용, `(customer_id, rule_id, rule_version)` 바인딩, 만료 필수)를
+  구성·주입했다. 배선 unit 테스트 2건 추가. 이어 `m0-foundation.yaml`에
+  `POST /remediation-exceptions` API Gateway 라우트(JWT 인가)를 추가해 배포 Lambda에서 도달
+  가능해졌다. cfn-lint E-level 0. **RemediationApiService와 DeploymentApiService는 이번 범위에서
+  제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
+  프로덕션 구현이 없고(테스트 fake만), 후자는 `DeploymentPlanReader.get_approval_input` 구현이
+  아예 없으며 D의 plan 저장(ADR-0019 `Proposed`)에 의존한다.
+
 - M1 A `record_candidate_extraction` 재시도 idempotency (PR #44 리뷰 대응 3): C의 추출 Worker가
   at-least-once로 같은 결과를 재전송하면 `attribute_not_exists` 조건이 transaction을 취소해 정상
   재시도가 오류로 보였다. 이제 충돌 시 이미 저장된 CANDIDATES·PolicySource item이 지금 쓰려는

@@ -8,10 +8,12 @@ from unittest.mock import patch
 
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
+from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.api.runtime import (
     EnvironmentAssessmentScope,
     _policy_approval_components,
     _policy_source_components,
+    _remediation_exception_components,
 )
 from apps.backend.auth import Principal, Role
 from apps.backend.jobs import AssessmentScopeDenied
@@ -126,3 +128,24 @@ class PolicyApprovalComponentsTest(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 _policy_approval_components()
+
+
+class RemediationExceptionComponentsTest(unittest.TestCase):
+    """Remediation 예외 등록 서비스가 composition root에서 구성되는지 검증한다."""
+
+    def test_builds_service_from_metadata_table(self) -> None:
+        with (
+            patch.dict(sys.modules, {"boto3": _fake_boto3_module()}),
+            patch.dict(os.environ, {"METADATA_TABLE_NAME": "metadata-table"}, clear=True),
+        ):
+            service = _remediation_exception_components()
+
+        self.assertIsInstance(service, RemediationExceptionApiService)
+
+    def test_missing_metadata_table_fails_closed(self) -> None:
+        with (
+            patch.dict(sys.modules, {"boto3": _fake_boto3_module()}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            with self.assertRaises(ValueError):
+                _remediation_exception_components()
