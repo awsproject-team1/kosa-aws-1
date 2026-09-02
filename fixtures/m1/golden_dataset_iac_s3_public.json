@@ -8,5 +8,5 @@
   "expected_status": "FAIL",
   "expected_score_min": 0,
   "expected_score_max": 30,
-  "expected_evidence_references": ["github:terraform/s3.tf#aws_s3_bucket_public_access_block.logs"]
+  "expected_evidence_references": ["terraform:terraform/s3.tf#aws_s3_bucket_public_access_block.logs"]
 }

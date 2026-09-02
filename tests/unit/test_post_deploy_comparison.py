@@ -21,10 +21,11 @@ def result(
     *,
     rule_version: str = "v1",
     rule_id: str = "S3-001",
+    resource_id: str = "bucket-001",
     perspective: EvaluationPerspective = EvaluationPerspective.AWS_ACTUAL,
 ) -> EvaluationResult:
     return EvaluationResult(
-        resource_id="bucket-001",
+        resource_id=resource_id,
         rule_id=rule_id,
         perspective=perspective,
         status=status,
@@ -59,7 +60,9 @@ def assessment(
         findings=(),
         coverage=AssessmentCoverage(
             planned_evaluations=len(plan),
-            completed_evaluations=len(plan) if score is not None else 0,
+            completed_evaluations=sum(
+                item.status is not EvaluationStatus.EXECUTION_ERROR for item in results
+            ),
         ),
         readiness_score=(
             ReadinessScore(score=score, evaluated_evaluations=len(plan)) if score else None
@@ -110,7 +113,7 @@ class PostDeployComparisonTest(unittest.TestCase):
                 )
                 self.assertEqual(comparison.finding_resolutions[0].resolution, expected)
 
-    def test_rule_version_change_and_absent_counterpart_are_indeterminate(self) -> None:
+    def test_rule_version_change_is_indeterminate(self) -> None:
         changed = compare_post_deploy_assessments(
             deployment_id="dep-001",
             source=assessment("asm-before", (result(EvaluationStatus.FAIL),)),
@@ -118,10 +121,11 @@ class PostDeployComparisonTest(unittest.TestCase):
                 "asm-after", (result(EvaluationStatus.PASS, rule_version="v2"),)
             ),
         )
-        absent = compare_post_deploy_assessments(
-            deployment_id="dep-001",
-            source=assessment("asm-before", (result(EvaluationStatus.FAIL),)),
-            verification=assessment(
+        self.assertEqual(changed.finding_resolutions[0].resolution, FindingResolution.INDETERMINATE)
+
+    def test_missing_planned_result_is_rejected_before_comparison(self) -> None:
+        with self.assertRaisesRegex(ValueError, "results must exactly match"):
+            assessment(
                 "asm-after",
                 (),
                 plan=(
@@ -131,10 +135,7 @@ class PostDeployComparisonTest(unittest.TestCase):
                         perspective=EvaluationPerspective.AWS_ACTUAL,
                     ),
                 ),
-            ),
-        )
-        self.assertEqual(changed.finding_resolutions[0].resolution, FindingResolution.INDETERMINATE)
-        self.assertEqual(absent.finding_resolutions[0].resolution, FindingResolution.INDETERMINATE)
+            )
 
     def test_partial_report_is_rejected(self) -> None:
         for field_name in ("next_cursor", "findings_next_cursor"):
@@ -160,11 +161,50 @@ class PostDeployComparisonTest(unittest.TestCase):
                         report=report,
                     )
 
+    def test_report_results_must_exactly_match_the_immutable_plan(self) -> None:
+        complete = assessment("asm-001", (result(EvaluationStatus.FAIL),))
+        wrong_result = result(EvaluationStatus.FAIL, rule_id="S3-OTHER")
+        report = AssessmentReport(
+            assessment_id=complete.assessment_id,
+            results=(wrong_result,),
+            findings=(),
+            coverage=complete.report.coverage,
+            readiness_score=complete.report.readiness_score,
+        )
+
+        with self.assertRaisesRegex(ValueError, "results must exactly match"):
+            ComparisonAssessment(
+                assessment_id=complete.assessment_id,
+                model_profile_id=complete.model_profile_id,
+                rubric_version=complete.rubric_version,
+                planned_evaluations=complete.planned_evaluations,
+                report=report,
+            )
+
+    def test_report_coverage_must_match_the_immutable_plan(self) -> None:
+        complete = assessment("asm-001", (result(EvaluationStatus.FAIL),))
+        report = AssessmentReport(
+            assessment_id=complete.assessment_id,
+            results=complete.report.results,
+            findings=(),
+            coverage=AssessmentCoverage(planned_evaluations=2, completed_evaluations=1),
+            readiness_score=complete.report.readiness_score,
+        )
+
+        with self.assertRaisesRegex(ValueError, "coverage does not match"):
+            ComparisonAssessment(
+                assessment_id=complete.assessment_id,
+                model_profile_id=complete.model_profile_id,
+                rubric_version=complete.rubric_version,
+                planned_evaluations=complete.planned_evaluations,
+                report=report,
+            )
+
     def test_noncomparable_inputs_hide_delta_with_all_reasons(self) -> None:
         source = assessment("asm-before", (result(EvaluationStatus.FAIL),), score=None)
         verification = assessment(
             "asm-after",
-            (result(EvaluationStatus.PASS),),
+            (result(EvaluationStatus.PASS, resource_id="bucket-002", rule_id="S3-002"),),
             score=100,
             plan=(
                 PlannedEvaluation(

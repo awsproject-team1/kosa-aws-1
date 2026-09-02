@@ -7,7 +7,8 @@
   있다. `AuditEventType`과 `RemediationSyncTarget` 위치도 같은 변경에서 정리했다. 후속 PR 검토 대기
 - ADR-0020(Post-Deploy Verification과 before/after 비교)·ADR-0021(Demo·Release readiness gate)을
   `Accepted`로 확정했다. C는 `FindingResolution`/`AssessmentComparison` Contract와 immutable
-  before/after projection을 구현했고 18개(6 Rule × 3 perspective) Golden fixture gate를 확인했다.
+  before/after projection을 구현했고 36개(6 Rule × 3 perspective × Initial/Post-Deploy phase) Golden
+  fixture gate를 확인했다.
   ADR-0019(승인 배포 실행 경계)는 계속 `Proposed`이며 아래 Blocked가 적용된다.
 - M1 sandbox readiness 보강 완료: live Worker가 등록된 M1 Model Profile ID를 work에 직접 결합하고,
   deployment workflow가 명시적 live/fixture mode·selector/ARN/account/Region/40자 commit을 customer
@@ -28,6 +29,11 @@
 - M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
   Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
   분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
+- **2026-09-02 일정 단축 운영 합의(M4의 `dev` 병합까지):** 남은 범위는 M2 통합 PR → M3 통합 PR →
+  M4 통합 PR 순서로 진행하고, 각 브랜치는 앞 마일스톤이 `dev`에 병합된 뒤 최신 `dev`에서 만든다.
+  통합 PR 안에서는 기능·Contract·문서·검증 관심사별 Conventional Commit을 보존하고 squash 없이
+  merge commit으로 병합한다. 기존 Owner 승인·ADR/Contract checkpoint·필수 CI를 생략하지 않으며,
+  M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
 
@@ -53,9 +59,30 @@
   Ruff 247 files, Unit 430, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
   Assessment 25-call·Policy Catalog 11-item dry-run 통과
 
+- Docs 정합성 점검 및 수정: `evidence_reference` 정규형을 실행 Contract 정본
+  `{source_id}@{source_version}#{locator}`(`packages/contracts/policy.py`)로 통일 —
+  `docs/API.md`, `docs/CONTRACTS.md`(예시·서술·중복 bullet 제거) 수정. 재점검에서 발견한
+  fixture-vs-contract gap 수정: `fixtures/m1/` golden 3파일의 IaC evidence prefix `github:`(14곳)를
+  allow-list(`aws:`/`terraform:`/`s3://`)·런타임과 일치하는 `terraform:`로 교정. `docs/DESIGN.md`의
+  ADR 열거를 0001~0021로 최신화. 609개 테스트(unit/contract/security/integration)와 ruff 통과 확인.
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
   delta를 fail-closed로 차단한다.
+
+- M3 C post-deploy comparison complete-plan hardening: pagination이 끝난 report라도 결과 좌표가
+  immutable planned `Resource × Rule × Perspective` 집합과 정확히 같고 Coverage count가 일치해야만
+  비교 입력으로 받는다. 누락/계획 밖 결과 또는 손상된 Coverage로 정상 delta를 위장하는 경로를
+  fail-closed로 차단했다.
+
+- M3 C Golden fixture evidence hardening: fixture evaluator가 expected evidence를 그대로 echo하므로
+  반복 quality gate만으로는 evidence namespace를 검증하지 못한다. 모든 M1 fixture expected evidence를
+  runtime resource allow-list(`aws:`/`terraform:`/`s3://`) 또는 canonical policy reference
+  (`{source_id}@{source_version}#{locator}`)로 제한해 잘못된 `github:` 재유입을 차단했다.
+
+- PR #37 review follow-up: complete-input validation과 두 complete Assessment 사이의
+  `comparable=false`를 ADR-0020/Contract에 구분해 API 오류 변환 경계를 명시했고, post-deploy
+  Golden 18개를 16 PASS + 2 unresolved FAIL로 양극화했다. evidence 검증은 Rule fixture의 실제
+  `SourceReference` 집합과 대조하고 위반 case/reference를 출력한다.
 
 - M2 A/C Remediation orchestration (ADR-0018 Accepted): `RemediationDecision`을 유일한 action
   정본으로 고정하고 C가 Remediation Agent/Worker를 소유한다. A API는 target/customer exception을
@@ -195,16 +222,28 @@
 
 ## Next
 
-- **M3 A/D 합의 선행 (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 PR에 A·D가 approve하는
-  것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과 근거가 모두 들어 있다. approve가
-  모이면 같은 PR에서 상태를 `Accepted`로 바꾼다.
+- **M2 → M3 → M4 순차 통합 PR (M4의 `dev` 병합까지 한시 적용):**
+  1. M2 PR은 D의 live GitHub branch/commit/PR·refreshed plan/runtime 배선과
+     Shared Approval·Security·Patch/Plan 통합 검증을 묶는다(`AuditEventType` 신설과 audit
+     `event_type` 정규화는 M3 A/C Contract 동결에서 이미 끝났다). ADR-0019가 막는 live plan 구현 전
+     이 PR을 열어 A·D·Security approve를 받고 `Accepted` 상태·관련 정본 동기화 커밋을 먼저
+     완료하며, 이후 구현 커밋을 추가한 뒤 전체 PR을 다시 Review·검증한다.
+  2. M3 PR은 M2가 `dev`에 병합된 뒤 시작한다. Contract 커밋은 Producer/Consumer Owner가 먼저
+     동결하고, planned 집합 저장과 A/B/C/D/Shared 통합을 세부 커밋으로 이어 붙인 뒤 전체 검증한다.
+  3. M4 PR은 M3가 `dev`에 병합되고 M0–M3 Exit criteria가 충족된 뒤 시작한다. protected sandbox의
+     Demo·Golden·관측·비용·E2E 증적과 문서 Freshness를 확인해 `dev`에 병합한다. 이후 Release gate
+     증적을 첨부한 별도 `dev → main` PR은 사람이 생성한다.
+- **M2 PR 내부 선행 checkpoint (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 M2 PR에
+  A·D·Security가 approve하는 것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과
+  근거가 모두 들어 있다. 세 Owner의 approve가 모이면 같은 PR에서 상태를 `Accepted`로 바꾸고,
+  차단됐던 live plan 구현 커밋은 그 이후에만 시작한다.
 - **M3 A (ADR-0020 파생분의 남은 절반):** planned 집합은 저장되지만 검증 Assessment의 선택자는
   아직 없다. Assessment item에 `phase`/`source_assessment_id`/`deployment_id`를 영속화하고
   `apps/backend/assessment/runtime.py`의 `AssessmentPhase.INITIAL` 하드코딩을 인자로 바꾼 뒤,
   `GET /deployments/{deploymentId}/verification`을 `compare_post_deploy_assessments()`에 배선한다
   (ADR-0020 §1·§7). 계획 집합 주입은 `DynamoDbAssessmentReportStore.get_planned_evaluations()`로
   이미 가능하다
-- **M3 Contract 동결 — ADR-0019 파생분(합의 이후):** `DeploymentStatus` enum과
+- **M3 Contract 동결 — ADR-0019 Accepted 이후:** `DeploymentStatus` enum과
   `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
   `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
   `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin 전용), D 실행 port 시그니처 4종
@@ -213,9 +252,10 @@
   M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
 - **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
   `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
-- **M3 C:** `POST_DEPLOY_VERIFICATION` phase Golden Case가 0건이다. 재평가 품질 Gate를 돌리려면 이
-  phase의 Case를 추가해야 하며, 원 Assessment와 같은 `model_profile_id`·`rubric_version`을 써야
-  비교가 성립한다 (ADR-0020 §3).
+- **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
+  16개 정합 `PASS` snapshot과 logging 설정이 남은 Actual/Drift 2개 `FAIL` snapshot이며 원 Assessment와
+  같은 rubric을 쓴다. fixture gate는 통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로
+  남는다 (ADR-0020 §3).
 - **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
   계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
   bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
@@ -262,12 +302,14 @@
   prompt/rubric binding이 없고, 현재 FAIL/FAIL pair가 deterministic DRIFT=FAIL을 기대해 production
   derivation(PASS)과 충돌한다. C/Shared가 dataset·artifact·canonical evidence를 재승인하기 전에는
   generic benchmark 결과를 M1 gate 통과로 간주하지 않음
-- **M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이 모두 채워져 있다. 남은 것은
-  A·D의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의 리뷰 approve**로 받는다 (CONTRIBUTING:
-  Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). 서명 전에는 D가 live plan/apply 경로를,
-  A가 Deployment 생성·후속 전이를 구현하지 않는다.
-  *Owner:* D + A + Security. *Blocks:* M3 D(plan/apply 실행), M3 A(Deployment 생성·상태 API),
-  M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract 작업은 막지 않는다.**
+- **M2 live plan·audit 정본화 및 M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이
+  모두 채워져 있다. 남은 것은 A·D·Security의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의
+  리뷰 approve**로 받는다 (CONTRIBUTING: Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다).
+  서명 전에는 M2 A가 `AuditEventType`/기존 audit 필드를 정규화하거나 D가 live plan/apply 경로를,
+  M3 A가 Deployment 생성·후속 전이를 구현하지 않는다.
+  *Owner:* D + A + Security. *Blocks:* M2 A(audit 정본화), M2 D(live plan), M3 D(plan/apply 실행),
+  M3 A(Deployment 생성·상태 API), M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract는
+  이 ADR 자체가 막지 않지만 한시적 순서에 따라 M2의 `dev` 병합 후 시작한다.**
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
   input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A는
   `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
@@ -307,9 +349,8 @@
 - [x] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
   `IAC`/`AWS_ACTUAL`/`DRIFT` 3관점 산출, Finding·Readiness Score projection, Assessment UI 기본
   화면 *(6개 S3 Rule × 3관점 = 18개 평가의 fixture integration으로 결과·Finding·Coverage·Readiness
-  까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기. `fixtures/m1/golden_dataset_cases.json`
-  은 18건 = 6 rule × 3 perspective로 `IAC`/`AWS_ACTUAL`/`DRIFT` Case가 이미 모두 있고, 비어 있는 것은
-  관점이 아니라 **phase**다 — 18건 전부 `INITIAL`이며 `POST_DEPLOY_VERIFICATION`은 0건이다)*
+  까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기. Initial 18건과 Post-Deploy Verification
+  18건은 각각 6 rule × 3 perspective로 `IAC`/`AWS_ACTUAL`/`DRIFT` Case를 모두 가진다)*
 - [x] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + Assessment 입력 조합 계층, S3 AssumeRole, GitHub REST commit/tree/blob read adapter 구현 완료. IAC 관점용 `IaCDocument` 본문 read 포함, write 표면 없음; 고객 GitHub App/runtime injection E2E 대기)*
 - [x] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증 *(3관점 Initial Assessment integration test, Drift 파생 unit test, Coverage/Readiness/Finding 표시 검증 완료; Golden Dataset 반복 평가는 기존 M0 runner 유지, 확대 Rule 재고정은 Next)*
 
@@ -341,8 +382,9 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Propos
 - [ ] **B — Policy/Governance Boundary:** 재평가 적용 범위와 예외 처리 검증 *(재평가는 원 Assessment의
   Profile version을 고정 재사용하고, 예외는 평가를 막지 않고 표시만 한다 — ADR-0020 §2, §6)*
 - [x] **C — AI Evaluation:** Before/After 비교, Finding Resolution, Score/Coverage 변화 평가
-  *(immutable complete-plan input Contract, Profile/rubric/plan/score fail-closed comparison 및 5개
-  Resolution의 결정적 projection 구현. durable Assessment/endpoint wiring은 A/D integration 의존성)*
+  *(immutable complete-plan input Contract, Profile/rubric/plan/score fail-closed comparison, 5개
+  Resolution의 결정적 projection 및 18개 Post-Deploy Golden fixture 구현. durable Assessment/endpoint
+  wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
   재검증, AWS Actual 재조회 *(plan_hash 허용 목록 투영, state `lineage`·`serial`, saved plan apply,
   run 재조회 — ADR-0019 §1, §2, §5, §7)*

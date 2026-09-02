@@ -24,7 +24,7 @@
   "severity": "LOW | MEDIUM | HIGH | CRITICAL",
   "score": 85,
   "rationale": "string",
-  "evidence_references": ["aws:s3:bucket/example#read-resource", "isms-p-2023#control/5.2.1"],
+  "evidence_references": ["aws:s3:bucket/example#read-resource", "isms-p-2023@2023.1#control/5.2.1"],
   "rule_version": "string",
   "rubric_version": "string",
   "model_profile_id": "string"
@@ -60,7 +60,7 @@ Snapshot과 해당 Rule·Profile 정보만 전달한다. 모델 응답은 `statu
 `evidence_references` 네 필드의 JSON으로 한정된다. Resource/Rule/Perspective/Severity/Version과
 Model Profile은 Runtime이 authoritative input에서 재구성하고, evidence는 Snapshot과 Rule이
 허용한 locator의 부분집합만 허용한다. 정책 근거의 정규형은
-`{source_id}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
+`{source_id}@{source_version}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
 `aws:` namespace를 사용하므로 정책 원문 근거와 구분된다.
 
 S3 MVP의 `AWS_ACTUAL` Evidence는 C가 D의 `AwsResourceTool.READ_RESOURCE`로
@@ -134,8 +134,6 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 
 - `PolicySource`: 승인된 정책 원문의 ID, 종류(`INTERNAL_POLICY`/`ISMS_P`), 버전과
   S3 Artifact ID/content hash
-- `SourceReference`: 정책 원문 안의 locator와 content hash. `evidence_reference`는
-  `{source_id}#{locator}` 정규형으로 Rule과 평가 Evidence를 추적한다.
 - `SourceReference`: 정책 원문 안의 locator와 content hash, 그리고 그 locator가 유효한
   `source_version`. 원문이 개정되면 같은 locator라도 다른 내용을 가리키므로 Rule과 Control은
   항상 Source version까지 고정한다. 평가 Evidence는 `evidence_reference`
@@ -453,7 +451,15 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
 `model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
 `ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
-비교 가능 근거가 아니다.
+비교 가능 근거가 아니다. 비교 입력 report는 pagination cursor가 없어야 하고, 결과 좌표 집합과
+Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불완전하거나 손상된 projection은
+비교 전에 fail-closed로 거부한다. 이는 두 complete Assessment의 plan/profile/rubric/score 차이에서
+반환하는 `comparable: false`와 구별되는 입력 validation이며, API는 이를 validation 오류로 변환한다.
+
+`fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
+`fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각
+six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
+정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
 
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
