@@ -2,6 +2,15 @@
 
 ## Current
 
+- `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
+  그 run 좌표가 필요한데(ADR-0019 §1), 정본 port에 실을 자리가 없어 live apply dispatch가
+  GitHub API 422로 거부되던 상태였다. `PlanExecutionResult.plan_run`(`WorkflowRunReference`)을
+  추가해 plan 시점 run 좌표를 durable하게 남기고, `DeploymentWork.plan_run` → `dispatch_apply(...,
+  plan_run=)` → `plan_run_id` input으로 이어 배선했다. plan과 apply는 사람 승인을 사이에 둔 서로
+  다른 실행이라 dispatch 시점에 만들어낼 수 없다. 세 경계(Contract·Worker·live 어댑터)가 각각 run
+  좌표의 배포·저장소 scope를 확인해, 다른 배포의 plan artifact를 적용하면서 나머지 승인 값은 전부
+  일치하는 상태를 막는다. A 부재로 B가 대행했으므로 A 복귀 시 Contract 확장 재확인 필요
+
 - M3 D 실행 경계를 PR #49로 올렸고 리뷰(P1 5건)를 반영했다(base `dev`,
   `feature/m3-d-execution-ports`). #48(A Contract 동결)을 병합해 정본 Contract를 소비한다 —
   중복 `terraform_plan.py`/D port/반환형을 제거하고 `PlanExecutionResult`/`ApplyDispatchReceipt`/
@@ -408,16 +417,6 @@
   report에 명시했으며 모델 ID와 runtime Model Profile 배정은 변경하지 않음
 
 ## Next
-
-- **M3 A/D — `plan_run_id` Contract 갭 (live apply dispatch 차단 중):** `ci/terraform/terraform-apply.yml`
-  은 plan artifact를 만든 run을 찾기 위해 `plan_run_id`를 필수 입력으로 요구하지만, 정본
-  `ApplyDispatchPort.dispatch_apply(approval, plan, state_version)`(PR #48 동결)에도
-  `ArtifactReference`에도 plan run id를 실을 자리가 없다. 그래서 `LiveApplyDispatchPort`는 셋만
-  보내고 실제 dispatch는 GitHub API 422로 거부된다. **의도된 fail-closed다** — 입력을 optional로
-  낮추면 `download-artifact`가 plan run이 아닌 현재 run에서 artifact를 찾아 "어떤 plan을
-  apply하는가"가 불분명해진다. 해소하려면 A가 plan run id를 durable하게 싣는다
-  (`PlanExecutionResult` 또는 Deployment record). *Owner:* A(Contract) + D(어댑터 배선).
-  *Blocks:* live apply dispatch, M3 Shared의 승인 없는 Write 방지 E2E.
 
 - **M2 → M3 → M4 순차 통합 PR (M4의 `dev` 병합까지 한시 적용):**
   1. M2 PR은 D의 live GitHub branch/commit/PR·refreshed plan/runtime 배선과

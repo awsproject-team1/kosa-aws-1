@@ -72,7 +72,9 @@ class DeploymentWork:
     """Authoritative A-owned deployment work reloaded by D for one exact revision.
 
     D는 이 값을 만들지 않고 다시 읽어 검증만 한다. `approval`은 A가 이미 record한 사실이며,
-    `RUN_DEPLOYMENT` 단계(plan 생성 전)에는 아직 없으므로 optional이다. `run_reference`는
+    `RUN_DEPLOYMENT` 단계(plan 생성 전)에는 아직 없으므로 optional이다. `plan_run`은 saved plan
+    artifact를 만든 **plan** run이고 A가 `PlanExecutionResult`에서 durable하게 기록하며, apply
+    dispatch가 그 run의 artifact를 지목하는 데 쓴다(§1). `run_reference`는
     apply dispatch 후 EventBridge가 실어 온 실제 GitHub `run_id`로 A가 durable하게 기록하며,
     `APPLY_COMPLETED` 단계에서 D가 그것으로 run을 재조회한다(§7). `sync_target`은 apply 후
     Actual 재조회 대상 commit이다(ADR-0020).
@@ -87,6 +89,7 @@ class DeploymentWork:
     commit_sha: str
     plan: TerraformPlan | None = None
     state_version: TerraformStateVersion | None = None
+    plan_run: WorkflowRunReference | None = None
     approval: DeploymentApproval | None = None
     run_reference: WorkflowRunReference | None = None
     sync_target: RemediationSyncTarget | None = None
@@ -120,6 +123,14 @@ class DeploymentWork:
             self.state_version, TerraformStateVersion
         ):
             raise TypeError("state_version must be a TerraformStateVersion or None")
+        if self.plan_run is not None:
+            if not isinstance(self.plan_run, WorkflowRunReference):
+                raise TypeError("plan_run must be a WorkflowRunReference or None")
+            if (
+                self.plan_run.deployment_id != self.deployment_id
+                or self.plan_run.repository_id != self.repository_id
+            ):
+                raise ValueError("plan_run does not match work")
         if self.approval is not None:
             if not isinstance(self.approval, DeploymentApproval):
                 raise TypeError("approval must be a DeploymentApproval or None")
@@ -253,13 +264,27 @@ class DeploymentWorker:
             raise DeploymentWorkerError("plan binary is outside the customer scope")
         if result.binary_artifact.repository_id not in (None, work.repository_id):
             raise DeploymentWorkerError("plan binary is outside the repository scope")
+        # apply는 이 run의 artifact를 내려받는다(§1). run 좌표가 이 work 밖이면 다른 배포의
+        # plan artifact를 적용하게 되므로, 저장 전에 여기서 막는다.
+        if (
+            result.plan_run.deployment_id != work.deployment_id
+            or result.plan_run.repository_id != work.repository_id
+        ):
+            raise DeploymentWorkerError("plan run is outside the deployment work")
         self._plan_store.put_plan_if_absent(work=work, result=result)
         return result
 
     def _dispatch_apply(self, work: DeploymentWork) -> ApplyDispatchReceipt:
         approval, plan, state_version = self._require_approved_plan(work)
+        if work.plan_run is None:
+            # apply workflow는 plan run의 artifact를 내려받으므로 그 run 좌표 없이는 무엇을
+            # 적용할지 정해지지 않는다. 추측해 채우지 않고 진행을 멈춘다(§1).
+            raise DeploymentWorkerError("deployment work has no plan run to apply")
         receipt = self._apply_port.dispatch_apply(
-            approval=approval, plan=plan, state_version=state_version
+            approval=approval,
+            plan=plan,
+            state_version=state_version,
+            plan_run=work.plan_run,
         )
         if not isinstance(receipt, ApplyDispatchReceipt):
             raise DeploymentWorkerError("apply port must return an ApplyDispatchReceipt")

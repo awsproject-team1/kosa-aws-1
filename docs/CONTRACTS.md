@@ -517,8 +517,8 @@ M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않
 
 | Port | 호출자 | 입력 → 출력 |
 | --- | --- | --- |
-| `PlanRequestPort` | D Deployment Worker 내부 | `customer_id`/`deployment_id`/`repository_id`/`commit_sha` → `PlanExecutionResult` (`TerraformPlan` + `TERRAFORM_PLAN_BINARY` artifact + `TerraformStateVersion`) |
-| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` + `TerraformStateVersion` → `ApplyDispatchReceipt` |
+| `PlanRequestPort` | D Deployment Worker 내부 | `customer_id`/`deployment_id`/`repository_id`/`commit_sha` → `PlanExecutionResult` (`TerraformPlan` + `TERRAFORM_PLAN_BINARY` artifact + `TerraformStateVersion` + plan run `WorkflowRunReference`) |
+| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` + `TerraformStateVersion` + plan run `WorkflowRunReference` → `ApplyDispatchReceipt` |
 | `WorkflowRunReader` | D Deployment Worker | `WorkflowRunReference`(`run_id` 등) → `WorkflowRunFacts` (workflow path, repository, `ref`, `commit_sha`, `conclusion`, `plan_hash`) |
 | `ActualRereadPort` | C 검증 경계 | `customer_id`/`deployment_id`/`RemediationSyncTarget` → (void, 기존 read-only Tool로 Actual 재조회) |
 
@@ -532,8 +532,15 @@ M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않
 - `TerraformStateVersion`은 `(lineage, serial)` 쌍이다. `serial` 단독으로는 state 재생성을 잡지
   못하므로 apply 직전 재검증은 두 값을 함께 대조한다 (ADR-0019 §2).
 - `PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않지만, 반환형 `PlanExecutionResult`가
-  `plan_hash`·binary·state를 한데 묶어 A 승인·D apply 재검증의 공용 입력이 되므로 시그니처를 함께
-  고정했다.
+  `plan_hash`·binary·state·plan run을 한데 묶어 A 승인·D apply 재검증의 공용 입력이 되므로
+  시그니처를 함께 고정했다.
+- **`PlanExecutionResult.plan_run`은 apply가 어느 run의 saved artifact를 적용하는지 고정한다**
+  (ADR-0019 §1). apply는 자기 run이 아니라 plan run의 artifact를 내려받고, 두 실행 사이에 사람
+  승인이 들어가므로 run 좌표는 dispatch 시점에 만들어낼 수 없고 durable해야 한다. 흐름은
+  `PlanExecutionResult.plan_run` → `DeploymentWork.plan_run` → `dispatch_apply(plan_run=)` →
+  workflow의 `plan_run_id` 입력이다. Contract·Worker·live 어댑터가 각각 그 좌표의 배포·저장소
+  scope를 확인한다 — 확인을 빼면 다른 배포의 plan artifact를 적용하면서 승인된 `commit_sha`·
+  `plan_hash`는 전부 일치하는 상태가 만들어진다.
 
 ```python
 @runtime_checkable
@@ -553,6 +560,7 @@ class ApplyDispatchPort(Protocol):
         approval: DeploymentApproval,
         plan: TerraformPlan,
         state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
     ) -> ApplyDispatchReceipt: ...
 
 

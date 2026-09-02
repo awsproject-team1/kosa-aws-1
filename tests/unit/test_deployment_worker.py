@@ -51,6 +51,7 @@ LINEAGE = "11111111-2222-3333-4444-555555555555"
 SERIAL = 7
 APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
 RUN_ID = "run-777"
+PLAN_RUN_ID = "plan-run-555"
 
 
 def build_plan() -> TerraformPlan:
@@ -78,11 +79,18 @@ def build_binary() -> ArtifactReference:
     )
 
 
+def build_plan_run() -> WorkflowRunReference:
+    return WorkflowRunReference(
+        deployment_id=DEPLOYMENT_ID, repository_id=REPOSITORY_ID, run_id=PLAN_RUN_ID
+    )
+
+
 def build_plan_result() -> PlanExecutionResult:
     return PlanExecutionResult(
         plan=build_plan(),
         binary_artifact=build_binary(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
+        plan_run=build_plan_run(),
     )
 
 
@@ -189,6 +197,7 @@ def approved_work(
         commit_sha=COMMIT,
         plan=build_plan(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
+        plan_run=build_plan_run(),
         approval=build_approval(),
         run_reference=run_reference,
         sync_target=build_sync_target(),

@@ -11,7 +11,10 @@
 """
 
 import json
+import pathlib
 import unittest
+
+import yaml
 
 from agent.runtime import (
     ActualRereadPort,
@@ -44,6 +47,7 @@ REPO_FULL = "acme/iac"
 AWS_ACCOUNT_ID = "111122223333"
 DEPLOYMENT_ID = "dep-abc123"
 PLAN_HASH = "f" * 64
+PLAN_RUN_ID = "plan-run-555"
 COMMIT = "a" * 40
 LINEAGE = "11111111-2222-3333-4444-555555555555"
 APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
@@ -61,6 +65,14 @@ def build_plan() -> TerraformPlan:
             customer_id=CUSTOMER_ID,
             repository_id=REPOSITORY_ID,
         ),
+    )
+
+
+def build_plan_run(
+    *, deployment_id: str = DEPLOYMENT_ID, repository_id: str = REPOSITORY_ID
+) -> WorkflowRunReference:
+    return WorkflowRunReference(
+        deployment_id=deployment_id, repository_id=repository_id, run_id=PLAN_RUN_ID
     )
 
 
@@ -98,6 +110,7 @@ class ApplyDispatchTest(unittest.TestCase):
             approval=build_approval(),
             plan=build_plan(),
             state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+            plan_run=build_plan_run(),
         )
         self.assertIsInstance(receipt, ApplyDispatchReceipt)
         self.assertEqual(receipt.deployment_id, DEPLOYMENT_ID)
@@ -110,7 +123,14 @@ class ApplyDispatchTest(unittest.TestCase):
         self.assertEqual(payload["ref"], COMMIT)
         self.assertEqual(
             payload["inputs"],
-            {"deployment_id": DEPLOYMENT_ID, "commit_sha": COMMIT, "plan_hash": PLAN_HASH},
+            {
+                "deployment_id": DEPLOYMENT_ID,
+                "commit_sha": COMMIT,
+                "plan_hash": PLAN_HASH,
+                # apply는 자기 run이 아니라 이 plan run의 saved artifact를 내려받는다(§1).
+                # workflow가 이 입력을 필수로 요구하므로 빠지면 dispatch 자체가 거부된다.
+                "plan_run_id": PLAN_RUN_ID,
+            },
         )
 
     def test_dispatch_rejects_unbound_approval(self) -> None:
@@ -123,7 +143,66 @@ class ApplyDispatchTest(unittest.TestCase):
                 approval=wrong,
                 plan=build_plan(),
                 state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+                plan_run=build_plan_run(),
             )
+
+    def test_dispatch_rejects_a_plan_run_from_another_deployment(self) -> None:
+        _, dispatch = self._capture()
+        with self.assertRaises(LiveDeploymentPortError):
+            self._port(dispatch).dispatch_apply(
+                approval=build_approval(),
+                plan=build_plan(),
+                state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+                plan_run=build_plan_run(deployment_id="dep-other"),
+            )
+
+    def test_dispatch_rejects_a_plan_run_outside_the_repository_scope(self) -> None:
+        _, dispatch = self._capture()
+        with self.assertRaises(LiveDeploymentPortError):
+            self._port(dispatch).dispatch_apply(
+                approval=build_approval(),
+                plan=build_plan(),
+                state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+                plan_run=build_plan_run(repository_id="repo-other"),
+            )
+
+
+class ApplyDispatchMatchesWorkflowTemplateTest(unittest.TestCase):
+    """dispatch가 보내는 input 집합이 apply workflow의 선언과 정확히 같아야 한다.
+
+    이 둘은 서로 다른 파일이라 조용히 갈라진다. 실제로 workflow가 `plan_run_id`를 필수로 선언한
+    뒤에도 어댑터는 세 개만 보내, live apply dispatch가 GitHub API 422로 거부되는 상태가 한동안
+    남아 있었다. 값 수준이 아니라 **키 집합**을 대조해 그 드리프트를 여기서 잡는다.
+    """
+
+    def _declared_inputs(self) -> set[str]:
+        template = (
+            pathlib.Path(__file__).parents[2] / "ci" / "terraform" / "terraform-apply.yml"
+        ).read_text(encoding="utf-8")
+        document = yaml.safe_load(template)
+        # PyYAML은 미인용 `on:`을 boolean True 키로 읽는다.
+        trigger = document[True] if True in document else document["on"]
+        return set(trigger["workflow_dispatch"]["inputs"])
+
+    def test_dispatch_sends_exactly_the_inputs_the_workflow_declares(self) -> None:
+        calls: list[tuple[str, object, bytes]] = []
+        port = LiveApplyDispatchPort(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            repository_full_name=REPO_FULL,
+            token_provider=lambda: "tok",
+            dispatch=lambda url, headers, body: calls.append((url, headers, body)),
+        )
+
+        port.dispatch_apply(
+            approval=build_approval(),
+            plan=build_plan(),
+            state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+            plan_run=build_plan_run(),
+        )
+
+        sent = set(json.loads(calls[0][2].decode("utf-8"))["inputs"])
+        self.assertEqual(sent, self._declared_inputs())
 
 
 class WorkflowRunReaderTest(unittest.TestCase):

@@ -193,18 +193,47 @@ class TerraformPlan:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowRunReference:
+    """Locator for one GitHub Actions run tied to a deployment (ADR-0019 §7)."""
+
+    deployment_id: str
+    repository_id: str
+    run_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("deployment_id", "repository_id", "run_id"):
+            require_non_empty_string(getattr(self, name), name)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "repository_id": self.repository_id,
+            "run_id": self.run_id,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PlanExecutionResult:
     """D's `PlanRequestPort` output: the hashed plan, its saved binary, and state.
 
     `plan` carries the allow-listed projection whose digest is `plan_hash`.
     `binary_artifact` is the saved binary plan that `terraform apply` consumes and
     is never a hash target. `state_version` is the plan-time `(lineage, serial)`
-    re-checked before apply. All three refer to the same deployment (ADR-0019 §1, §2).
+    re-checked before apply. `plan_run` names the Actions run that produced the
+    binary. All four refer to the same deployment (ADR-0019 §1, §2).
+
+    `plan_run` exists because apply consumes a saved plan from a **different**
+    run (§1): the apply workflow needs that run's id to download the artifact, and
+    apply happens in a later invocation than plan, so the id has to survive in the
+    durable plan result rather than in the dispatching process. Without it the
+    apply workflow's required `plan_run_id` input has no source and the dispatch
+    is rejected before apply starts.
     """
 
     plan: TerraformPlan
     binary_artifact: ArtifactReference
     state_version: TerraformStateVersion
+    plan_run: WorkflowRunReference
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, TerraformPlan):
@@ -222,12 +251,24 @@ class PlanExecutionResult:
             raise ValueError("binary_artifact repository_id must match the plan artifact")
         if not isinstance(self.state_version, TerraformStateVersion):
             raise TypeError("state_version must be a TerraformStateVersion")
+        if not isinstance(self.plan_run, WorkflowRunReference):
+            raise TypeError("plan_run must be a WorkflowRunReference")
+        # The run that produced the binary must be the run of *this* deployment.
+        # An unchecked id would let apply download a plan artifact belonging to a
+        # different deployment while every other approved value still matched.
+        if self.plan_run.deployment_id != self.plan.deployment_id:
+            raise ValueError("plan_run deployment_id must match the plan")
+        if self.binary_artifact.repository_id is not None and (
+            self.plan_run.repository_id != self.binary_artifact.repository_id
+        ):
+            raise ValueError("plan_run repository_id must match the plan artifact")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "plan": self.plan.to_dict(),
             "binary_artifact": self.binary_artifact.to_dict(),
             "state_version": self.state_version.to_dict(),
+            "plan_run": self.plan_run.to_dict(),
         }
 
 
@@ -268,26 +309,6 @@ class WorkflowConclusion(StrEnum):
     FAILURE = "FAILURE"
     CANCELLED = "CANCELLED"
     TIMED_OUT = "TIMED_OUT"
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class WorkflowRunReference:
-    """Locator for one GitHub Actions run tied to a deployment (ADR-0019 §7)."""
-
-    deployment_id: str
-    repository_id: str
-    run_id: str
-
-    def __post_init__(self) -> None:
-        for name in ("deployment_id", "repository_id", "run_id"):
-            require_non_empty_string(getattr(self, name), name)
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "deployment_id": self.deployment_id,
-            "repository_id": self.repository_id,
-            "run_id": self.run_id,
-        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

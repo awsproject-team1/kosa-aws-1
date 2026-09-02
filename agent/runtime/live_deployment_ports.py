@@ -97,6 +97,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         approval: DeploymentApproval,
         plan: TerraformPlan,
         state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
     ) -> ApplyDispatchReceipt:
         if not isinstance(approval, DeploymentApproval):
             raise TypeError("approval must be a DeploymentApproval")
@@ -104,20 +105,23 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
             raise TypeError("plan must be a TerraformPlan")
         if not isinstance(state_version, TerraformStateVersion):
             raise TypeError("state_version must be a TerraformStateVersion")
+        if not isinstance(plan_run, WorkflowRunReference):
+            raise TypeError("plan_run must be a WorkflowRunReference")
         if not approval.matches(plan):
             raise LiveDeploymentPortError("approval is not bound to the plan")
         if plan.artifact.repository_id not in (None, self._repository_id):
             raise LiveDeploymentPortError("plan is outside the tool scope")
+        # apply는 이 run의 saved plan artifact를 내려받는다(§1). run 좌표가 승인된 배포·저장소
+        # 밖이면 다른 배포의 plan을 적용하게 되므로 dispatch 전에 막는다.
+        if plan_run.deployment_id != approval.deployment_id:
+            raise LiveDeploymentPortError("plan run is not bound to the approved deployment")
+        if plan_run.repository_id != self._repository_id:
+            raise LiveDeploymentPortError("plan run is outside the tool scope")
 
-        # 이 어댑터가 보낼 수 있는 input은 deployment_id/commit_sha/plan_hash 셋뿐이다(§5).
-        #
-        # `ci/terraform/terraform-apply.yml`은 네 번째 필수 입력 `plan_run_id`를 요구하지만,
-        # 정본 `ApplyDispatchPort.dispatch_apply(approval, plan, state_version)`(PR #48 동결)에도
-        # `plan.artifact`(`ArtifactReference`)에도 plan run id를 실을 자리가 없다. 따라서 지금
-        # 이 dispatch는 GitHub API에서 422로 거부된다. 값을 지어내거나 workflow의 필수 조건을
-        # 낮추는 대신, A Contract가 plan run id를 durable하게 실을 때까지 막힌 채로 둔다 —
-        # 잘못된 plan artifact로 apply가 시작되는 것보다 dispatch가 실패하는 편이 안전하다.
-        # 상세는 `ci/terraform/README.md`의 "Contract 갭"과 `PROGRESS.md` Next 참조.
+        # workflow_dispatch input 넷은 apply workflow의 필수 입력과 정확히 일치한다(§5).
+        # `plan_run_id`는 apply가 자기 run이 아니라 plan run의 saved artifact를 내려받기 때문에
+        # 필요하다(§1). 이 값은 durable `PlanExecutionResult.plan_run`에서 와야 하며, 여기서
+        # 만들어내지 않는다 — apply와 plan은 서로 다른 실행이다.
         body = json.dumps(
             {
                 "ref": approval.commit_sha,
@@ -125,6 +129,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
                     "deployment_id": approval.deployment_id,
                     "commit_sha": approval.commit_sha,
                     "plan_hash": approval.plan_hash,
+                    "plan_run_id": plan_run.run_id,
                 },
             },
             ensure_ascii=True,

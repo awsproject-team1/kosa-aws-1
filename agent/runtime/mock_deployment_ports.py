@@ -101,6 +101,7 @@ class MockApplyDispatchPort(ApplyDispatchPort):
         self._repository_id = _require_non_empty(repository_id, "repository_id")
         # dispatch 횟수를 기록해 idempotency 테스트가 관측할 수 있게 한다.
         self.dispatch_count = 0
+        self.dispatched_plan_run_ids: list[str] = []
 
     def dispatch_apply(
         self,
@@ -108,6 +109,7 @@ class MockApplyDispatchPort(ApplyDispatchPort):
         approval: DeploymentApproval,
         plan: TerraformPlan,
         state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
     ) -> ApplyDispatchReceipt:
         if not isinstance(approval, DeploymentApproval):
             raise TypeError("approval must be a DeploymentApproval")
@@ -115,10 +117,19 @@ class MockApplyDispatchPort(ApplyDispatchPort):
             raise TypeError("plan must be a TerraformPlan")
         if not isinstance(state_version, TerraformStateVersion):
             raise TypeError("state_version must be a TerraformStateVersion")
+        if not isinstance(plan_run, WorkflowRunReference):
+            raise TypeError("plan_run must be a WorkflowRunReference")
         if not approval.matches(plan):
             raise DeploymentPortError("approval is not bound to the plan")
         if plan.artifact.repository_id not in (None, self._repository_id):
             raise DeploymentPortScopeError("plan is outside the tool scope")
+        if plan_run.deployment_id != approval.deployment_id:
+            raise DeploymentPortError("plan run is not bound to the approved deployment")
+        if plan_run.repository_id != self._repository_id:
+            raise DeploymentPortScopeError("plan run is outside the tool scope")
+        # live 어댑터가 보내는 `plan_run_id`에 해당한다. 관측 가능하게 남겨 테스트가 apply가
+        # 어느 plan run의 artifact를 지목했는지 확인할 수 있게 한다.
+        self.dispatched_plan_run_ids.append(plan_run.run_id)
         self.dispatch_count += 1
         return ApplyDispatchReceipt(
             deployment_id=approval.deployment_id,

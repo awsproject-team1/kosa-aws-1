@@ -162,15 +162,35 @@ class PlanExecutionResultContractTest(unittest.TestCase):
             repository_id=repository_id,
         )
 
+    @staticmethod
+    def _plan_run(
+        *, deployment_id: str = "deployment-001", repository_id: str = "repo-001"
+    ) -> WorkflowRunReference:
+        return WorkflowRunReference(
+            deployment_id=deployment_id, repository_id=repository_id, run_id="plan-run-1"
+        )
+
     def test_bundles_plan_binary_and_state(self) -> None:
         result = PlanExecutionResult(
             plan=self._plan(),
             binary_artifact=self._binary(),
             state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            plan_run=self._plan_run(),
         )
         payload = result.to_dict()
         self.assertEqual(payload["plan"]["plan_hash"], "plan-hash-001")
         self.assertEqual(payload["state_version"], {"lineage": "lineage-1", "serial": 3})
+        self.assertEqual(payload["plan_run"]["run_id"], "plan-run-1")
+
+    def test_rejects_a_plan_run_from_a_different_deployment(self) -> None:
+        """apply는 이 run의 artifact를 내려받으므로, 다른 배포의 run이면 다른 plan을 적용한다."""
+        with self.assertRaisesRegex(ValueError, "plan_run deployment_id"):
+            PlanExecutionResult(
+                plan=self._plan(),
+                binary_artifact=self._binary(),
+                state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(deployment_id="dep-other"),
+            )
 
     def test_rejects_non_binary_artifact_as_the_saved_plan(self) -> None:
         with self.assertRaisesRegex(ValueError, "TERRAFORM_PLAN_BINARY"):
@@ -178,6 +198,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(ArtifactType.TERRAFORM_PLAN),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
             )
 
     def test_rejects_binary_from_a_different_customer(self) -> None:
@@ -186,6 +207,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(customer_id="cust-other"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
             )
 
     def test_rejects_binary_from_a_different_repository(self) -> None:
@@ -194,6 +216,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(repository_id="repo-other"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                plan_run=self._plan_run(),
             )
 
 

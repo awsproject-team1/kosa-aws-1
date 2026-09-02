@@ -50,6 +50,9 @@ class FakePlanRequest:
                 customer_id=customer_id,
             ),
             state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            plan_run=WorkflowRunReference(
+                deployment_id=deployment_id, repository_id=repository_id, run_id="plan-run-1"
+            ),
         )
 
 
@@ -60,6 +63,7 @@ class FakeApplyDispatch:
         approval: DeploymentApproval,
         plan: TerraformPlan,
         state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
     ) -> ApplyDispatchReceipt:
         return ApplyDispatchReceipt(
             deployment_id=plan.deployment_id,

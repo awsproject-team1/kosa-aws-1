@@ -50,9 +50,14 @@ class ApplyDispatchPort(Protocol):
 
     Called only after D re-checks the stored approval, `commit_sha`, `plan_hash`,
     and state version and wins the `APPROVED → APPLYING` conditional transition.
-    The dispatch input is `deployment_id`, `commit_sha`, `plan_hash`; the workflow
-    resolves and verifies its own plan artifact (ADR-0019 §5). Apply consumes the
-    saved binary plan, never a re-computed plan.
+    The dispatch inputs are `deployment_id`, `commit_sha`, `plan_hash`, and the
+    plan run's id; the workflow downloads and verifies that run's saved plan
+    artifact (ADR-0019 §1, §5). Apply consumes the saved binary plan, never a
+    re-computed plan.
+
+    `plan_run` is passed rather than re-derived because apply runs in a later
+    invocation than plan: the caller reloads it from the durable
+    `PlanExecutionResult` and D never guesses which run produced the artifact.
     """
 
     def dispatch_apply(
@@ -61,6 +66,7 @@ class ApplyDispatchPort(Protocol):
         approval: DeploymentApproval,
         plan: TerraformPlan,
         state_version: TerraformStateVersion,
+        plan_run: WorkflowRunReference,
     ) -> ApplyDispatchReceipt: ...
 
 
