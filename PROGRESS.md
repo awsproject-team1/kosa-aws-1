@@ -2,12 +2,6 @@
 
 ## Current
 
-- 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
-  그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
-  억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
-  화면의 억제와 `SUPPRESSED` 판정이 갈리지 않는다. `evaluated_at`이 없는 옛 Finding은 두 시각
-  규칙을 적용할 수 없어 억제하지 않는다. 함께 §2 재평가 범위(검증 phase Profile version pin,
-  Rule 적용 가능성)를 회귀로 고정했다. 후속 PR 검토 대기
 - M1 C→A policy candidate extraction handoff Contract: `PolicyCandidateExtraction`은 exact `READY`
   normalized document, undecided `RuleCandidate`, extractor ID/version을 immutable하게 묶고 source
   version·locator·hash provenance를 fail-closed로 검증한다. 원문/정규화 text는 Contract에 없으며,
@@ -52,6 +46,18 @@
   M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
+
+- M3 B 조회 시점 억제의 미래 평가 시각 회귀 수정: 공용 `select_in_force_exception()`이
+  `finding_evaluated_at > at`을 예외 선택 전에 fail-closed로 거부한다. 조회 뒤에 평가된 것으로
+  기록된 Finding이 그 사이 승인된 예외로 억제 표시되는 경로를 막아 `RemediationPolicy.decide()`의
+  시간 순서 불변식과 일치시켰으며, 해당 시나리오의 단위 회귀 테스트를 추가했다.
+
+- 예외의 조회 시점 표시 경계를 B가 구현했다(ADR-0020 §6). 예외는 재평가를 막지 않고 Finding도
+  그대로 저장되며, `annotate_suppressed_findings()`가 표시용 `FindingSuppression`만 돌려준다.
+  억제 술어는 `RemediationPolicy.decide()`와 하나(`select_in_force_exception()`)를 공유하므로
+  화면의 억제와 `SUPPRESSED` 판정이 갈리지 않는다. `evaluated_at`이 없는 옛 Finding은 두 시각
+  규칙을 적용할 수 없어 억제하지 않는다. 함께 §2 재평가 범위(검증 phase Profile version pin,
+  Rule 적용 가능성)를 회귀로 고정했다. PR #43으로 `dev`에 병합됐다.
 
 - M2 A `DynamoDbRemediationExceptionRepository` 직렬화 버그 수정 (PR #45 리뷰 대응): `_put`이
   low-level `transact_write_items`에 plain dict를 그대로 넘겨(다른 리포지토리는 `marshal_item`을
