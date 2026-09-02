@@ -2,6 +2,16 @@
 
 ## Current
 
+- 조회 시점 예외 억제 표시를 `GET /assessments/{id}/report`에 배선했다(ADR-0020 §6,
+  `feature/m3-a-deployment-endpoints`). `annotate_suppressed_findings()`는 정의만 있고 호출자가
+  없었는데, `AssessmentReportApiService`가 report page의 Finding에 고객 예외를 조회 시각 기준으로
+  join해 `AssessmentReport.suppressions`(`FindingSuppression`)로 응답한다. 세 갭을 함께 닫았다:
+  (1) `_finding_from_item`이 `evaluated_at`/`assessed_commit_sha` provenance를 복원하지 않아 모든
+  Finding이 억제에서 제외되던 것, (2) `AssessmentReport`에 `suppressions` 필드/`to_dict`가 없던 것,
+  (3) composition root가 예외 reader와 read clock을 report 서비스에 주입하지 않던 것. 예외 reader
+  fault는 억제 없이(위반이 보이는 쪽으로) fail-open한다. `GET /deployments/{id}/verification`의
+  `AssessmentComparison`은 순수 비교 계약상 예외를 join하지 않는다. 검증: ruff 263 files,
+  Unit 619 / Contract 135 / Security 72 / Integration 9 OK.
 - M3 A Deployment endpoint를 D 실행 Contract(PR #49, 이제 `dev`에 병합됨) 위에 구현했다(`feature/m3-a-deployment-endpoints`).
   `DeploymentStatus`+`derive_deployment_status()`(저장 안 함, durable 사실 파생), `Action`
   START/REJECT_DEPLOYMENT와 `AuditEventType` DEPLOYMENT_REQUESTED/REJECTED, `DeploymentRecord` store

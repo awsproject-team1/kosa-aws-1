@@ -380,6 +380,14 @@ exceptions)`의 판정 순서가 정책이다. 유효한 예외 → 평가되지
   표시가 사라질 수 있다. 그것이 의도다
 - 억제 표시는 재평가를 막지 않는다. 검증 Assessment의 계획·Coverage·Readiness는 예외와 무관하게
   원 Assessment의 집합을 그대로 재실행한다 (ADR-0020 §2)
+- 배선 지점은 `GET /assessments/{id}/report`다. A의 `AssessmentReportApiService`가 report page의
+  Finding에 대해 고객 예외를 조회 시각 기준으로 join해 `AssessmentReport.suppressions`
+  (`FindingSuppression` 목록)로 실어 응답한다. `GET /deployments/{id}/verification`의
+  `AssessmentComparison`은 순수 비교라 예외를 join하지 않는다 — 억제 표시 축은 Finding별 표시이고
+  비교 축은 coordinate별 `FindingResolutionResult`로 서로 다르다. 예외 reader를 읽지 못하면 억제
+  없이(위반이 보이는 쪽으로) 응답한다. Finding item의 `evaluated_at`/`assessed_commit_sha` provenance는
+  조회 경로에서 반드시 복원되어야 하며, 복원하지 않으면 모든 Finding이 provenance 부재로 억제에서
+  제외된다
 
 ## M2 A/C remediation and readiness boundary
 

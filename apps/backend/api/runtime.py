@@ -91,7 +91,14 @@ def _http_handler() -> JobHttpHandler:
     policy_sources, policy_reader = _policy_source_components()
     return JobHttpHandler(
         service,
-        assessment_reports=AssessmentReportApiService(jobs=repository, reports=reports),
+        assessment_reports=AssessmentReportApiService(
+            jobs=repository,
+            reports=reports,
+            # Join the customer's in-force exceptions as read-time suppression
+            # notes (ADR-0020 §6). Read-only: only list_exceptions is used.
+            exceptions=_remediation_exception_reader(),
+            now=lambda: datetime.now(UTC),
+        ),
         deployments=_deployment_components(repository),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
@@ -159,6 +166,26 @@ def _remediation_exception_components() -> RemediationExceptionApiService:
         repository=repository,
         exception_id_factory=lambda: f"rex-{uuid.uuid4()}",
         now=lambda: datetime.now(UTC),
+    )
+
+
+def _remediation_exception_reader() -> DynamoDbRemediationExceptionRepository:
+    """Construct the read-only exception view used for read-time suppression.
+
+    `list_exceptions` only queries the resource table, but the repository's
+    constructor also requires a transaction client for its write path; we pass a
+    client so the same durable type serves both. The report read path calls only
+    `list_exceptions` (ADR-0020 §6).
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    return DynamoDbRemediationExceptionRepository(
+        boto3.resource("dynamodb").Table(table_name),
+        table_name=table_name,
+        transaction_client=boto3.client("dynamodb"),
     )
 
 

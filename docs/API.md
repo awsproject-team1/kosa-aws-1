@@ -96,6 +96,13 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   결정적으로 만든 actionable projection이다. `readiness_score`는 전체 평가 계획이 완료되기
   전에는 `null`이고, 완료 후에는 `{score, evaluated_evaluations}`를 반환한다. 점수는 severity
   가중 평가 score이며 Coverage와 혼동하지 않는다.
+- 같은 응답의 `suppressions`는 이 페이지의 Finding 중 고객의 유효 예외로 덮인 것에 대한
+  **조회 시점 표시 전용** 목록이다(ADR-0020 §6). 각 항목은
+  `{finding_id, exception_id, reason, expires_at, ticket_reference}`이며 억제된 Finding만
+  담는다 — 목록의 부재가 곧 "억제 아님"이다. Finding 자체에는 억제 필드를 넣지 않는다(예외는
+  만료되므로 저장하면 과거 사실이 왜곡된다). 억제 판정은 조치 판정과 같은 술어를 공유하고,
+  `evaluated_at` provenance가 없는 옛 Finding은 억제하지 않는다. 만료는 조회 시각 기준이므로
+  같은 Assessment라도 조회 시점에 따라 억제 표시가 사라질 수 있다.
 - Initial Assessment 한 건은 같은 Resource × Rule에 대해 `IAC`, `AWS_ACTUAL`, `DRIFT` 결과를
   모두 반환한다. `IAC`와 `AWS_ACTUAL`은 각각 승인 commit의 Terraform 본문과 read-only AWS
   Actual을 근거로 AI가 판정하고, `DRIFT`는 그 두 판정의 불일치를 Code가 결정적으로 계산한다.
@@ -192,7 +199,9 @@ fail-closed한다. `GET /audit-events`는 아직 미구현이다.
   (`RESOLVED`/`UNRESOLVED`/`REGRESSED`/`INDETERMINATE`/`NO_LONGER_APPLICABLE`)과 점수·Coverage
   비교를 포함한다. 비교는 두 `readiness_score`가 모두 non-null이고 planned 평가 집합과
   `model_profile_id`/`rubric_version`이 동일할 때만 delta를 반환하며, 그렇지 않으면
-  `comparable: false`와 이유 코드를 반환한다 (ADR-0020).
+  `comparable: false`와 이유 코드를 반환한다 (ADR-0020). 이 비교는 순수 projection이라 고객 예외를
+  join하지 않는다 — 예외의 조회 시점 억제 표시는 `GET /assessments/{assessmentId}`의 `suppressions`
+  소관이며, 억제는 재평가나 비교의 계획·Coverage·Readiness에 영향을 주지 않는다(ADR-0020 §6).
 - 검증 결과는 원 Assessment를 덮어쓰지 않는다. Post-Deploy Verification은 `phase`,
   `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
 
