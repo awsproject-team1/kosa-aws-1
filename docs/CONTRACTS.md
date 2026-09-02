@@ -401,6 +401,72 @@ Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter
 허용하지만, 다른 writer가 다른 lifecycle이나 내용을 쓰면 계속 fail-closed한다. 따라서 같은
 키에 lifecycle을 별도로 쓰는 두 번째 writer를 만들지 않는다.
 
+## M3 contract additions
+
+ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에 추가됐다. ADR-0019의
+A/D-owned Contract는 아직 구현되지 않았다. 역할마다 같은 의미의 값을 따로 만들지 않는다 — 같은
+개념이 두 곳에 생기면 ADR-0018이 제거한 "판정 정본이 둘"인 구조가 재발한다.
+
+| 추가 | 소유 | 의미 |
+| --- | --- | --- |
+| `DeploymentStatus` + `derive_deployment_status()` | A | Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
+| `AuditEventType` | A | 감사 event **종류** 어휘. 정본 필드명은 `event_type`이다 |
+| `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
+| `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
+| `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
+| `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
+
+`DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
+순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
+apply run reference, verification 결과에서 read 시 계산한다. 저장하면 `JobStatus`·`JobCurrentStep`과
+같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). 표현 값의 전이는 다음과 같다.
+
+```text
+PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
+→ APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED
+분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
+```
+
+`AuditEventType`은 감사 event의 **종류**를 담는 enum이고 정본 필드명은 `event_type`이다.
+`action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가 한 item에서 `event_type`
+(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고 있어, `action`으로
+통일하면 두 값이 같은 키를 다툰다. 이관 대상은 현재 `action` 필드명을 쓰는 세 곳
+(`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)이며, 이미 `event_type`을 쓰는
+`REMEDIATION_DECIDED`·`REMEDIATION_EXCEPTION_APPROVED`는 그대로 둔다. 읽는 코드가 없어 write-only
+변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. M3에서 `DEPLOYMENT_REQUESTED`,
+`DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가되므로 값이 늘기 전에 선행한다.
+
+`RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
+역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
+옮긴다.
+
+`AssessmentComparison`은 두 immutable Assessment의 Coverage/Readiness와 Finding Resolution을
+읽기 전용으로 묶는다. delta는 두 score가 존재하고, `(resource_id, rule_id, perspective)` 계획 집합,
+`model_profile_id`, `rubric_version`이 모두 같을 때만 만든다. 그렇지 않으면 `comparable: false`,
+`ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
+비교 가능 근거가 아니다.
+
+### D 실행 port 시그니처 (M3 병렬 개발 전제)
+
+M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
+먼저 고정해야 한다. 아래 세 port는 D가 소유하고 A/C가 주입받아 Fixture/Mock으로 병렬 구현한다
+(`Mockable` 의존성).
+
+| Port | 호출자 | 입력 → 출력 |
+| --- | --- | --- |
+| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state `lineage`·`serial` + `PlanReadinessInput` |
+| `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` → dispatched run reference (idempotent) |
+| `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
+| `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
+
+- 세 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
+- `ApplyDispatchPort`는 같은 approval로 두 번 호출돼도 새 run을 만들지 않아야 한다. 중복 방지의
+  정본은 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
+- `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다. 검증 단계에서
+  write 표면이 생기지 않는다.
+
 ## Contract change review
 
 Contract 변경 PR은 변경 작성자와 해당 Contract의 Producer 및 Consumer Owner가 검토한다. Contract가 확정됐지만 구현체가 없는 경우 `Mockable` 상태로 Fixture/Mock을 사용해 병렬 개발할 수 있다.
