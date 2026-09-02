@@ -133,6 +133,34 @@ class DeriveDeploymentStatusTest(unittest.TestCase):
             DeploymentStatus.VERIFICATION_INDETERMINATE,
         )
 
+    def test_failed_plan_job_is_manual_review_not_in_progress(self) -> None:
+        # A FAILED plan/readiness Job must not read as PLAN_REQUESTED (P2 review).
+        self.assertIs(
+            derive_deployment_status(
+                facts(job_status=JobStatus.FAILED, current_step=JobCurrentStep.TERRAFORM_PLAN)
+            ),
+            DeploymentStatus.MANUAL_REVIEW,
+        )
+
+    def test_cancelled_job_without_rejection_is_manual_review(self) -> None:
+        self.assertIs(
+            derive_deployment_status(
+                facts(
+                    job_status=JobStatus.CANCELLED,
+                    current_step=JobCurrentStep.PRE_DEPLOY_VALIDATION,
+                )
+            ),
+            DeploymentStatus.MANUAL_REVIEW,
+        )
+
+    def test_rejected_still_wins_over_a_cancelled_job(self) -> None:
+        self.assertIs(
+            derive_deployment_status(
+                facts(job_status=JobStatus.CANCELLED, is_rejected=True)
+            ),
+            DeploymentStatus.REJECTED,
+        )
+
     def test_facts_reject_approved_and_rejected_together(self) -> None:
         with self.assertRaisesRegex(ValueError, "approved and rejected"):
             facts(is_approved=True, is_rejected=True)

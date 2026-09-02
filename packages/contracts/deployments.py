@@ -453,6 +453,13 @@ def derive_deployment_status(facts: DeploymentFacts) -> DeploymentStatus:
     if facts.apply_outcome is ApplyOutcome.RUNNING:
         return DeploymentStatus.APPLYING
 
+    # A terminal Job before apply started must not read as an in-progress step.
+    # A rejection would have been caught above; any other CANCELLED path and a
+    # FAILED plan/readiness Job need a person, so they route to MANUAL_REVIEW
+    # rather than showing PLAN_REQUESTED/PLAN_COMPLETED (ADR-0019 §8).
+    if facts.job_status in (JobStatus.FAILED, JobStatus.CANCELLED):
+        return DeploymentStatus.MANUAL_REVIEW
+
     # Approval granted but apply not yet started.
     if facts.is_approved:
         return DeploymentStatus.APPROVED
