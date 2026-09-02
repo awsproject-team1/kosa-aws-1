@@ -77,13 +77,14 @@ class DynamoFixtureWorkRepository:
         profile_id = assessment.get("policy_profile_id")
         if not isinstance(profile_id, str):
             return None
+        phase = _stored_assessment_phase(assessment, assessment_id=assessment_id)
         return AssessmentResourceWork(
             customer_id=customer_id,
             assessment_id=assessment_id,
             job_id=job_id,
             revision=expected_revision,
             policy_profile_id=profile_id,
-            phase=AssessmentPhase.INITIAL,
+            phase=phase,
             resource_id=_string(self._snapshot.get("resource_id")),
             resource_type=_string(self._snapshot.get("resource_type")),
             perspective=EvaluationPerspective(_string(self._snapshot.get("perspective"))),
@@ -147,6 +148,7 @@ class DynamoM1WorkRepository:
         )
         if not isinstance(repository_id, str) or not isinstance(profile_id, str):
             return None
+        phase = _stored_assessment_phase(assessment, assessment_id=assessment_id)
         target = self._configuration.resolve(
             customer_id=customer_id,
             repository_id=repository_id,
@@ -159,7 +161,7 @@ class DynamoM1WorkRepository:
             job_id=job_id,
             revision=expected_revision,
             policy_profile_id=profile_id,
-            phase=AssessmentPhase.INITIAL,
+            phase=phase,
             resource_id=target.s3_bucket_id,
             resource_type="AWS::S3::Bucket",
             # The live Worker runs the full perspective set, so this declares the
@@ -409,6 +411,36 @@ def _fixture_path(name: str) -> Path:
 
 def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _stored_assessment_phase(
+    assessment: Mapping[str, object], *, assessment_id: str
+) -> AssessmentPhase:
+    raw_phase = assessment.get("phase")
+    source_assessment_id = assessment.get("source_assessment_id")
+    deployment_id = assessment.get("deployment_id")
+    if "phase" not in assessment:
+        if source_assessment_id is not None or deployment_id is not None:
+            raise ValueError("legacy Assessment cannot contain verification correlation")
+        return AssessmentPhase.INITIAL
+    try:
+        phase = AssessmentPhase(raw_phase)
+    except (TypeError, ValueError):
+        raise ValueError("stored Assessment phase is invalid") from None
+    for name, value in (
+        ("source_assessment_id", source_assessment_id),
+        ("deployment_id", deployment_id),
+    ):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"stored Assessment {name} is invalid")
+    if phase is AssessmentPhase.POST_DEPLOY_VERIFICATION:
+        if not isinstance(source_assessment_id, str) or not isinstance(deployment_id, str):
+            raise ValueError("stored verification Assessment correlation is incomplete")
+        if source_assessment_id == assessment_id:
+            raise ValueError("stored verification Assessment cannot reference itself")
+    elif source_assessment_id is not None or deployment_id is not None:
+        raise ValueError("stored non-verification Assessment has verification correlation")
+    return phase
 
 
 def _string(value: object) -> str:

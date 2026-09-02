@@ -16,7 +16,13 @@ from apps.backend.jobs import (
     create_job,
 )
 from apps.backend.repositories import AssessmentWorkflowRepository
-from packages.contracts import JobCurrentStep, JobResponse, WorkflowCommand, WorkflowTask
+from packages.contracts import (
+    AssessmentPhase,
+    JobCurrentStep,
+    JobResponse,
+    WorkflowCommand,
+    WorkflowTask,
+)
 
 
 class AssessmentScope(Protocol):
@@ -77,6 +83,7 @@ class JobApiService:
             job_id=job_id,
             repository_id=request.repository_id,
             policy_profile_id=request.policy_profile_id,
+            phase=AssessmentPhase.INITIAL,
         )
         job = create_job(
             job_id=job_id,

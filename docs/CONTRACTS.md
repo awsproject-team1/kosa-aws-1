@@ -448,6 +448,13 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 `ComparisonIneligibilityReason`, `readiness_score_delta: null`을 반환한다. 계획 **개수**만 같은 것은
 비교 가능 근거가 아니다.
 
+내부 `Assessment` selector는 `phase`를 항상 저장한다. public `POST /assessments`는 Client가 phase를
+보낼 수 없고 Backend가 `INITIAL`을 명시한다. `POST_DEPLOY_VERIFICATION`은 서로 다른
+`source_assessment_id`와 `deployment_id`를 모두 가져야 하며, 다른 phase에 correlation을 붙일 수
+없다. Worker는 저장된 phase를 복원하고, 기존 phase 없는 record는 correlation이 전혀 없을 때만
+`INITIAL`로 읽는다. 이 경계는 검증 Assessment의 저장·복원을 위한 것이며 Deployment 생성 endpoint나
+Actual 재조회 실행을 열지 않는다.
+
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
 M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
