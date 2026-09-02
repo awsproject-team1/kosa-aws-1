@@ -105,15 +105,29 @@ def _remediation_item() -> dict[str, object]:
     }
 
 
-class FakeTable:
-    """GSI1 query + get_item 을 흉내내는 resource table stub."""
+def _pending_event_item(run_id: str) -> dict[str, object]:
+    return {
+        "PK": f"CUSTOMER#{CUSTOMER_ID}",
+        "SK": f"DEPLOYMENT#{DEPLOYMENT_ID}#EVENT#{run_id}",
+        "entity_type": "DEPLOYMENT_WORKFLOW_EVENT",
+        "status": "PENDING_VERIFICATION",
+        "run_id": run_id,
+    }
 
-    def __init__(self, *, job=None, items=None) -> None:
+
+class FakeTable:
+    """GSI1 job query + EVENT begins_with query + get_item 을 흉내내는 resource table stub."""
+
+    def __init__(self, *, job=None, items=None, events=None) -> None:
         self._job = job
         self._items = items or {}
+        self._events = events or []
 
     def query(self, **kwargs: object) -> dict[str, object]:
-        return {"Items": [] if self._job is None else [self._job]}
+        # GSI1(JOB#) query는 job을, base table의 EVENT begins_with query는 event item을 돌려준다.
+        if kwargs.get("IndexName") == "GSI1":
+            return {"Items": [] if self._job is None else [self._job]}
+        return {"Items": list(self._events)}
 
     def get_item(self, **kwargs: object) -> dict[str, object]:
         key = kwargs["Key"]
@@ -167,8 +181,55 @@ class DeploymentWorkRepositoryTest(unittest.TestCase):
         self.assertEqual(work.plan_run.run_id, PLAN_RUN_ID)
         self.assertEqual(work.approval.approved_by, "admin-1")
         self.assertEqual(work.sync_target.finding_id, FINDING_ID)
-        # run_reference는 EventBridge 완료 Event 저장(별도 조각) 전까지 None으로 남는다.
+        # 예약 EVENT item이 없으면 run_reference는 None으로 남고 Worker가 APPLY_COMPLETED를 막는다.
         self.assertIsNone(work.run_reference)
+
+    def test_fills_run_reference_from_a_pending_event_item(self) -> None:
+        table = FakeTable(
+            job=_job_item(revision=2),
+            items={
+                (f"CUSTOMER#{CUSTOMER_ID}", f"DEPLOYMENT#{DEPLOYMENT_ID}"): _deployment_item(
+                    with_plan=True
+                ),
+                (
+                    f"CUSTOMER#{CUSTOMER_ID}",
+                    f"DEPLOYMENT#{DEPLOYMENT_ID}#APPROVAL#approval-{DEPLOYMENT_ID}",
+                ): _approval_item(),
+                (
+                    f"CUSTOMER#{CUSTOMER_ID}",
+                    f"REMEDIATION#{REMEDIATION_ID}",
+                ): _remediation_item(),
+            },
+            events=[_pending_event_item("run-apply-42")],
+        )
+        repo = DynamoDbDeploymentWorkRepository(table, aws_account_id_for=_resolver)
+        work = repo.get_work(job_id=JOB_ID, expected_revision=2)
+        self.assertIsNotNone(work.run_reference)
+        self.assertEqual(work.run_reference.run_id, "run-apply-42")
+        self.assertEqual(work.run_reference.deployment_id, DEPLOYMENT_ID)
+        self.assertEqual(work.run_reference.repository_id, REPOSITORY_ID)
+
+    def test_fails_closed_on_multiple_pending_events(self) -> None:
+        table = FakeTable(
+            job=_job_item(revision=2),
+            items={
+                (f"CUSTOMER#{CUSTOMER_ID}", f"DEPLOYMENT#{DEPLOYMENT_ID}"): _deployment_item(
+                    with_plan=True
+                ),
+                (
+                    f"CUSTOMER#{CUSTOMER_ID}",
+                    f"DEPLOYMENT#{DEPLOYMENT_ID}#APPROVAL#approval-{DEPLOYMENT_ID}",
+                ): _approval_item(),
+                (
+                    f"CUSTOMER#{CUSTOMER_ID}",
+                    f"REMEDIATION#{REMEDIATION_ID}",
+                ): _remediation_item(),
+            },
+            events=[_pending_event_item("run-a"), _pending_event_item("run-b")],
+        )
+        repo = DynamoDbDeploymentWorkRepository(table, aws_account_id_for=_resolver)
+        with self.assertRaises(StoredDataError):
+            repo.get_work(job_id=JOB_ID, expected_revision=2)
 
     def test_returns_none_for_a_wrong_job_type(self) -> None:
         table = FakeTable(job=_job_item(job_type="ASSESSMENT"))

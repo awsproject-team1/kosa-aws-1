@@ -85,6 +85,7 @@ class DynamoDbDeploymentWorkRepository:
             )
             plan_run = _plan_run_from_record(record, deployment_id, repository_id)
             approval = self._approval(customer_id, deployment_id)
+            run_reference = self._run_reference(customer_id, deployment_id, repository_id)
             sync_target = (
                 None
                 if plan is None
@@ -102,7 +103,7 @@ class DynamoDbDeploymentWorkRepository:
                 state_version=state_version,
                 plan_run=plan_run,
                 approval=approval,
-                run_reference=None,
+                run_reference=run_reference,
                 sync_target=sync_target,
             )
         except StoredDataError:
@@ -160,6 +161,42 @@ class DynamoDbDeploymentWorkRepository:
         if item is None:
             return None
         return _approval_from_item(_mapping(item))
+
+    def _run_reference(
+        self, customer_id: str, deployment_id: str, repository_id: str
+    ) -> WorkflowRunReference | None:
+        """apply 완료 예약 EVENT item에서 재조회할 run 좌표를 얻는다(ADR-0019 §7 공유 계약).
+
+        A/EventBridge가 완료 Event 수신 시 `DEPLOYMENT#{id}#EVENT#{run_id}` item을
+        `status=PENDING_VERIFICATION`으로 예약 write한다. 이 reader는 그 item에서 `run_id`를 읽어
+        `WorkflowRunReference`를 만든다. 아직 예약된 run이 없으면(APPLY_COMPLETED 전) None을 돌려주고
+        Worker가 fail-closed한다. 검증 완료(`VERIFIED`)된 item은 이미 확정 사실이므로 재조회 좌표로
+        쓰지 않는다 — 아직 검증 안 된 `PENDING_VERIFICATION` 하나일 때만 좌표로 삼는다.
+        """
+        response = self._table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={
+                ":pk": f"CUSTOMER#{customer_id}",
+                ":prefix": f"DEPLOYMENT#{deployment_id}#EVENT#",
+            },
+        )
+        items = response.get("Items", [])
+        if not isinstance(items, list):
+            raise StoredDataError("stored deployment event items are invalid")
+        pending = [
+            _mapping(item)
+            for item in items
+            if _mapping(item).get("status") == "PENDING_VERIFICATION"
+        ]
+        if not pending:
+            return None
+        if len(pending) != 1:
+            # 검증 대기 run이 여럿이면 어느 것을 재조회할지 모호하다. 추측하지 않고 fail-closed.
+            raise StoredDataError("multiple pending apply events for one deployment")
+        run_id = _string(pending[0].get("run_id"), "run_id")
+        return WorkflowRunReference(
+            deployment_id=deployment_id, repository_id=repository_id, run_id=run_id
+        )
 
     def _sync_target(
         self,
