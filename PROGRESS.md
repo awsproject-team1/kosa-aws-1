@@ -44,8 +44,10 @@
   Lambda에서 404를 반환했다. `_policy_source_components()`를 추가해 `POLICY_SOURCE_BUCKET_NAME`
   버킷과 tenant-scoped 업로드 세션 리포지토리, 정규화 처리용 S3 reader를 구성하고 `policy_sources`
   ·`policy_reader`로 주입했다. 서버가 `source_id`/`source_version`을 발급하므로 client는 저장
-  위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`를 `repositories` 패키지에서 export하고,
-  배선 성공·버킷 미설정 fail-closed를 검증하는 unit 테스트 2건을 추가했다.
+  위치를 고를 수 없다. `DynamoDbPolicySourceUploadRepository`는 `policy_ingestion` 모듈에서
+  직접 import한다 — `repositories/__init__.py` export로 끌어오면 `repositories → api →
+  repositories` 순환 import가 활성화되므로(그 모듈이 `api.policy_sources`를 참조) 패키지
+  초기화 경로를 건드리지 않는다. 배선 성공·버킷 미설정 fail-closed를 검증하는 unit 테스트 2건을 추가했다.
   이어 `m0-foundation.yaml`에 업로드 세션 라우트 3건(`POST /policy-sources/uploads`,
   `GET /policy-sources/{sourceId}/versions/{version}`, `POST .../process`, JWT 인가)과
   `ApiRuntimeFunction`의 `POLICY_SOURCE_BUCKET_NAME`(=ArtifactBucket) 환경변수, `ApiRuntimeRole`의

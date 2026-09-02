@@ -14,10 +14,8 @@ from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.jobs import AssessmentScopeDenied, OutboxDispatcher, SqsWorkflowDispatcher
-from apps.backend.repositories import (
-    DynamoDbAssessmentWorkflowRepository,
-    DynamoDbPolicySourceUploadRepository,
-)
+from apps.backend.repositories import DynamoDbAssessmentWorkflowRepository
+from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
 
 class EnvironmentAssessmentScope(AssessmentScope):
