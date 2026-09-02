@@ -33,7 +33,7 @@
   credential Secret 역할 분리와 canonical GitHub `owner/repository` identity 검증, CloudFormation M1
   parameter all-or-none·빈 CSV 요소·live Region 차단 및 runbook 동기화를 완료. Repository identity는
   preflight·runtime config·최종 REST adapter에서 같은 fail-closed guard를 재사용한다. 최신 `dev` 통합 후
-  Ruff 244 files, Unit 415, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
+  Ruff 247 files, Unit 430, Contract 98, Integration 9, Security 72, `cfn-lint` error 0,
   Assessment 25-call·Policy Catalog 11-item dry-run 통과
 - M3 C post-deploy comparison pagination hardening: `ComparisonAssessment`는 results 또는 findings의
   `next_cursor`가 남은 `AssessmentReport`를 받지 않아, 첫 페이지로 계산한 누락 좌표/부분 Readiness
