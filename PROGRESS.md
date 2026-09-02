@@ -39,7 +39,8 @@
   (`PlanExecutionResult`/`ApplyDispatchReceipt`/`WorkflowRunFacts`/`WorkflowConclusion`/
   `WorkflowRunReference`)을 그대로 소비하며, 최신 `dev` 병합 시 중복 정의하던 `ApplyRunReference`/
   `VerifiedRunOutcome`/`AwsResourceSnapshot` 초안 심볼은 정본 심볼로 대체했다.
-  문서(API/CONTRACTS/DATABASE) 동기화. 후속 리뷰 대기- `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
+  문서(API/CONTRACTS/DATABASE) 동기화. 후속 리뷰 대기
+- `plan_run_id` Contract 갭을 닫았다. apply workflow는 plan run의 saved artifact를 내려받으므로
   그 run 좌표가 필요한데(ADR-0019 §1), 정본 port에 실을 자리가 없어 live apply dispatch가
   GitHub API 422로 거부되던 상태였다. `PlanExecutionResult.plan_run`(`WorkflowRunReference`)을
   추가해 plan 시점 run 좌표를 durable하게 남기고, `DeploymentWork.plan_run` → `dispatch_apply(...,
