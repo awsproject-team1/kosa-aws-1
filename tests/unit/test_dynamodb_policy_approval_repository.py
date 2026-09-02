@@ -3,6 +3,7 @@
 import unittest
 from datetime import UTC, datetime
 
+from apps.backend.repositories.errors import RepositoryError
 from apps.backend.repositories.policy_approval import DynamoDbPolicyApprovalRepository
 from packages.contracts import (
     DocumentUnitKind,
@@ -162,3 +163,105 @@ class DynamoDbPolicyApprovalRepositoryTest(unittest.TestCase):
         # 원문·정규화 텍스트는 DynamoDB에 담기지 않는다.
         self.assertNotIn("bucket", source_item)
         self.assertNotIn("key", source_item)
+
+
+class ReadTable:
+    """auto-unmarshal되는 resource Table을 흉내내는 plain-dict 저장소."""
+
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, str], dict[str, object]] = {}
+
+    def put(self, item: dict[str, object]) -> None:
+        self.items[(item["PK"], item["SK"])] = item
+
+    def get_item(self, **kwargs: object):
+        key = kwargs["Key"]
+        assert isinstance(key, dict)
+        item = self.items.get((key["PK"], key["SK"]))
+        return {"Item": item} if item is not None else {}
+
+
+def _ingestion_item() -> dict[str, object]:
+    document = extraction().document
+    return {
+        "PK": "CUSTOMER#cust-a",
+        "SK": "POLICY_INGESTION#source-1#VERSION#v1",
+        "entity_type": "POLICY_INGESTION",
+        "customer_id": "cust-a",
+        **document.to_dict(),
+    }
+
+
+class DynamoDbPolicyApprovalReadTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.table = ReadTable()
+        self.repository = DynamoDbPolicyApprovalRepository(
+            table_name="metadata",
+            transaction_client=Client(),
+            table=self.table,
+            now=lambda: datetime(2026, 9, 1, tzinfo=UTC),
+            id_factory=lambda: "id-1",
+        )
+        # write 경로가 남길 item들을 plain dict로 read table에 직접 채운다.
+        extraction_dict = extraction().to_dict()
+        self.table.put(_ingestion_item())
+        self.table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATES",
+                "entity_type": "POLICY_CANDIDATE_EXTRACTION",
+                "customer_id": "cust-a",
+                "source_id": "source-1",
+                "source_version": "v1",
+                **extraction_dict,
+            }
+        )
+        self.table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1",
+                "entity_type": "POLICY_SOURCE",
+                "customer_id": "cust-a",
+                "source_id": "source-1",
+                "kind": "INTERNAL_POLICY",
+                "title": "policy.md",
+                "policy_source_version": "v1",
+                "artifact_id": "original-1",
+                "content_sha256": "original-sha",
+            }
+        )
+
+    def test_load_review_returns_ready_document_and_undecided_candidates(self) -> None:
+        document, candidates = self.repository.load_review(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertTrue(document.is_approvable)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].rule.rule_id, "RULE-1")
+        self.assertEqual(candidates[0].lifecycle.value, "CANDIDATE")
+
+    def test_load_publication_marks_approved_candidates_and_returns_source(self) -> None:
+        self.table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL",
+                "entity_type": "POLICY_SOURCE_APPROVAL",
+                "customer_id": "cust-a",
+                **approval().to_dict(),
+            }
+        )
+        candidates, approvals, sources = self.repository.load_publication(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].is_approved)
+        self.assertEqual(approvals[0].source_id, "source-1")
+        self.assertEqual(sources[0].artifact_id, "original-1")
+        self.assertEqual(sources[0].content_sha256, "original-sha")
+
+    def test_load_review_without_read_table_fails_closed(self) -> None:
+        repository = DynamoDbPolicyApprovalRepository(
+            table_name="metadata", transaction_client=Client()
+        )
+        with self.assertRaises(RepositoryError):
+            repository.load_review(customer_id="cust-a", source_id="source-1", source_version="v1")

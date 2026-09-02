@@ -43,6 +43,16 @@
 
 ## Completed
 
+- M1 A 승인·게시 read 어댑터: `DynamoDbPolicyApprovalRepository`에 `load_review`/`load_publication`을
+  구현했다. `load_review`는 `POLICY_INGESTION` item(문서)과 `#CANDIDATES` item(후보)을 읽어
+  `(NormalizedPolicyDocument, RuleCandidate 튜플)`을 돌려주고, `load_publication`은 후보 규칙 전체와
+  승인 record의 `approved_rules`를 조합해 승인된 후보만 APPROVED로 표시한 뒤 approval·PolicySource와
+  함께 돌려준다. read는 자동 un/marshal되는 resource `table`을 쓰고(생성자 `table` 주입, 없으면
+  read가 fail-closed), write는 기존 low-level `transaction_client`를 그대로 쓴다. 문서 재구성은
+  `policy_ingestion.document_from_item`(get_document에서 추출한 공용 함수)을 재사용하되, 그 모듈이
+  api 계층을 참조해 패키지 초기화와 순환하므로 `load_review` 안에서 지연 import한다. read 3건
+  (문서·후보 복원, 승인 표시, read table 없을 때 fail-closed) unit 테스트를 추가했다.
+
 - M1 A 정책 후보 추출 결과 persistence: C가 PR #42로 넘긴 `PolicyCandidateExtraction`(READY
   정규화 문서 + 미결정 후보 규칙 전체)을 승인·게시 read 경로가 읽을 형태로 저장하는
   `DynamoDbPolicyApprovalRepository.record_candidate_extraction`을 추가했다. 두 item을 조건부
