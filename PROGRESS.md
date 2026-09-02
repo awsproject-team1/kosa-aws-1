@@ -167,11 +167,33 @@
 
 ## Next
 
-- **M3 A/D 합의 선행:** ADR-0019를 리뷰해 `Accepted`로 확정한다. 확정 직후 A/D는
-  `DeploymentStatus`·`AuditAction`·`TERRAFORM_PLAN_BINARY` Contract, `RemediationSyncTarget` 이관과
-  D 실행 port 시그니처(`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`,
-  `ActualRereadPort`)를 고정한다. C 비교 projection의 durable input(`phase`, source/deployment link,
-  complete plan)과 verification endpoint 배선은 그 저장 경계에 연결한다.
+- **M3 A/D 합의 선행 (ADR-0019):** 별도 회의를 열지 않고 ADR-0019를 담은 PR에 A·D가 approve하는
+  것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과 근거가 모두 들어 있다. approve가
+  모이면 같은 PR에서 상태를 `Accepted`로 바꾼다.
+- **M3 Contract 동결 — ADR-0020 파생분(지금 착수 가능):** ADR-0020이 `Accepted`이므로 아래는
+  ADR-0019 합의를 기다리지 않는다.
+  1. `ASSESSMENT#{assessment_id}#PLAN` item에 planned `(resource_id, rule_id, perspective)` **집합**
+     속성 추가 (A). **이것 없이는 C의 비교 경계를 실제로 배선할 수 없다.**
+  2. `calculate_readiness_score`가 개수 대신 planned 집합을 받도록 변경 (A·C)
+  3. `AuditEventType` StrEnum 신설 + `action`을 종류 필드로 쓰는 3건 개명 (A, 아래 현존 결함)
+  4. `RemediationSyncTarget`을 `packages/contracts/`로 이관 (C→공용)
+- **M3 Contract 동결 — ADR-0019 파생분(합의 이후):** `DeploymentStatus` enum과
+  `derive_deployment_status()` 파생 함수, `plan_hash` 허용 목록 투영 함수와
+  `has_destructive_changes` 산출 함수, `TERRAFORM_PLAN_BINARY` ArtifactType, `Action` enum에
+  `START_DEPLOYMENT`(User)·`REJECT_DEPLOYMENT`(Admin 전용), D 실행 port 시그니처 4종
+  (`PlanRequestPort`, `ApplyDispatchPort`, `WorkflowRunReader`, `ActualRereadPort`)과 그 반환형.
+  **port 시그니처를 맨 앞에 둔다** — 확정되는 순간 A·C가 Protocol + fixture로 병렬 진입한다.
+  M2에서 D live adapter 지연으로 A/C가 대기한 상황을 반복하지 않기 위한 순서다.
+- **M2 A (현존 결함):** audit event의 종류 필드가 `action`(`repositories/deployment.py`,
+  `repositories/policy_approval.py` 2곳)과 `event_type`(`repositories/dynamodb.py`,
+  `repositories/remediation.py`)으로 갈려 있어 균일 조회가 불가능하다. 정본 필드명은 `event_type`
+  이다 — `dynamodb.py`가 같은 item에서 `action`을 `RemediationAction` 값으로 이미 쓰고 있어
+  `action`으로 통일하면 두 값이 같은 키를 다툰다. 읽는 코드가 없어 write-only 변경이고 함께 바뀌는
+  것은 단위 테스트 assertion 4건이다. Admin `GET /audit-events`를 만들기 전에, 그리고 M3에서 값이
+  7개 더 늘기 전에 선행한다.
+- **M3 C:** `POST_DEPLOY_VERIFICATION` phase Golden Case가 0건이다. 재평가 품질 Gate를 돌리려면 이
+  phase의 Case를 추가해야 하며, 원 Assessment와 같은 `model_profile_id`·`rubric_version`을 써야
+  비교가 성립한다 (ADR-0020 §3).
 - **M1 실제 검증 선행:** 고객 관리자가 `m1-customer-bootstrap.yaml`을 자신의 sandbox
   계정에 한 번 실행해 exact GitHub Environment OIDC deployment role, versioned Lambda-code
   bucket, foundation-only CloudFormation execution role을 만든다. 이어 현재 저장소에 서로 다른
@@ -211,17 +233,21 @@
 
 ## Blocked
 
-- **M3 착수 전 합의 필요 (ADR-0019 `Proposed`):** `plan_hash`의 대상 바이트 정의, Terraform state
-  bucket/lock table 소유와 state key 분리, apply 대상 commit(default branch merge commit),
-  `deployment_id` 발급과 Deployment 생성 진입점, apply 트리거 주체(A 승인 / D dispatch)와 이중 apply
-  방지, 고객 repository workflow 소유권과 GitHub App 권한, Plan/Apply 완료 Event의 신뢰 경계,
-  `DeploymentStatus` 전이·`/reject` 시맨틱·CI fail-closed. 합의 전에는 D가 live plan/apply 경로를,
+- **M3 착수 전 서명 필요 (ADR-0019 `Proposed`):** 결정은 미정 없이 모두 채워져 있다. 남은 것은
+  A·D의 서명이고, 별도 회의가 아니라 **ADR-0019를 담은 PR의 리뷰 approve**로 받는다 (CONTRIBUTING:
+  Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). 서명 전에는 D가 live plan/apply 경로를,
   A가 Deployment 생성·후속 전이를 구현하지 않는다.
-  *Owner:* D + A + Security. *Blocks:* M3 A/C/D/Shared 전체.
+  *Owner:* D + A + Security. *Blocks:* M3 D(plan/apply 실행), M3 A(Deployment 생성·상태 API),
+  M3 Shared(승인 없는 Write 방지 E2E). **ADR-0020 파생 Contract 작업은 막지 않는다.**
 - **M3 integration 의존성 (ADR-0020 `Accepted`):** C의 비교 projection은 complete immutable Assessment
-  input을 요구한다. A는 `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, complete
-  `(resource_id, rule_id, perspective)` plan의 durable 저장·조회와 endpoint 배선을, D는 apply 완료 뒤
-  Actual 재조회 입력을 제공해야 한다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
+  input을 요구하고 부분 report(cursor가 남은 report)를 fail-closed로 거부한다. A는
+  `phase`/`source_assessment_id`/`deployment_id`, profile/rubric, 그리고 planned
+  `(resource_id, rule_id, perspective)` **집합**의 durable 저장·조회와 endpoint 배선을, D는 apply
+  완료 뒤 Actual 재조회 입력을 제공해야 한다. 예외는 조회 시 표시만 하며 평가를 막지 않는다.
+  **planned 집합은 현재 어디에도 저장되지 않고 조회 시 재구성도 불가능하다** (리소스 목록이 시간에
+  따라 달라지고, 결과에서 거꾸로 세면 누락된 평가가 보이지 않는다). `ASSESSMENT#{id}#PLAN` item에
+  속성으로 추가하는 것이 선행 조건이며, 그 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
+  동작한다.
   *Owner:* A + D (+ B exception read). *Blocks:* live M3 verification endpoint와 M4 customer runtime report,
   C의 mock/contract implementation은 차단하지 않는다.
 
@@ -253,7 +279,9 @@
 - [x] **C — AI Evaluation:** Assessment Graph, Applicable Rule/Evidence 판단, 구조화 결과 검증,
   `IAC`/`AWS_ACTUAL`/`DRIFT` 3관점 산출, Finding·Readiness Score projection, Assessment UI 기본
   화면 *(6개 S3 Rule × 3관점 = 18개 평가의 fixture integration으로 결과·Finding·Coverage·Readiness
-  까지 검증 완료; 고객 Bedrock 품질 Gate와 IAC/DRIFT Golden Case는 sandbox 실행 대기)*
+  까지 검증 완료; 고객 Bedrock 품질 Gate는 sandbox 실행 대기. `fixtures/m1/golden_dataset_cases.json`
+  은 18건 = 6 rule × 3 perspective로 `IAC`/`AWS_ACTUAL`/`DRIFT` Case가 이미 모두 있고, 비어 있는 것은
+  관점이 아니라 **phase**다 — 18건 전부 `INITIAL`이며 `POST_DEPLOY_VERIFICATION`은 0건이다)*
 - [x] **D — Remediation/GitHub/Deployment:** 승인 Repository IaC Snapshot과 AWS Resource Read-Only 연결 *(read-only Tool 경계 + Assessment 입력 조합 계층, S3 AssumeRole, GitHub REST commit/tree/blob read adapter 구현 완료. IAC 관점용 `IaCDocument` 본문 read 포함, write 표면 없음; 고객 GitHub App/runtime injection E2E 대기)*
 - [x] **Shared:** Contract/Integration Test, Golden Dataset 반복 평가, Score/Coverage 표시 검증 *(3관점 Initial Assessment integration test, Drift 파생 unit test, Coverage/Readiness/Finding 표시 검증 완료; Golden Dataset 반복 평가는 기존 M0 runner 유지, 확대 Rule 재고정은 Next)*
 
@@ -288,8 +316,8 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 여전히 `Propos
   *(immutable complete-plan input Contract, Profile/rubric/plan/score fail-closed comparison 및 5개
   Resolution의 결정적 projection 구현. durable Assessment/endpoint wiring은 A/D integration 의존성)*
 - [ ] **D — Remediation/GitHub/Deployment:** GitHub Actions OIDC Apply, 승인 `commit_sha`/`plan_hash`
-  재검증, AWS Actual 재조회 *(plan_hash 대상 정의, state serial, saved plan apply, run 재조회 —
-  ADR-0019 §1, §2, §5, §7)*
+  재검증, AWS Actual 재조회 *(plan_hash 허용 목록 투영, state `lineage`·`serial`, saved plan apply,
+  run 재조회 — ADR-0019 §1, §2, §5, §7)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.

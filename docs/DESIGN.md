@@ -107,14 +107,18 @@ revision-bound authoritative work를 다시 읽어 `TERRAFORM_PATCH`에는 injec
 M3 승인 배포 경계는 ADR-0019가 `Proposed`로 남아 있고, Post-Deploy Verification 비교 경계는
 ADR-0020이 `Accepted`로 정의한다. Deployment는 A가 발급한
 `deployment_id`로 시작해 `PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED →
-WAITING_APPROVAL → APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED`를 조건부 write로
-전이하고, `BLOCKED`, `MANUAL_REVIEW`, `REJECTED`, `VERIFICATION_INDETERMINATE`로 분기한다. 하나의
+WAITING_APPROVAL → APPROVED → APPLYING → APPLIED → VERIFYING → VERIFIED`를 거치고,
+`BLOCKED`, `MANUAL_REVIEW`, `REJECTED`, `VERIFICATION_INDETERMINATE`로 분기한다. 이 값은 저장하지
+않고 `JobStatus`·`JobCurrentStep`·approval/rejection/run/verification record에서 read 시
+`derive_deployment_status()`로 파생한다. 하나의
 Deployment는 하나의 Job이며 Job의 write-once `assessment_id`는 검증 Assessment를 가리킨다. 원
 Assessment는 Deployment record가 참조한다. Post-Deploy Verification은 원 Assessment를 덮어쓰지 않고
 `phase`, `source_assessment_id`, `deployment_id`를 가진 새 Assessment로 저장하며, 원 Assessment와 같은
 Policy Profile version·`model_profile_id`·`rubric_version`으로 같은 평가 계획을 다시 평가한다. 변화가
 인프라 개선인지 모델 차이인지 구분할 수 없게 되므로 최신 Profile로 재평가하지 않는다. 재평가는 apply
-완료 확인 후 30초 지연 뒤 시작하고, 기대와 다른 Actual은 총 세 번까지 재조회한 뒤에도 다르면
+완료 확인 직후 지연 없이 1회차를 읽고, 기대와 다른 Actual만 15초·45초 간격으로 총 세 번까지
+재조회한다. 재조회는 **immutable write 앞에서** 끝내고 최종 읽기값 하나만 결과로 쓴다 — 결과를 쓴
+뒤 재시도하면 같은 result SK에 두 번째 조건부 write가 들어가 충돌한다. 세 번 뒤에도 다르면
 `VERIFICATION_FAILED`가 아니라 `VERIFICATION_INDETERMINATE`로 사람에게 보낸다. AWS 전파 지연을 정책
 위반으로 확정하지 않는다. Finding 해소 여부와 점수·Coverage 변화는 AI 판정이 아니라 두 immutable
 Assessment의 결정적 비교이며, planned 평가 집합이나 Profile/rubric이 다르면 delta를 만들지 않고
@@ -154,10 +158,14 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   Environment에서 사람이 commit/key/SHA-256/S3 Version ID를 승인한 뒤, 배포 job이 exact version을
   재검증하고 모든 Lambda에 고정한다.
 - Apply 전 승인한 `commit_sha`와 `plan_hash`를 재검증한다.
-- (ADR-0019, `Proposed`) 승인 대상 plan artifact는 `terraform show -json`을 canonical JSON으로
-  정규화한 바이트이며 `plan_hash`는 그 SHA-256이다. binary saved plan은 별도 artifact로 두고 apply는
-  그 saved plan만 적용한다. Apply 직전에는 `plan_hash`와 함께 plan 시점의 Terraform **state serial**도
-  재검증한다. hash 일치는 같은 계획을 보장하지만 같은 state를 보장하지 않는다.
+- (ADR-0019, `Proposed`) 승인 대상 plan artifact는 `terraform show -json`의 `resource_changes[]`를
+  **허용 목록으로 투영한** canonical JSON 바이트이며 `plan_hash`는 그 SHA-256이다. 제외 목록은 열린
+  집합이라 Provider가 필드를 늘리면 재현성이 조용히 깨진다. 이 투영이
+  `has_destructive_changes`(`delete` 또는 비어 있지 않은 `replace_paths`)의 유일한 산출 근거이기도
+  하다. `show -json` 원본과 binary saved plan은 각각 별도 artifact로 두고 apply는 saved plan만
+  적용한다. Apply 직전에는 `plan_hash`와 함께 plan 시점의 Terraform **state `lineage`·`serial`**도
+  재검증한다. hash 일치는 같은 계획을 보장하지만 같은 state를 보장하지 않고, `serial` 단독으로는
+  state 재생성을 잡지 못한다.
 - (ADR-0019, `Proposed`) Terraform state는 고객 bootstrap stack이 만드는 별도 S3 bucket과 DynamoDB
   lock table에 두고 state key를 `(repository_id, workspace)`로 분리한다. apply 대상 commit은 default
   branch의 merge commit이며 PR head commit의 plan은 승인 대상이 아니다.

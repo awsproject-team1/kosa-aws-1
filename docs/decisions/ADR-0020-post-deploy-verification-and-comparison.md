@@ -65,14 +65,25 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 ### 3. Model Profile과 rubric은 원 Assessment와 동일해야 한다
 
 - 검증 Assessment는 원 Assessment의 `model_profile_id`와 `rubric_version`을 그대로 재사용한다.
-- 다르면 비교하지 않고 실패한다(`COMPARISON_PROFILE_MISMATCH`). M1 `DRIFT` 파생이 이미 같은
-  규칙을 쓴다 — 서로 다른 Profile/rubric에서 나온 두 판정은 비교 대상이 아니다.
+- 다르면 delta를 만들지 않고 `comparable = false`와 이유 코드를 반환한다. 이유 코드는
+  `ComparisonIneligibilityReason.MODEL_PROFILE_MISMATCH`와 `RUBRIC_VERSION_MISMATCH`로 **분리**
+  한다. 두 값이 각각 다를 수 있고, 어느 쪽이 어긋났는지가 후속 조치를 가르기 때문이다.
+  M1 `DRIFT` 파생이 이미 같은 규칙을 쓴다 — 서로 다른 Profile/rubric에서 나온 두 판정은 비교
+  대상이 아니다.
+- Profile이 그 사이 교체됐다면 비교가 아니라 **새 Initial Assessment로 처리한다.**
 - 이 제약 때문에 Model Profile 교체는 검증 대기 중인 Deployment가 없을 때만 배포한다.
+- **선행 작업:** `POST_DEPLOY_VERIFICATION` phase의 Golden Case가 현재 0건이다
+  (`fixtures/m1/golden_dataset_cases.json`은 18건 전부 `INITIAL`). 이 phase의 품질 Gate를 돌리려면
+  Case 추가가 선행되고, 그 Case는 원 Assessment와 같은 `rubric_version`을 써야 한다.
 
 ### 4. Finding Resolution은 Code의 결정적 diff다
 
-- 매칭 키는 `(resource_id, rule_id, rule_version, perspective)`다. `finding_id`가 이 좌표에서
-  결정적으로 만들어지므로(ADR-0016) 두 Assessment 사이에서 안정적으로 대응한다.
+- 매칭 키는 `(resource_id, rule_id, perspective)` **세 값**이고, `rule_version`은 키가 아니라
+  대응된 두 결과 사이의 **동등성 검사** 대상이다. `rule_version`을 키에 넣으면 version이 바뀐
+  좌표가 before/after 각각 짝 없는 항목으로 갈라져 "version이 달라 비교 불가"라는 판정 자체를
+  내릴 수 없다. 키에서 빼고 값으로 비교해야 `INDETERMINATE`가 표현된다.
+- 이 세 값은 planned 집합의 좌표(5번)와 같은 구성이다. 매칭 키와 비교 가능성 판정이 서로 다른
+  좌표를 쓰면 두 판정이 어긋난다.
 - 값 어휘는 다음 다섯 개다.
 
 | 값 | 조건 |
@@ -81,12 +92,24 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 | `UNRESOLVED` | 새 결과가 여전히 `FAIL` |
 | `REGRESSED` | 원 결과가 `PASS`였는데 새 결과가 `FAIL` (원 Finding이 없던 좌표의 신규 위반) |
 | `INDETERMINATE` | 새 결과가 `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`, `EXECUTION_ERROR`이거나 `rule_version`이 달라 비교 불가 |
-| `NO_LONGER_APPLICABLE` | 새 결과가 `OUT_OF_SCOPE`이거나 리소스가 더 이상 존재하지 않음 |
+| `NO_LONGER_APPLICABLE` | 새 결과가 `OUT_OF_SCOPE` (리소스 소멸 포함) |
 
 - 이 판정은 AI가 하지 않는다. `DRIFT` 파생과 같은 근거로, 두 immutable 결과의 기계적 비교다.
   모델에게 before/after를 요약하게 하면 판정 정본이 둘로 갈린다.
 - `rule_version`이 달라진 경우 `INDETERMINATE`로 두고 이유 코드를 남긴다. 다른 version의 Rule은
   다른 질문이므로 해소로 읽지 않는다.
+- **`EvaluationStatus`에 값을 새로 추가하지 않는다.** 리소스 소멸은 `OUT_OF_SCOPE` 결과로 기록한다.
+  값을 늘리면 모든 소비자와 golden fixture가 함께 바뀐다. 소멸과 "Rule 비적용"의 구분은 결과의
+  `rationale`·`evidence_references`에 남기고, `FindingResolution`은 두 경우 모두
+  `NO_LONGER_APPLICABLE`로 같게 판정한다 — 후속 조치가 같기 때문이다.
+- 리소스가 사라졌으면 **세 관점 모두에** `OUT_OF_SCOPE` 결과를 쓴다. planned 집합은 원 Assessment
+  에서 고정돼 그 리소스를 여전히 포함하므로, 한 관점만 비우면 집합이 어긋나 `comparable = false`가
+  된다. `OUT_OF_SCOPE`는 completed 집합에는 들어가고 점수 계산에서만 빠지므로
+  (`apps/backend/assessment/readiness.py`는 `EXECUTION_ERROR`만 completed에서 제외한다)
+  Coverage와 score가 모두 성립한다.
+- 비교 입력은 `Finding`이 아니라 **`EvaluationResult` 집합**이다. `Finding`은 status를
+  `FAIL`/`MANUAL_REVIEW`/`INSUFFICIENT_EVIDENCE`로 제한하므로 `PASS`를 표현하지 못하고,
+  `REGRESSED`(before `PASS` → after `FAIL`)를 Finding만으로는 계산할 수 없다.
 
 ### 5. 점수·Coverage 변화는 비교 가능할 때만 표시한다
 
@@ -95,7 +118,32 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   2. 두 Assessment의 planned `(resource_id, rule_id, perspective)` 집합이 동일
   3. `model_profile_id`와 `rubric_version`이 동일 (3번)
 - 하나라도 어긋나면 `comparable = false`와 이유 코드를 반환하고 delta를 만들지 않는다. Frontend는
-  `comparable = false`에서 숫자 변화를 표시하지 않고 이유를 보여준다.
+  `comparable = false`에서 숫자 변화를 표시하지 않고 이유를 보여준다. 이유 코드는
+  `SOURCE_READINESS_UNAVAILABLE`, `VERIFICATION_READINESS_UNAVAILABLE`,
+  `PLANNED_EVALUATIONS_MISMATCH`, `MODEL_PROFILE_MISMATCH`, `RUBRIC_VERSION_MISMATCH` 다섯 개이며,
+  어긋난 것이 여럿이면 모두 반환한다. 순서는 결정적이다.
+- **비교 입력은 완전한 스냅샷이어야 한다.** `AssessmentReport`는 페이지 단위로 조회될 수 있고
+  (`next_cursor`/`findings_next_cursor`), 첫 페이지만 넘기면 누락된 좌표가 조용히
+  `INDETERMINATE`가 되고 delta도 부분 집합 기준이 되어 **예외 없이 잘못된 리포트**가 나온다.
+  비교 경계는 cursor가 남은 report를 fail-closed로 거부한다.
+
+**선행 작업 — 이것 없이는 2번 조건을 판정할 수 없다.**
+
+- planned 집합을 **이미 존재하는 `ASSESSMENT#{assessment_id}#PLAN` item에 속성으로 추가해
+  저장한다.** 그 item은 지금 planned 적용 가능 `Resource × Rule × Perspective`의 **개수**만 담는다
+  (`docs/DATABASE.md` Item layout). Assessment 시작 시 이미 쓰는 항목이므로 write가 늘지 않고
+  속성만 늘어난다.
+- 조회 시 재구성은 채택하지 않는다. 비용 때문이 아니라 **원리적으로 불가능**하기 때문이다.
+  planned 집합은 (리소스 목록 × Rule × 관점)에서 나오는데 리소스 목록은 시간이 지나면 달라진다.
+  결과에서 거꾸로 세는 것도 안 된다 — 결과는 완료된 것만 알려주고 계획됐다가 누락된 항목은 보이지
+  않는다. `apps/backend/assessment/readiness.py`가 내부에서 만드는 집합은 planned가 아니라
+  **completed** 집합이며, planned는 `planned_evaluations: int` 개수로만 들어온다.
+- 같은 작업에서 `calculate_readiness_score`의 인자를 개수에서 집합으로 바꾸고
+  `len(completed) != planned_evaluations` 비교를 `completed != planned` 집합 비교로 바꾼다. 개수
+  비교는 계획에 없던 평가가 누락된 평가를 대신 채운 경우를 통과시킨다.
+- `AssessmentCoverage`의 개수 필드는 그대로 두고, 집합은 비교 가능성 판정에만 쓴다.
+- planned 집합이 DynamoDB item 한도에 닿을 규모가 되면 S3 artifact로 옮기고 PLAN item에는 digest만
+  남긴다. 현재 18건이므로 M3·M4에서는 해당하지 않는다.
 - `DRIFT` 관점은 Readiness Score에서 여전히 제외한다(ADR-0016). 다만 Drift 해소 여부는 Finding
   Resolution으로 별도 표시한다. 데모에서 "drift가 사라졌다"는 점수가 아니라 이 값으로 말한다.
 
@@ -117,12 +165,19 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 
 ### 8. 검증 시작 시점과 재시도
 
-- apply 완료 Event 확인 후 **30초 고정 지연** 뒤 첫 재조회를 시작한다.
-- 기대와 다른 Actual을 읽으면 기존 재시도 규칙(작업별 총 3회, `docs/DESIGN.md`)을 재사용해 다시
-  조회한다. AWS 전파 지연과 실제 미적용을 한 번의 읽기로 구분할 수 없기 때문이다.
+- **재조회는 immutable write 앞에서 끝낸다.** 결과를 쓴 뒤 재시도하면 같은 result SK에 두 번째
+  조건부 write가 들어가 충돌한다. 최종 읽기값 하나만 결과로 쓴다. 이 순서가 1번의 "result SK를
+  바꾸지 않는다"와 양립하는 유일한 방법이다.
+- **1회차는 지연 없이 읽는다.** 고정 30초를 모든 배포에 무조건 붙이면 드물게 일어나는 전파 지연
+  때문에 매 배포가 30초 느려진다. apply가 고친 항목이 여전히 위반으로 보일 때만 **15초 → 45초**
+  간격으로 재조회한다. 총 3회는 ADR-0013의 "총 세 번" 규칙을 재사용한다.
+- 재조회 대상은 불일치한 리소스로 좁힌다. 전체 재평가(2번)는 유지되지만 재시도가 전체를 다시
+  읽지는 않는다. Bedrock 호출은 최종 읽기값 1회에만 발생한다.
 - 3회 후에도 다르면 `VERIFICATION_FAILED`가 아니라 `VERIFICATION_INDETERMINATE`로 두고 사람에게
-  보낸다. 전파 지연을 정책 위반으로 확정하면 데모와 신뢰가 함께 깨진다.
+  보낸다. 전파 지연과 실제 미반영을 자동으로 구분할 수 없기 때문이다.
 - 지연·횟수는 이 ADR이 정하는 값이며 개별 구현이 바꾸지 않는다. 변경은 이 ADR 개정으로 한다.
+  다만 이 값들은 **M1 범위가 S3 단독**이라는 전제에서 정했다. sandbox E2E 1회로 실제 전파 시간을
+  관측해 재확인하고, EC2/RDS/ALB로 확장할 때 다시 본다.
 
 ### 9. Deployment 단계에는 LLM을 두지 않는다
 
@@ -133,6 +188,16 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - 결정적 판정 단계를 임의로 LLM화하지 않는다. ADR-0018이 제거한 "판정 정본이 둘"인 구조가 다시
   생긴다.
 
+## 고정돼야 하는 불변식
+
+1. 검증 Assessment는 원 Assessment와 다른 `assessment_id`를 갖고, 원 결과를 덮어쓰지 않는다.
+2. `model_profile_id`·`rubric_version`이 다른 두 Assessment는 비교되지 않는다.
+3. Finding Resolution은 두 immutable 결과에서 계산되며 AI 호출이 없다.
+4. planned 집합이 다르면 delta가 계산되지 않고 `comparable = false`가 반환된다.
+5. 페이지가 남은 부분 report는 비교 입력으로 받아들여지지 않는다.
+6. 예외는 재평가 결과에 저장되지 않는다.
+7. 재조회 3회 후에도 불일치면 자동 실패가 아니라 사람 판단으로 간다.
+
 ## Consequences
 
 - before/after 양쪽 결과가 각각 immutable Assessment로 남아 감사와 데모 재현이 가능하다.
@@ -141,7 +206,14 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   전체만큼 발생한다. 현재 규모(18개)에서는 수용 가능하며, Rule 확장 시 축소 재평가와
   `comparable=false` 표기를 재검토한다.
 - Model Profile 동일성 강제 때문에 Profile 교체 시점이 Deployment 수명과 결합된다.
-- Finding Resolution이 Code 판정이므로 Golden Dataset 확장 없이도 결과가 결정적이다.
+- Finding Resolution이 Code 판정이므로 Golden Dataset 확장 없이도 결과가 결정적이다. 다만
+  재평가 자체의 품질 Gate는 `POST_DEPLOY_VERIFICATION` Golden Case가 0건이라 아직 돌릴 수 없다.
+- planned 집합이 A의 선행 작업으로 추가되지만 새 item이 아니다. 이미 쓰는
+  `ASSESSMENT#{assessment_id}#PLAN`에 속성이 하나 늘고, 같은 작업에서 `calculate_readiness_score`가
+  개수 대신 집합을 받도록 바뀐다. **이 선행 작업 전까지 C의 비교 경계는 호출자가 집합을 주입해야만
+  동작하며, 실제 배선은 불가능하다.**
+- `runtime.py`의 `INITIAL` 하드코딩 제거는 M1 경로에 영향을 준다. 기존 호출부가 명시적으로
+  `INITIAL`을 넘기도록 바꾸고 테스트로 고정한다.
 
 ## Rejected alternatives
 
@@ -156,6 +228,17 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - **억제된 Finding을 결과에 `SUPPRESSED`로 저장:** 예외 만료 후 과거 결과가 사실과 달라지므로
   거부한다.
 - **불일치를 즉시 `VERIFICATION_FAILED`로 확정:** AWS 전파 지연을 위반으로 오판하므로 거부한다.
+- **모든 배포에 30초 고정 지연 후 첫 재조회:** 드물게 일어나는 전파 지연 때문에 매 배포를 30초
+  느리게 만드므로 거부한다. 1회차는 즉시 읽고 불일치일 때만 15초·45초로 물러난다.
+- **결과를 쓴 뒤 재조회·재시도:** 같은 result SK에 두 번째 조건부 write가 들어가 immutable 규칙과
+  충돌하므로 거부한다. 재조회는 write 앞에서 끝낸다.
+- **`rule_version`을 매칭 키에 포함:** version이 바뀐 좌표가 before/after 각각 짝 없는 항목으로
+  갈라져 `INDETERMINATE` 판정 자체를 표현할 수 없으므로 거부한다.
+- **리소스 소멸에 `EvaluationStatus` 값을 새로 추가:** 모든 소비자와 golden fixture가 함께 바뀌고,
+  `OUT_OF_SCOPE`로 이미 표현 가능하므로 거부한다.
+- **planned 집합을 조회 시 재구성:** 리소스 목록이 시간에 따라 달라지고 결과에서는 누락된 평가가
+  보이지 않아 원리적으로 불가능하므로 거부한다.
+- **계획 개수만 비교해 `comparable`을 판정:** 개수가 같아도 집합은 다를 수 있으므로 거부한다.
 
 ## Open decision
 
@@ -170,5 +253,8 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - **Final record (2026-09-02):** Decision 1–9를 채택한다. C는
   `FindingResolution`/`AssessmentComparison` Contract와 complete immutable input을 받는 결정적
   projection을 구현했다. 계획 집합은 단순 count가 아니라 `(resource_id, rule_id, perspective)`
-  전체로 비교한다. A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와 complete plan 조회를,
-  D는 apply 완료 뒤의 Actual 재조회 입력을 제공한다.
+  전체로 비교하고, 매칭 키도 같은 세 값이며 `rule_version`은 동등성 검사 대상이다. 부분 report는
+  비교 입력으로 거부된다. A는 `phase`/`source_assessment_id`/`deployment_id` 영속화와
+  `ASSESSMENT#{assessment_id}#PLAN` item의 planned 집합 저장·조회를, D는 apply 완료 뒤의 Actual
+  재조회 입력을 제공한다. **planned 집합 저장(5번 선행 작업)이 들어가기 전까지 C의 비교 경계는
+  실제 배선이 불가능하다.**

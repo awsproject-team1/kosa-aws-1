@@ -102,9 +102,10 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   commit을 Plan 대상으로 사용한다. Artifact bytes 또는 공개 S3 URL은 반환하지 않는다.
 - Deployment 승인 요청은 `commit_sha`와 `plan_hash`를 포함한다. Backend는 저장된
   `TerraformPlan`과 정확히 일치할 때만 승인 상태를 기록하며, Apply 직전에 다시 검증한다.
-  `plan_hash`가 어떤 바이트의 digest인지(canonical JSON plan), Terraform state serial을 함께
-  재검증한다는 점, apply 대상 commit이 default branch의 merge commit이라는 점은 ADR-0019에서
-  `Proposed` 상태로 정의됐다. 합의 전에는 이 세 값을 구현에서 임의로 정하지 않는다.
+  `plan_hash`가 어떤 바이트의 digest인지(`resource_changes[]`를 허용 목록으로 투영한 canonical
+  JSON), Terraform state `lineage`·`serial`을 함께 재검증한다는 점, apply 대상 commit이 default
+  branch의 merge commit이라는 점은 ADR-0019에서 `Proposed` 상태로 정의됐다. 합의 전에는 이 세
+  값을 구현에서 임의로 정하지 않는다.
 
 세부 wire shape와 runtime validation은 `packages/contracts/`가 정본이고 M0 예시는
 `fixtures/m0/`에 둔다.
@@ -162,8 +163,9 @@ service가 있을 때만 handler에 배선된다.
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
   지정하지 않는다. A는 저장된 `RemediationDecision`이 actionable인지, C Worker 결과가 있는지,
-  `TERRAFORM_PATCH`의 대상 commit이 default branch에 merge됐는지, 고객 repository CI가 그 commit에서
-  성공했는지를 확인한 뒤에만 Deployment를 만든다. 하나라도 어긋나면 Deployment를 만들지 않는다
+  `TERRAFORM_PATCH`의 대상 commit이 default branch에서 도달 가능한지를 확인한 뒤에만 Deployment를
+  만든다. 하나라도 어긋나면 Deployment를 만들지 않는다. 고객 repository CI의 성공 여부는 별도로
+  검사하지 않는다 — CI가 실패하면 PR이 merge되지 않고, 그러면 도달 가능성 검사에서 걸린다
   (ADR-0019).
 - 승인 화면이 `commit_sha`와 `plan_hash`를 보내려면 먼저 그 값을 읽어야 하므로
   `GET /deployments/{deploymentId}`가 승인 요청의 선행 호출이다. 응답은 plan 요약과 hash를
@@ -173,7 +175,8 @@ service가 있을 때만 handler에 배선된다.
   `REJECTED`로, Job을 `CANCELLED`로 전이시키고 audit event를 같은 transaction에 쓴다. 같은
   `plan_hash`의 재승인은 허용하지 않으며 재시도는 새 plan과 새 Deployment로만 한다.
 - 승인은 apply를 트리거하지 않는다. A는 승인 record와 dispatch outbox만 쓰고, D Deployment Worker가
-  승인·`commit_sha`·`plan_hash`·Terraform state serial을 재검증한 뒤 GitHub Actions를 dispatch한다.
+  승인·`commit_sha`·`plan_hash`·Terraform state `lineage`·`serial`을 재검증한 뒤 GitHub Actions를
+  dispatch한다.
 - Plan/Apply 완료는 OIDC EventBridge Event로 Deployment Worker를 재개하며 Client callback은 사용하지
   않는다. Event 값은 신뢰 대상이 아니라 신호이고, D가 `run_id`로 Actions run을 다시 읽어 workflow,
   repository, `ref`, conclusion, plan artifact digest를 대조한다.

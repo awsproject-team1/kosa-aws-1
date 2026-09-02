@@ -15,8 +15,9 @@
   repository, `ref`, conclusion, plan artifact digest를 대조한 뒤에만 상태를 전이한다
   (ADR-0019, `Proposed`)
 - Terraform state (M3 계획): 고객 bootstrap stack이 만드는 별도 S3 state bucket과 DynamoDB lock
-  table. state key는 `(repository_id, workspace)`로 분리하고, plan 시점 state serial을 Deployment
-  record에 기록해 apply 전 재검증한다 (ADR-0019, `Proposed`)
+  table. state key는 `(repository_id, workspace)`로 분리하고(workspace 이름은
+  `{customer_id}-{repository_id}`), plan 시점 state `lineage`·`serial`을 Deployment record에 기록해
+  apply 전 두 값을 함께 재검증한다 (ADR-0019, `Proposed`)
 - 고객 repository workflow (M3 계획): plan/apply workflow는 `ci/terraform/` template을 고객 관리자가
   1회 수동 설치한다. GitHub App은 `contents`/`pull_requests` write만 갖고 `workflows: write`는 갖지
   않는다 (ADR-0019, `Proposed`)

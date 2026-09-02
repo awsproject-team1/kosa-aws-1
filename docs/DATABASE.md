@@ -113,11 +113,16 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
 | --- | --- | --- | --- |
 | Deployment workflow event | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` | Plan/Apply 완료 Event detail. 같은 `run_id`는 한 번만 기록된다 |
 
-- `DEPLOYMENT#{deployment_id}` item은 `status`(`DeploymentStatus`), 대상 `commit_sha`,
-  `plan_hash`, canonical JSON plan과 saved binary plan의 Artifact reference, plan 시점의 Terraform
-  **state serial**, `remediation_id`, `source_assessment_id`, 그리고 검증 후의
-  `verification_assessment_id`를 보관한다. 상태 전이는 모두 조건부 write이며 현재 status와 revision을
-  조건으로 한다.
+- `DEPLOYMENT#{deployment_id}` item은 대상 `commit_sha`, `plan_hash`, 투영된 canonical JSON plan과
+  saved binary plan의 Artifact reference, plan 시점의 Terraform **state `lineage`와 `serial`**,
+  `remediation_id`, `source_assessment_id`, 그리고 검증 후의 `verification_assessment_id`를 보관한다.
+  `serial` 단독으로는 state 재생성을 잡지 못하므로 두 값을 쌍으로 둔다.
+- **`DeploymentStatus`는 이 item에 저장하지 않는다.** 배포 생애주기 위치는 `JobStatus`와
+  `JobCurrentStep`에 이미 저장돼 있고, 표현 값은 read 시 `derive_deployment_status()`로 계산한다.
+  M1 Readiness Score와 같은 원칙이며, 저장된 두 번째 사본이 없으므로 마이그레이션도 정합성 규칙도
+  필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
+  `GSI2PK = CUSTOMER#{customer_id}#DEPLOYMENT_STATUS#{status}`로 materialize하며, 그때까지 채우지
+  않는다.
 - Plan/Apply 완료 Event는 Queue payload에 값을 싣지 않고 이 event item으로 저장한다. Queue에는 계속
   `job_id`, `expected_revision`, `command`만 흐른다. Event detail은 신뢰 대상이 아니라 기록이며, D
   Worker가 `run_id`로 GitHub Actions run을 다시 읽어 대조한 결과만 Deployment 상태로 전이된다.
@@ -131,9 +136,16 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   join해 표시만 한다. 예외는 만료되므로 저장하면 만료 후 과거 결과가 사실과 달라진다.
 - Terraform state는 이 metadata table에 두지 않는다. 고객 bootstrap stack이 만드는 별도 S3 state
   bucket과 DynamoDB lock table을 사용하고, state key는 `(repository_id, workspace)`로 분리한다.
-- 감사 event의 `action` 값은 `AuditAction` 어휘를 사용한다. M3에서 `DEPLOYMENT_REQUESTED`,
-  `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-  `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가된다.
+  workspace 이름은 `{customer_id}-{repository_id}`이며 Repository 승인 시점에 두 ID를
+  `^[A-Za-z0-9_-]+$`로 검증해 배포 시점에 이름이 깨지지 않게 한다.
+- 감사 event의 **종류**를 담는 정본 필드명은 `event_type`이고 값은 `AuditEventType` 어휘를
+  사용한다. `action`은 도메인 payload 전용으로 남긴다 — `REMEDIATION_DECIDED` audit item은 한 item에
+  `event_type`(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 함께 쓰므로, 두 개념에
+  같은 필드명을 쓰면 값이 충돌한다. 현재 `action`을 종류 필드로 쓰는 세 곳
+  (`DEPLOYMENT_APPROVED`, `POLICY_SOURCE_APPROVED`, `POLICY_PROFILE_PUBLISHED`)은 `event_type`으로
+  개명한다. M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`,
+  `APPLY_COMPLETED`, `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가
+  추가된다.
 
 ## Example items
 

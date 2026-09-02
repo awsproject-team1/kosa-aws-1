@@ -409,14 +409,17 @@ A/D-owned Contract는 아직 구현되지 않았다. 역할마다 같은 의미�
 
 | 추가 | 소유 | 의미 |
 | --- | --- | --- |
-| `DeploymentStatus` | A | Deployment 상태 기계의 값과 전이 (ADR-0019 §8) |
-| `AuditAction` | A | 감사 event action 어휘. 현재 문자열 상수로 흩어진 값을 한곳으로 모은다 |
+| `DeploymentStatus` + `derive_deployment_status()` | A | Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않는다 (ADR-0019 §8) |
+| `AuditEventType` | A | 감사 event **종류** 어휘. 정본 필드명은 `event_type`이다 |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |
 | `AssessmentComparison` | C | 구현됨. before/after 비교 projection과 `comparable` 판정 (ADR-0020 §5) |
 | `TERRAFORM_PLAN_BINARY` (ArtifactType) | D | apply가 사용하는 saved plan. hash 대상은 아니다 (ADR-0019 §1) |
 | `RemediationSyncTarget` 이관 | C→Contract | 현재 `apps/backend/remediation/worker.py`에 있다 |
 
-`DeploymentStatus`의 전이는 다음과 같다.
+`DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
+순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
+apply run reference, verification 결과에서 read 시 계산한다. 저장하면 `JobStatus`·`JobCurrentStep`과
+같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). 표현 값의 전이는 다음과 같다.
 
 ```text
 PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
@@ -424,11 +427,16 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 분기: BLOCKED, MANUAL_REVIEW, REJECTED, VERIFICATION_INDETERMINATE
 ```
 
-`AuditAction`은 기존 `REMEDIATION_DECIDED`, `REMEDIATION_EXCEPTION_APPROVED`,
-`DEPLOYMENT_APPROVED`를 이관하고 M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`,
-`APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`,
-`MANUAL_RECONCILIATION_REQUIRED`를 추가한다. 역할마다 다른 문자열을 쓰면 Audit 조회가 역할별
-어휘를 모두 알아야 한다.
+`AuditEventType`은 감사 event의 **종류**를 담는 enum이고 정본 필드명은 `event_type`이다.
+`action`으로 통일하지 않는다 — `apps/backend/repositories/dynamodb.py`가 한 item에서 `event_type`
+(audit 종류)과 `action`(`RemediationAction` 값)을 다른 뜻으로 동시에 쓰고 있어, `action`으로
+통일하면 두 값이 같은 키를 다툰다. 이관 대상은 현재 `action` 필드명을 쓰는 세 곳
+(`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
+`POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)이며, 이미 `event_type`을 쓰는
+`REMEDIATION_DECIDED`·`REMEDIATION_EXCEPTION_APPROVED`는 그대로 둔다. 읽는 코드가 없어 write-only
+변경이고 함께 바뀌는 것은 단위 테스트 assertion 4건이다. M3에서 `DEPLOYMENT_REQUESTED`,
+`DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 추가되므로 값이 늘기 전에 선행한다.
 
 `RemediationSyncTarget`은 D가 구현하는 `SyncAction` port의 반환형인데 C의 앱 모듈에 정의돼 있다.
 역할 경계를 넘는 타입이 앱 코드에 있으면 D가 C 내부 모듈을 import해야 하므로 `packages/contracts/`로
@@ -448,7 +456,7 @@ M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않
 
 | Port | 호출자 | 입력 → 출력 |
 | --- | --- | --- |
-| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state serial + `PlanReadinessInput` |
+| `PlanRequestPort` | D Deployment Worker 내부 | Deployment/commit → `TerraformPlan` + state `lineage`·`serial` + `PlanReadinessInput` |
 | `ApplyDispatchPort` | D Deployment Worker | `DeploymentApproval` + `TerraformPlan` → dispatched run reference (idempotent) |
 | `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
 | `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
