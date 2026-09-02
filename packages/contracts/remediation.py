@@ -31,6 +31,10 @@ class RemediationContext:
     finding: Finding
     snapshot: IaCSnapshot
     evidence_references: tuple[str, ...]
+    # The immutable Assessment that produced the Finding.  M3 deployment
+    # creation must retain this identity so verification can be bound to the
+    # exact before-state rather than attempting to infer it from a finding id.
+    source_assessment_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.finding, Finding):
@@ -43,12 +47,15 @@ class RemediationContext:
             raise ValueError("evidence_references must not be empty")
         for reference in self.evidence_references:
             require_non_empty_string(reference, "evidence_references item")
+        if self.source_assessment_id is not None:
+            require_non_empty_string(self.source_assessment_id, "source_assessment_id")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "finding": self.finding.to_dict(),
             "snapshot": self.snapshot.to_dict(),
             "evidence_references": list(self.evidence_references),
+            "source_assessment_id": self.source_assessment_id,
         }
 
 

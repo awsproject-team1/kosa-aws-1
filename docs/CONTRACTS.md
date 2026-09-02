@@ -398,7 +398,9 @@ D의 Patch/Plan port에 안전하게 연결한다. customer workload write나 Ap
 - `RemediationDecision`은 API, 저장소, Worker가 사용하는 **유일한 action 정본**이다.
   `RemediationStrategy`는 존재하지 않는다.
 - C의 `RemediationContext`는 authoritative `Finding`, exact `IaCSnapshot`, deduplicated evidence
-  references만 보존한다. IAC/AWS_ACTUAL identity와 evidence를 검증하지만 action은 판정하지 않는다.
+  references와 선택적 `source_assessment_id`를 보존한다. 후자는 M3 Deployment가 검증할 immutable
+  before-state identity이며 Finding ID에서 추정하지 않는다. IAC/AWS_ACTUAL identity와 evidence를
+  검증하지만 action은 판정하지 않는다.
 - A는 context/target/customer exception을 읽고 B의 `RemediationPolicy.decide()`를 호출한다.
   Actionable decision만 revision-zero Job과 최소 Outbox를 만들고 context/decision/audit와 원자 저장한다.
 - `MANUAL_REVIEW`/`SUPPRESSED`는 정상 decision 응답이다. decision/audit만 기록하고 Job/Outbox는 없다.

@@ -2,6 +2,12 @@
 
 ## Current
 
+- PR #50을 포함한 M3 API runtime/infrastructure follow-up: API Lambda에
+  `DEPLOYMENT_QUEUE_URL`을 주입하고, deployment 생성·조회·검증 조회·거절의 네 HTTP API Gateway
+  route를 JWT authorizer와 함께 명시했다. handler branch만 있고 Gateway route가 없는 배포 누락과
+  cold-start 환경 변수 누락을 CloudFormation security regression으로 고정했다. Deployment Worker의
+  concrete live adapter/customer runtime은 여전히 고객 GitHub/OIDC configuration과 D-owned adapter
+  구현에 의존하며, 미구성 상태를 실행 가능하다고 표시하지 않는다.
 - 조회 시점 예외 억제 표시를 `GET /assessments/{id}/report`에 배선했다(ADR-0020 §6,
   `feature/m3-a-deployment-endpoints`). `annotate_suppressed_findings()`는 정의만 있고 호출자가
   없었는데, `AssessmentReportApiService`가 report page의 Finding에 고객 예외를 조회 시각 기준으로
