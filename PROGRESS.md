@@ -54,8 +54,10 @@
   (`runtime.py`)가 주입하지 않아 `POST /remediation-exceptions`가 배포 Lambda에서 404였다.
   `_remediation_exception_components()`를 추가해 예외 record와 audit event를 한 transaction으로
   쓰는 리포지토리(관리자 전용, `(customer_id, rule_id, rule_version)` 바인딩, 만료 필수)를
-  구성·주입했다. 배선 unit 테스트 2건 추가. **RemediationApiService와 DeploymentApiService는
-  이번 범위에서 제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
+  구성·주입했다. 배선 unit 테스트 2건 추가. 이어 `m0-foundation.yaml`에
+  `POST /remediation-exceptions` API Gateway 라우트(JWT 인가)를 추가해 배포 Lambda에서 도달
+  가능해졌다. cfn-lint E-level 0. **RemediationApiService와 DeploymentApiService는 이번 범위에서
+  제외** — 전자는 `RemediationContextReader.get_context`/`RemediationTargetReader.get_target`의
   프로덕션 구현이 없고(테스트 fake만), 후자는 `DeploymentPlanReader.get_approval_input` 구현이
   아예 없으며 D의 plan 저장(ADR-0019 `Proposed`)에 의존한다.
 
