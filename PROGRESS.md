@@ -43,6 +43,17 @@
 
 ## Completed
 
+- M1 A 정책 후보 추출 결과 persistence: C가 PR #42로 넘긴 `PolicyCandidateExtraction`(READY
+  정규화 문서 + 미결정 후보 규칙 전체)을 승인·게시 read 경로가 읽을 형태로 저장하는
+  `DynamoDbPolicyApprovalRepository.record_candidate_extraction`을 추가했다. 두 item을 조건부
+  transaction으로 함께 쓴다 — `POLICY_SOURCE#{sid}#VERSION#{ver}#CANDIDATES`(후보 규칙 전체,
+  `load_review`가 읽음)와 `POLICY_SOURCE#{sid}#VERSION#{ver}`(`PolicySource`, `load_publication`이
+  반환·대조). `POLICY_INGESTION` item이 `READY`이고 artifact 바인딩이 일치할 때만 저장해 추측
+  저장을 막는다. `PolicySource`의 artifact 바인딩은 문서에서 유도하므로 승인 record 바인딩과
+  어긋날 수 없다. 원문·정규화 텍스트는 DynamoDB에 담지 않는다. `docs/DATABASE.md`에 candidate
+  SK를 문서화하고 unit 테스트를 추가했다. (read 어댑터 `load_review`/`load_publication`과 API
+  배선은 후속 커밋)
+
 - M3 A/C ADR-0020 파생 Contract 동결: Assessment 계획의 정본을 개수에서
   `(resource_id, rule_id, perspective)` 집합으로 옮겼다. `PlannedEvaluation`을 `packages/contracts/`
   에 두고 `AssessmentEvaluationPlan`이 좌표 집합을 가지며 개수는 거기서 파생하므로 둘이 어긋날 수

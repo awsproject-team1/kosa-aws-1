@@ -9,8 +9,10 @@ from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.errors import RepositoryError
 from packages.contracts import (
     AuditEventType,
+    PolicyCandidateExtraction,
     PolicyProfile,
     PolicySourceApproval,
+    PolicySourceKind,
     RuleCandidate,
 )
 
@@ -146,6 +148,80 @@ class DynamoDbPolicyApprovalRepository:
             "published_by": published_by,
         }
         self._write([self._put(profile_item), self._put(audit_item)], "policy profile")
+
+    def record_candidate_extraction(
+        self, *, customer_id: str, extraction: PolicyCandidateExtraction
+    ) -> None:
+        """C의 후보 추출 결과를 승인·게시 read 경로가 읽을 형태로 저장한다.
+
+        추출은 `READY` 정규화 문서에만 붙는다(추측 저장 방지). 두 item을 조건부로 함께 쓴다.
+        - `POLICY_SOURCE#{sid}#VERSION#{ver}#CANDIDATES`: 후보 규칙 전체(`load_review`가 읽음).
+        - `POLICY_SOURCE#{sid}#VERSION#{ver}`: `PolicySource`(`load_publication`이 반환·대조).
+        `PolicySource`의 artifact 바인딩은 문서에서 그대로 유도하므로 승인 record의 바인딩과
+        어긋날 수 없다. `title`은 업로드 파일명을, `kind`는 고객 업로드 정책의 `INTERNAL_POLICY`를
+        쓴다 — 게시 시점의 `ORIGINAL_BINDING_MISMATCH` 검사는 artifact 바인딩만 대조한다.
+        """
+        _non_empty(customer_id, "customer_id")
+        if not isinstance(extraction, PolicyCandidateExtraction):
+            raise TypeError("extraction must be a PolicyCandidateExtraction")
+        document = extraction.document
+        pk = f"CUSTOMER#{customer_id}"
+        version_sk = f"POLICY_SOURCE#{document.source_id}#VERSION#{document.source_version}"
+        candidates_item = {
+            "PK": pk,
+            "SK": f"{version_sk}#CANDIDATES",
+            "entity_type": "POLICY_CANDIDATE_EXTRACTION",
+            "customer_id": customer_id,
+            "source_id": document.source_id,
+            "source_version": document.source_version,
+            "version": 1,
+            **extraction.to_dict(),
+        }
+        source_item = {
+            "PK": pk,
+            "SK": version_sk,
+            "entity_type": "POLICY_SOURCE",
+            "customer_id": customer_id,
+            "version": 1,
+            "source_id": document.source_id,
+            "kind": PolicySourceKind.INTERNAL_POLICY.value,
+            "title": document.filename,
+            "policy_source_version": document.source_version,
+            "artifact_id": document.artifact_id,
+            "content_sha256": document.content_sha256,
+        }
+        condition = {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": pk,
+                        "SK": (
+                            f"POLICY_INGESTION#{document.source_id}"
+                            f"#VERSION#{document.source_version}"
+                        ),
+                    }
+                ),
+                "ConditionExpression": (
+                    "customer_id = :customer AND #status = :ready AND artifact_id = :artifact "
+                    "AND s3_version_id = :s3_version AND content_sha256 = :digest"
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":customer": customer_id,
+                        ":ready": "READY",
+                        ":artifact": document.artifact_id,
+                        ":s3_version": document.s3_version_id,
+                        ":digest": document.content_sha256,
+                    }
+                ),
+            }
+        }
+        self._write(
+            [condition, self._put(candidates_item), self._put(source_item)],
+            "policy candidate extraction",
+        )
 
     def _put(self, item: dict[str, object]) -> dict[str, object]:
         return {

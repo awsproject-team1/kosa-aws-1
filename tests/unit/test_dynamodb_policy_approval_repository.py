@@ -4,7 +4,22 @@ import unittest
 from datetime import UTC, datetime
 
 from apps.backend.repositories.policy_approval import DynamoDbPolicyApprovalRepository
-from packages.contracts import PolicyProfile, PolicyRuleReference, PolicySourceApproval
+from packages.contracts import (
+    DocumentUnitKind,
+    IngestionStatus,
+    NormalizedDocumentUnit,
+    NormalizedPolicyDocument,
+    PolicyCandidateExtraction,
+    PolicyProfile,
+    PolicyRule,
+    PolicyRuleReference,
+    PolicySourceApproval,
+    PolicySourceFormat,
+    RuleCandidate,
+    RuleSeverity,
+    SourceReference,
+)
+from packages.contracts.assessments import AssessmentPhase
 
 
 class Client:
@@ -27,6 +42,57 @@ def approval() -> PolicySourceApproval:
         approved_rules=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
         approved_by="admin",
         approved_at="2026-09-01T00:00:00Z",
+    )
+
+
+def extraction() -> PolicyCandidateExtraction:
+    """READY 정규화 문서 하나와 그 문서를 인용하는 후보 하나로 추출 결과를 만든다."""
+    unit = NormalizedDocumentUnit(
+        locator="section-1",
+        kind=DocumentUnitKind.SECTION,
+        text_sha256="unit-sha",
+        text_length=42,
+        origin="markdown",
+    )
+    document = NormalizedPolicyDocument(
+        source_id="source-1",
+        source_version="v1",
+        artifact_id="original-1",
+        s3_version_id="s3-v1",
+        content_sha256="original-sha",
+        filename="policy.md",
+        declared_media_type="text/markdown",
+        byte_size=42,
+        status=IngestionStatus.READY,
+        detected_media_type="text/markdown",
+        source_format=PolicySourceFormat.MARKDOWN,
+        parser_id="markdown",
+        parser_version="1",
+        normalized_artifact_id="original-1#normalized",
+        normalized_sha256="normalized-sha",
+        units=(unit,),
+    )
+    rule = PolicyRule(
+        rule_id="RULE-1",
+        version="v1",
+        title="Rule",
+        severity=RuleSeverity.HIGH,
+        applicable_phases=(AssessmentPhase.INITIAL,),
+        resource_types=("AWS::S3::Bucket",),
+        source_references=(
+            SourceReference(
+                source_id="source-1",
+                source_version="v1",
+                locator="section-1",
+                content_sha256="unit-sha",
+            ),
+        ),
+    )
+    return PolicyCandidateExtraction(
+        document=document,
+        candidates=(RuleCandidate(rule=rule),),
+        extractor_id="extractor",
+        extractor_version="1",
     )
 
 
@@ -71,3 +137,28 @@ class DynamoDbPolicyApprovalRepositoryTest(unittest.TestCase):
         self.assertNotIn("bucket", profile)
         self.assertNotIn("key", profile)
         self.assertEqual(profile["customer_id"], {"S": "cust-a"})
+
+    def test_candidate_extraction_persists_candidates_and_source_under_ready_binding(self) -> None:
+        self.repository.record_candidate_extraction(customer_id="cust-a", extraction=extraction())
+
+        writes = self.client.requests[0]["TransactItems"]
+        assert isinstance(writes, list)
+        self.assertEqual(len(writes), 3)
+        # index 0: READY 바인딩 조건, 1: 후보 item, 2: PolicySource item.
+        condition = writes[0]["ConditionCheck"]
+        self.assertEqual(condition["Key"]["SK"], {"S": "POLICY_INGESTION#source-1#VERSION#v1"})
+        self.assertIn(":ready", condition["ExpressionAttributeValues"])
+        self.assertEqual(condition["ExpressionAttributeValues"][":ready"], {"S": "READY"})
+        candidates_item = writes[1]["Put"]["Item"]
+        self.assertEqual(
+            candidates_item["SK"], {"S": "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATES"}
+        )
+        self.assertEqual(candidates_item["entity_type"], {"S": "POLICY_CANDIDATE_EXTRACTION"})
+        source_item = writes[2]["Put"]["Item"]
+        self.assertEqual(source_item["SK"], {"S": "POLICY_SOURCE#source-1#VERSION#v1"})
+        # PolicySource의 artifact 바인딩은 문서에서 유도하므로 승인 record와 일치한다.
+        self.assertEqual(source_item["artifact_id"], {"S": "original-1"})
+        self.assertEqual(source_item["content_sha256"], {"S": "original-sha"})
+        # 원문·정규화 텍스트는 DynamoDB에 담기지 않는다.
+        self.assertNotIn("bucket", source_item)
+        self.assertNotIn("key", source_item)
