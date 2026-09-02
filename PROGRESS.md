@@ -27,6 +27,13 @@
 
 ## Completed
 
+- M3 D 실행 port 계약·Mock 병렬 구현 (ADR-0019 §5·§7 근거, CONTRACTS.md 확정 시그니처): D가
+  소유하고 A/C가 주입받는 `ApplyDispatchPort`/`WorkflowRunReader`/`ActualRereadPort` Protocol과
+  반환형 `ApplyRunReference`/`VerifiedRunOutcome`/`AwsResourceSnapshot`(`packages/contracts/`),
+  결정적 Mock 어댑터를 추가했다. dispatch는 같은 approval로 재호출돼도 새 run을 만들지 않고
+  (idempotent), run 재조회 실패는 예외가 아니라 값으로 표현하며, Actual 재조회는 read-only scope
+  강제다. live plan/apply 경로와 `plan_hash` 투영은 ADR-0019 `Accepted` 대기로 제외한다.
+
 - M2 D GitHub write 제안 경계 (ADR-0007 read-only 원칙 유지): 승인된 `RemediationPatch` 하나에서
   Branch/Commit/PR 좌표를 결정적으로 *제안*하는 `GitHubWriteTool` port와 `ProposedPullRequest`,
   단일 (customer_id, repository_id) scope 강제(`require_patch_scope`), patch 좌표 기반 결정적
