@@ -51,7 +51,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
-| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata; report projection exposes score and coverage |
+| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, `phase`, optional verification provenance (`source_assessment_id`/`deployment_id`) and reused-scope pin (`model_profile_id`/`rubric_version`/`policy_profile_version`); report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
@@ -120,10 +120,19 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   `serial` 단독으로는 state 재생성을 잡지 못하므로 두 값을 쌍으로 둔다.
 - **`DeploymentStatus`는 이 item에 저장하지 않는다.** 배포 생애주기 위치는 `JobStatus`와
   `JobCurrentStep`에 이미 저장돼 있고, 표현 값은 read 시 `derive_deployment_status()`로 계산한다.
-  M1 Readiness Score와 같은 원칙이며, 저장된 두 번째 사본이 없으므로 마이그레이션도 정합성 규칙도
-  필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
+  apply 시작 전 Job이 terminal(`FAILED`/`CANCELLED`)이면 진행 중 step 대신 `MANUAL_REVIEW`로
+  파생한다(거절은 그보다 먼저 `REJECTED`). M1 Readiness Score와 같은 원칙이며, 저장된 두 번째 사본이
+  없으므로 마이그레이션도 정합성 규칙도 필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
   `GSI2PK = CUSTOMER#{customer_id}#DEPLOYMENT_STATUS#{status}`로 materialize하며, 그때까지 채우지
   않는다.
+- Deployment 생성은 `DEPLOYMENT#{deployment_id}` item, `JOB#{job_id}`, `OUTBOX#JOB#{job_id}`
+  (`RUN_DEPLOYMENT`), `DEPLOYMENT_REQUESTED` audit event를 **하나의 조건부 transaction**으로 쓴다
+  (`attribute_not_exists`). 생성 시점에는 plan facts(`plan_hash`·plan/binary artifact·state)가
+  아직 없고 PLAN_COMPLETED 이후 채워지며, 그 값들은 all-present-or-all-absent다. Deployment record가
+  없으면 Job도 없다.
+- 거절은 결정적 키 `DEPLOYMENT#{deployment_id}#REJECTION` item과 `DEPLOYMENT_REJECTED` audit,
+  Job의 `CANCELLED` 전이를 한 transaction으로 쓴다. 결정적 키가 재거절과 같은 `plan_hash` 재승인을
+  막는다 (ADR-0019 §8).
 - Plan/Apply 완료 Event는 Queue payload에 값을 싣지 않고 이 event item으로 저장한다. Queue에는 계속
   `job_id`, `expected_revision`, `command`만 흐른다. Event detail은 신뢰 대상이 아니라 기록이며, D
   Worker가 `run_id`로 GitHub Actions run을 다시 읽어 대조한 결과만 Deployment 상태로 전이된다.
@@ -131,7 +140,16 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
 - Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
   `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
-  충돌한다.
+  충돌한다. 새 Initial Assessment도 `phase=INITIAL`을 명시하며, phase 없는 legacy record는 두
+  correlation이 모두 없을 때만 `INITIAL`로 복원하고 누락·부분 값·자기 참조는 fail-closed한다.
+- 검증 Assessment item은 재사용할 평가 범위를 함께 **고정 저장**한다: `model_profile_id`,
+  `rubric_version`, `policy_profile_version`. 세 값은 correlation과 마찬가지로
+  `POST_DEPLOY_VERIFICATION`에만 존재하며 셋 다 있거나 셋 다 없다(부분 저장은 `ValueError`). apply와
+  재조회 사이 Profile이 교체되면 pin 없이는 다른 rubric으로 평가돼 조용히 비교 불가가 되므로 durable해야
+  한다(ADR-0020 §2·§3). Worker runtime은 저장된 pin이 자신의 승인 Model Profile·rubric과 다르면
+  Assessment를 거부하고, planned 집합은 파생하지 않고 원 Assessment의 PLAN item에서 읽어 재사용하며,
+  `policy_profile_version` pin을 Policy Context 해석에 넘긴다. `plan_verification_assessment()`가 이
+  범위 고정을 생성 경계에서 강제한다.
 - 비교 결과(Finding Resolution, 점수·Coverage delta)는 별도 item으로 저장하지 않는다. 두 immutable
   Assessment에서 읽을 때 계산하는 projection이다. 억제 여부도 저장하지 않고 조회 시 유효한 예외를
   join해 표시만 한다. 예외는 만료되므로 저장하면 만료 후 과거 결과가 사실과 달라진다.

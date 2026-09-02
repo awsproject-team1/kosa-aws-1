@@ -59,6 +59,13 @@ class AssessmentResourceWork:
     """
 
     assessed_commit_sha: str | None = None
+    expected_profile_version: str | None = None
+    """The Policy Profile version this Assessment was approved against.
+
+    A verification pins it to the version the source Assessment used, so a Profile
+    replaced between the two evaluations fails instead of silently evaluating a
+    different allow-list (ADR-0020 §2).
+    """
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -92,6 +99,11 @@ class AssessmentResourceWork:
             not isinstance(self.assessed_commit_sha, str) or not self.assessed_commit_sha.strip()
         ):
             raise ValueError("assessed_commit_sha must be a non-empty string or None")
+        if self.expected_profile_version is not None and (
+            not isinstance(self.expected_profile_version, str)
+            or not self.expected_profile_version.strip()
+        ):
+            raise ValueError("expected_profile_version must be a non-empty string or None")
 
 
 class AssessmentWorkRepository(Protocol):
@@ -195,6 +207,7 @@ class AssessmentWorker:
             policy_profile_id=work.policy_profile_id,
             phase=work.phase,
             resource_type=work.resource_type,
+            expected_profile_version=work.expected_profile_version,
         )
         if self._plan_store is not None:
             self._plan_store.put_plan_if_absent(

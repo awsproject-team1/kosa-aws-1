@@ -452,7 +452,7 @@ def _item_from_job(job: Job) -> dict[str, object]:
 
 
 def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
-    return {
+    item: dict[str, object] = {
         "PK": _customer_pk(assessment.customer_id),
         "SK": f"ASSESSMENT#{assessment.assessment_id}",
         "entity_type": "ASSESSMENT",
@@ -461,10 +461,22 @@ def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
         "job_id": assessment.job_id,
         "repository_id": assessment.repository_id,
         "policy_profile_id": assessment.policy_profile_id,
+        "phase": assessment.phase.value,
         "status": "QUEUED",
         "GSI3PK": f"REPOSITORY#{assessment.repository_id}",
         "GSI3SK": f"ASSESSMENT#{assessment.assessment_id}",
     }
+    if assessment.source_assessment_id is not None:
+        item["source_assessment_id"] = assessment.source_assessment_id
+    if assessment.deployment_id is not None:
+        item["deployment_id"] = assessment.deployment_id
+    # Only a verification pins its evaluation scope; an Initial Assessment resolves
+    # the Model Profile from the approved Worker configuration (ADR-0020 §3).
+    for name in ("model_profile_id", "rubric_version", "policy_profile_version"):
+        value = getattr(assessment, name)
+        if value is not None:
+            item[name] = value
+    return item
 
 
 def _item_from_outbox(entry: WorkflowOutboxEntry) -> dict[str, object]:

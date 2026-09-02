@@ -273,3 +273,50 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
         self.assertEqual(page.coverage.completed_evaluations, 1)
         self.assertIsNone(page.readiness_score)
         self.assertEqual(len(table.query_calls), 2)  # one results page + one findings page
+
+    def test_read_back_finding_keeps_its_evaluation_provenance(self) -> None:
+        # A read-back Finding must carry evaluated_at/assessed_commit_sha, or the
+        # read-time suppression join skips it as if it had no provenance
+        # (ADR-0020 §6). This locks the store's restore path against that regression.
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(plan("bucket-001"))
+        failing = EvaluationResult(
+            resource_id="bucket-001",
+            rule_id="S3-001",
+            perspective=EvaluationPerspective.IAC,
+            status=EvaluationStatus.FAIL,
+            severity="HIGH",
+            score=10,
+            rationale="Fixture failing result.",
+            evidence_references=("fixture:evidence",),
+            rule_version="v1",
+            rubric_version="v1",
+            model_profile_id="assessment-profile-v1",
+            assessed_commit_sha="commit-abc",
+            evaluated_at="2026-01-01T00:00:00+00:00",
+        )
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001", assessment_id="asm-001", results=(failing,)
+        )
+
+        report = store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(len(report.findings), 1)
+        self.assertEqual(report.findings[0].assessed_commit_sha, "commit-abc")
+        self.assertEqual(report.findings[0].evaluated_at, "2026-01-01T00:00:00+00:00")
+
+    def test_report_defaults_to_no_suppressions(self) -> None:
+        # The store builds durable facts only; the read-time suppression join is a
+        # separate API-layer step, so a store-built report carries none by default.
+        table = Table()
+        store = DynamoDbAssessmentReportStore(table)
+        store.put_plan_if_absent(plan("bucket-001"))
+        DynamoDbEvaluationResultStore(table).put_if_absent(
+            customer_id="cust-001", assessment_id="asm-001", results=(result(),)
+        )
+
+        report = store.get_report(customer_id="cust-001", assessment_id="asm-001")
+
+        self.assertEqual(report.suppressions, ())
+        self.assertEqual(report.to_dict()["suppressions"], [])

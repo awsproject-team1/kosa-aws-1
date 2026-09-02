@@ -1,15 +1,21 @@
-"""M2 A deployment approval boundary, M3 D execution ports, and D execution worker."""
+"""M2 A deployment approval boundary, M3 D execution ports/worker, and deployment record."""
 
 from apps.backend.deployment.approval import (
     DeploymentApprovalError,
     DeploymentApprovalRepository,
     DeploymentApprovalService,
+    DeploymentConflictError,
 )
 from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
     PlanRequestPort,
     WorkflowRunReader,
+)
+from apps.backend.deployment.record import (
+    DeploymentRecord,
+    DeploymentRecordRepository,
+    DeploymentRejection,
 )
 from apps.backend.deployment.worker import (
     DeploymentApplyBlockedError,
@@ -30,7 +36,11 @@ __all__ = [
     "DeploymentApprovalError",
     "DeploymentApprovalRepository",
     "DeploymentApprovalService",
+    "DeploymentConflictError",
     "DeploymentPlanStore",
+    "DeploymentRecord",
+    "DeploymentRecordRepository",
+    "DeploymentRejection",
     "DeploymentRunStore",
     "DeploymentVerificationStore",
     "DeploymentWork",
