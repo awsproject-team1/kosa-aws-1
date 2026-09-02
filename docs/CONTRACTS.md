@@ -518,8 +518,29 @@ Coverage count가 immutable planned 집합에 정확히 일치해야 한다. 불
 
 `fixtures/m1/golden_dataset_cases.json`의 18개 `INITIAL` Case와
 `fixtures/m1/golden_dataset_post_deploy_cases.json`의 18개 `POST_DEPLOY_VERIFICATION` Case는 각각
-six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Post-Deploy Case는 승인 apply 뒤 IaC와 Actual이
-정합한 `PASS` snapshot이며 원 Assessment와 같은 assessment profile/rubric을 재사용한다.
+six S3 Rule × `IAC`/`AWS_ACTUAL`/`DRIFT`를 포함한다. Initial fixture는 IaC와 Actual이 같은 비준수
+상태이므로 두 Compliance 결과는 `FAIL`이지만 결정적 `DRIFT`는 정합을 뜻하는 `PASS`/100이다.
+Post-Deploy fixture는 승인 apply 뒤 대체로 IaC와 Actual이 정합한 `PASS` snapshot이며 원
+Assessment와 같은 assessment profile/rubric을 재사용한다. Logging Case는 IaC가 `PASS`, Actual이
+`FAIL`인 미해소 상태를 남겨 `DRIFT=FAIL` 경로도 함께 검증한다.
+
+## M4 Golden release observation boundary
+
+ADR-0022의 M4 live gate는 Post-Deploy 18 Case를 각 5회 실행한 identifier-only observation bundle을
+입력으로 받는다. IAC/AWS_ACTUAL 12 Case는 approved Assessment Model Profile의 실제 customer
+Bedrock 결과(60 calls)이고, DRIFT 6 Case는 같은 `(rule_id, run_number)`의 두 결과에서 Code로
+파생한 30개 결과다. DRIFT가 Bedrock 사용량을 갖거나 `derive_drift_results()`와 다르면 거부한다.
+
+`apps/backend/assessment/release_quality.py`의 exact-key parser가 observation bundle의 실행 ID,
+platform commit, repository/deployment/artifact digest, exact Model Profile, case/run/rule version,
+평가 결과와 usage를 검증한다. 누락·추가·중복 run, fixture mode, Profile/rubric/Golden version 불일치는
+fail-closed다. Schema에는 raw Prompt/response/rationale, credential, account/Role, repository URL,
+resource ID 원문, 정책 원문 또는 IaC body가 없다.
+
+공개 가능한 report는 per-case/per-perspective/전체 정확도·Evidence 정확도·판정 일치율·score 편차,
+오류 수, token/p95 latency와 private observation set digest만 포함한다. 각 Case와 perspective가
+90% 기준, score spread 10 이하, 실행 오류 0건을 모두 만족해야 전체 Gate가 통과한다. 실제 private
+bundle과 protected run 검증 없이 fixture 결과나 dry-run을 release PASS 증적으로 사용할 수 없다.
 
 ### D 실행 port 시그니처 (M3 병렬 개발 전제, 구현됨)
 
