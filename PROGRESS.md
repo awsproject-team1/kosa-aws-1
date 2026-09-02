@@ -43,6 +43,15 @@
 
 ## Completed
 
+- M1 A `load_publication` 게시 입력 의미 명확화 (PR #44 리뷰 대응 2): 리뷰는 "필터가
+  `RULE_NOT_APPROVED` 게이트를 앞질러 삼킨다"고 지적했다. 확인 결과 `publish_profile`은 넘어온
+  후보를 전부 Profile에 넣고 미승인이면 거부하므로, 게시 입력 자체가 "승인된 Rule"이어야 한다
+  (미승인 후보를 섞으면 부분 승인 Source가 영영 게시 불가). 따라서 필터는 유지하되 그 의미를
+  "게이트 대신이 아니라 게시 대상 집합을 승인 record로 정의"로 주석·docstring에 명확히 하고,
+  잘못된 설명("게이트가 거른다")을 실제 동작에 맞게 고쳤다. 부분 승인(후보 2건 중 1건 승인) 시
+  게시 입력에 승인된 후보만 온다는 것을 unit 테스트로 고정했다. `publish_profile`의 승인 검사는
+  lifecycle과 승인 record 정합성 이중 방어로 남는다.
+
 - M1 A 승인 API 부분 승인 지원 (PR #44 리뷰 대응 1): `PolicyApprovalApiService.approve`가
   승인할 `approved_rules`(`(rule_id, version)` 목록)를 받아 `load_review` 후보 중 그 부분집합만
   골라 `approve_source()`에 넘긴다. 리뷰어가 추출 후보 전량이 아니라 일부만 승인할 수 있어야

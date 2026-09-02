@@ -273,8 +273,11 @@ class DynamoDbPolicyApprovalRepository:
         """게시 판정 입력 — 승인된 후보, 승인 record, 게시된 Source.
 
         후보 규칙 전체는 `#CANDIDATES` item에 있고, 어떤 Rule version이 승인됐는지는 승인 record의
-        `approved_rules`에 있다. 둘을 조합해 승인된 후보만 APPROVED 상태로 반환하므로,
-        `publish_profile()`의 `RULE_NOT_APPROVED` 게이트가 미승인 후보를 그대로 거른다.
+        `approved_rules`에 있다. 둘을 조합해 **승인 record에 든 후보만** APPROVED로 표시해 돌려준다.
+        게시 입력 집합을 승인 record로 정의하는 것이다 — `publish_profile()`은 넘어온 후보를 전부
+        Profile에 넣으므로, 미승인 후보를 APPROVED로 섞으면 게이트가 게시를 거부해 부분 승인 Source가
+        영영 게시되지 못한다. `publish_profile()`의 승인 검사는 여기 표시한 lifecycle이 승인 record와
+        어긋나지 않는지 재확인하는 이중 방어다.
         """
         _non_empty(customer_id, "customer_id")
         candidates_item = self._read_item(
@@ -291,6 +294,13 @@ class DynamoDbPolicyApprovalRepository:
         approved_keys = {
             (reference.rule_id, reference.version) for reference in approval.approved_rules
         }
+        # 게시 입력은 "승인된 Rule"이다(`publish_profile`은 넘어온 후보를 전부 Profile에 넣고
+        # 미승인이면 거부한다). 그래서 승인 record의 `approved_rules`에 든 후보만 APPROVED로 표시해
+        # 돌려준다. 이 필터는 `publish_profile`의 `RULE_NOT_APPROVED` 게이트를 대신하는 게 아니라,
+        # 게시할 후보 집합 자체를 승인 record로 정의하는 것이다 — 미승인 후보를 APPROVED로 섞어
+        # 게이트에 맡기면, 그 게이트는 (설계상) 게시를 거부하므로 부분 승인 Source는 영영 게시할 수
+        # 없게 된다. `publish_profile`의 승인 검사(`is_approved`·`approval.approves`)는 여기서
+        # 표시한 lifecycle과 승인 record가 어긋나지 않는지 재확인하는 이중 방어로 남는다.
         approved = tuple(
             candidate.approved()
             for candidate in _candidates_from_item(candidates_item)

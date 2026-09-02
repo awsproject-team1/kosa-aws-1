@@ -265,3 +265,54 @@ class DynamoDbPolicyApprovalReadTest(unittest.TestCase):
         )
         with self.assertRaises(RepositoryError):
             repository.load_review(customer_id="cust-a", source_id="source-1", source_version="v1")
+
+    def test_load_publication_returns_only_approved_candidates_on_partial_approval(self) -> None:
+        # CANDIDATES item에 후보 두 개(RULE-1, RULE-2)를 넣되 승인 record는 RULE-1만 승인한다.
+        base = extraction().to_dict()
+        second = {
+            "rule": {
+                "rule_id": "RULE-2",
+                "version": "v1",
+                "title": "Rule",
+                "severity": "HIGH",
+                "applicable_phases": ["INITIAL"],
+                "resource_types": ["AWS::S3::Bucket"],
+                "source_references": [
+                    {
+                        "source_id": "source-1",
+                        "source_version": "v1",
+                        "locator": "section-1",
+                        "content_sha256": "unit-sha",
+                    }
+                ],
+            },
+            "lifecycle": "CANDIDATE",
+        }
+        base["candidates"] = [*base["candidates"], second]
+        self.table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATES",
+                "entity_type": "POLICY_CANDIDATE_EXTRACTION",
+                "customer_id": "cust-a",
+                "source_id": "source-1",
+                "source_version": "v1",
+                **base,
+            }
+        )
+        self.table.put(
+            {
+                "PK": "CUSTOMER#cust-a",
+                "SK": "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL",
+                "entity_type": "POLICY_SOURCE_APPROVAL",
+                "customer_id": "cust-a",
+                **approval().to_dict(),  # approved_rules = (RULE-1,)
+            }
+        )
+        candidates, _, _ = self.repository.load_publication(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        # 게시 입력에는 승인된 RULE-1만 오고 미승인 RULE-2는 오지 않는다.
+        approved_ids = {candidate.rule.rule_id for candidate in candidates}
+        self.assertEqual(approved_ids, {"RULE-1"})
+        self.assertTrue(all(candidate.is_approved for candidate in candidates))
