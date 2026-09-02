@@ -153,21 +153,24 @@ class DeploymentRunStoreTest(unittest.TestCase):
 
 
 class DeploymentVerificationStoreTest(unittest.TestCase):
-    def test_records_verified_facts_under_the_event_key(self) -> None:
+    def test_confirms_the_pending_event_item_to_verified(self) -> None:
         transactions = Transactions()
         store = DynamoDbDeploymentVerificationStore(
             table_name="metadata", transaction_client=transactions
         )
         store.put_verification_if_absent(work=apply_work(), facts=success_facts())
-        item = transactions.calls[0]["TransactItems"][0]["Put"]["Item"]
-        self.assertEqual(item["SK"], {"S": f"DEPLOYMENT#{DEPLOYMENT_ID}#EVENT#{RUN_ID}"})
-        self.assertEqual(item["entity_type"], {"S": "DEPLOYMENT_WORKFLOW_EVENT"})
-        self.assertEqual(item["conclusion"], {"S": "SUCCESS"})
+        update = transactions.calls[0]["TransactItems"][0]["Update"]
+        # 예약 item(PENDING_VERIFICATION)을 conditional update로 VERIFIED 확정한다.
+        self.assertEqual(update["Key"]["SK"], {"S": f"DEPLOYMENT#{DEPLOYMENT_ID}#EVENT#{RUN_ID}"})
+        self.assertEqual(update["ConditionExpression"], "#status = :pending")
+        self.assertIn("#status = :verified", update["UpdateExpression"])
+        self.assertEqual(update["ExpressionAttributeValues"][":conclusion"], {"S": "SUCCESS"})
 
-    def test_absorbs_a_duplicate_run_id(self) -> None:
+    def test_absorbs_an_already_verified_or_absent_reservation(self) -> None:
         store = DynamoDbDeploymentVerificationStore(
             table_name="metadata", transaction_client=Transactions(fail=True)
         )
+        # 이미 VERIFIED이거나 예약이 없으면 조건 실패 → 멱등 흡수(오류 아님).
         store.put_verification_if_absent(work=apply_work(), facts=success_facts())
 
     def test_rejects_facts_outside_the_repository_scope(self) -> None:

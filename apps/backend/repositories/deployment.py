@@ -530,12 +530,15 @@ class DynamoDbDeploymentRunStore:
 
 
 class DynamoDbDeploymentVerificationStore:
-    """Record the authoritative verified run facts once (ADR-0019 §7, DATABASE.md M3).
+    """Confirm the pending completion-event item with verified facts (ADR-0019 §7).
 
-    The verified `WorkflowRunFacts` (re-read from the run, never trusted from an
-    Event) are stored under `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` so the same
-    `run_id` is recorded only once. This item is a record, not a state source; the
-    deployment status is still derived at read time.
+    A/EventBridge가 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을
+    `status=PENDING_VERIFICATION`으로 먼저 예약 write한다(재조회 좌표 포인터). 이 store는 D Worker가
+    run을 재조회·대조한 뒤, 그 예약 item을 검증된 `WorkflowRunFacts`로 채우고 `status=VERIFIED`로
+    conditional update한다. 조건은 "item이 존재하고 아직 `PENDING_VERIFICATION`일 때만"이므로, 예약
+    없이 확정되지 않고(예약 item이 없으면 애초에 `run_reference`가 없어 Worker가 여기 도달하지 않는다)
+    이미 `VERIFIED`면 재시도가 멱등 흡수된다. item은 기록이지 상태 정본이 아니다 — 상태는 read 시
+    파생한다(DATABASE.md M3).
     """
 
     def __init__(self, *, table_name: str, transaction_client: DynamoTransactionClient) -> None:
@@ -553,25 +556,43 @@ class DynamoDbDeploymentVerificationStore:
             raise TypeError("facts must be a WorkflowRunFacts")
         if facts.repository_id != work.repository_id:
             raise ValueError("verified run is outside the deployment work")
-        item = {
-            "PK": f"CUSTOMER#{work.customer_id}",
-            "SK": f"DEPLOYMENT#{work.deployment_id}#EVENT#{facts.run_id}",
-            "entity_type": "DEPLOYMENT_WORKFLOW_EVENT",
-            "customer_id": work.customer_id,
-            "deployment_id": work.deployment_id,
-            "version": 1,
-            **facts.to_dict(),
-        }
+        # 검증된 facts를 item attribute로 채우고 status를 VERIFIED로 전이한다.
+        values = marshal_item(
+            {
+                ":verified": "VERIFIED",
+                ":pending": "PENDING_VERIFICATION",
+                ":workflow_path": facts.workflow_path,
+                ":ref": facts.ref,
+                ":commit_sha": facts.commit_sha,
+                ":conclusion": facts.conclusion.value,
+                ":plan_hash": facts.plan_hash,
+            }
+        )
         try:
             self._transaction_client.transact_write_items(
                 TransactItems=[
                     {
-                        "Put": {
+                        "Update": {
                             "TableName": self._table_name,
-                            "Item": marshal_item(item),
-                            "ConditionExpression": (
-                                "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+                            "Key": marshal_item(
+                                {
+                                    "PK": f"CUSTOMER#{work.customer_id}",
+                                    "SK": (f"DEPLOYMENT#{work.deployment_id}#EVENT#{facts.run_id}"),
+                                }
                             ),
+                            "UpdateExpression": (
+                                "SET #status = :verified, workflow_path = :workflow_path, "
+                                "#ref = :ref, commit_sha = :commit_sha, "
+                                "conclusion = :conclusion, plan_hash = :plan_hash"
+                            ),
+                            # 예약 item이 존재하고 아직 검증 전일 때만 확정한다. 없으면(예약 안 됨)
+                            # 조건 실패인데, Worker는 예약이 없으면 여기 오지 않으므로 멱등 흡수한다.
+                            "ConditionExpression": "#status = :pending",
+                            "ExpressionAttributeNames": {
+                                "#status": "status",
+                                "#ref": "ref",
+                            },
+                            "ExpressionAttributeValues": values,
                         }
                     }
                 ]
@@ -581,7 +602,7 @@ class DynamoDbDeploymentVerificationStore:
                 "ConditionalCheckFailedException",
                 "TransactionCanceledException",
             }:
-                return  # 같은 run_id는 한 번만 기록된다(멱등).
+                return  # 이미 VERIFIED이거나 예약이 없다(멱등 흡수).
             raise RepositoryError("deployment verification write failed") from None
 
 
