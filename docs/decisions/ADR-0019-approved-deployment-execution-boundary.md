@@ -4,9 +4,11 @@
 > live plan/apply 경로를, A가 Deployment 생성·승인 후속 전이를 구현하지 않는다.
 >
 > **승인 방법:** 아래 Decision 1~8은 미정 항목 없이 모두 결정과 근거를 담고 있다. 별도 회의를
-> 열지 않고 **이 PR에 대한 A·D의 리뷰 approve를 서명으로 삼는다** (CONTRIBUTING: Issue/Project를
-> 쓰지 않으므로 PR 스레드가 결정 기록이다). 수정 의견은 같은 PR의 코멘트로 받고 같은 브랜치에
-> 커밋을 더한다. approve가 모이면 같은 PR에서 상태를 `Accepted`로 바꾼다.
+> 열지 않고 **이 PR에 대한 A·D·Security의 리뷰 approve를 서명으로 삼는다** (CONTRIBUTING:
+> Issue/Project를 쓰지 않으므로 PR 스레드가 결정 기록이다). A·D는 Deployment/API와 plan/apply
+> 경계를, Security는 state backend·OIDC·Environment 승인 경계를 확인한다. 수정 의견은 같은 PR의
+> 코멘트로 받고 같은 브랜치에 커밋을 더한다. 세 Owner의 approve가 모이면 같은 PR에서 상태를
+> `Accepted`로 바꾼다.
 >
 > **결정 대상:** `plan_hash`가 무엇의 digest인지, Terraform state를 누가 어떻게 보유하는지,
 > apply 대상 commit이 무엇인지, `deployment_id`를 누가 발급하는지, apply를 누가 트리거하는지,
@@ -303,11 +305,12 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 
 - **Owner:** D(plan/apply 실행, workflow template) + A(Deployment 상태·API) + Security(state
   backend·OIDC·Environment 승인)
-- **Needed by:** M3 착수 전. 이 결정 없이 D가 live 경로를 구현하면 A/C가 사후에 그 구현을
-  따라가야 한다.
-- **Blocks:** M3 A(Deployment/Approval 상태 전이, 결과 조회 API), M3 C(Deployment Readiness의
-  plan 입력), M3 D(plan/apply/Event 처리), M3 Shared(승인 없는 Write 방지 E2E),
-  `DeploymentStatus`/`AuditEventType` Contract 추가.
+- **Needed by:** M2의 audit 정본화·live plan 구현 전 및 M3 착수 전. 이 결정 없이 D가 live 경로를
+  구현하면 A/C가 사후에 그 구현을 따라가야 한다.
+- **Blocks:** M2 A(`AuditEventType` 기본 enum·기존 audit `event_type` 정규화), M2 D(live plan),
+  M3 A(Deployment/Approval 상태 전이, 결과 조회 API), M3 C(Deployment Readiness의 plan 입력),
+  M3 D(plan/apply/Event 처리), M3 Shared(승인 없는 Write 방지 E2E), `DeploymentStatus` Contract와
+  M3 Deployment audit event 값 추가.
 - **Proposed options:** 위 Decision 8개 항목. 각 항목의 대안과 거부 이유는 Rejected alternatives에
   있다.
 - **Final record:** 미정. 합의 시 이 ADR의 상태를 `Accepted`로 바꾸고 `docs/API.md`,
