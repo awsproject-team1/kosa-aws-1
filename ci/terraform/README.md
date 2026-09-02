@@ -34,3 +34,18 @@ template이다. Platform(GitHub App)은 이 파일을 만들거나 수정하지 
   `deployment_id`, `commit_sha`, `plan_hash`, `run_id`, `conclusion`만 담는다. plan 본문·정책
   원문·IaC 본문은 담지 않는다.
 - **DynamoDB write 권한 없음(§7):** GitHub Actions에 상태 정본 write 권한을 주지 않는다.
+- **plan artifact는 별도 run에서 온다(§1):** apply는 자기 run이 아니라 `terraform-plan` run이 만든
+  saved plan을 적용한다. 그래서 apply workflow는 `plan_run_id` 입력과 `actions: read` 권한,
+  `github-token`으로 그 run의 artifact를 내려받는다. 같은 run 안에서 만든 artifact가 아니다.
+- **state 이동 실제 차단(§2):** plan은 plan 시점 `lineage`/`serial`을 `plan.state.json`으로 남기고,
+  apply는 그 값을 실행 시점 state와 **실제로 비교**해 하나라도 다르면 apply 전에 실패시킨다.
+  출력만 하지 않는다. `serial` 단독이 아니라 `lineage`와 쌍으로 대조한다.
+
+## Contract 갭 (A와 협의 필요)
+
+`plan_run_id`는 apply workflow가 plan run의 artifact를 찾는 데 필요하지만, 현재 정본
+`ApplyDispatchPort.dispatch_apply(approval, plan, state_version)` 시그니처(PR #48)에는 plan run id를
+전달할 자리가 없다. Platform이 `workflow_dispatch` input으로 `plan_run_id`를 넣으려면 A 소유
+Contract에 plan run id를 durable하게 싣는 후속 변경이 필요하다(예: `PlanExecutionResult` 또는
+Deployment record에 plan run id 추가). 이 template은 그 값을 받도록 준비돼 있으나, 값을 채우는
+경로는 A Contract 확장 뒤에 연결된다. 그 전까지 live apply dispatch는 이 입력을 채울 수 없다.
