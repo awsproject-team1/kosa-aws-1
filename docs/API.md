@@ -65,8 +65,8 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   Account Scope는 이후 Contract 확장 전까지 JWT claim과 승인된 Repository 설정에서 판정하며,
   현재 M0 요청 body에는 포함하지 않는다.
 - Policy Profile 조회·평가는 `PolicyProfile.rule_references`로 version이 고정된 Rule만 사용하고,
-  정책 Evidence는 `SourceReference.evidence_reference`의 `{source_id}#{locator}` 정규형으로
-  반환한다. AWS Actual Evidence는 `aws:` namespace를 사용한다.
+  정책 Evidence는 `SourceReference.evidence_reference`의 `{source_id}@{source_version}#{locator}`
+  정규형으로 반환한다. AWS Actual Evidence는 `aws:` namespace를 사용한다.
 - Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
   구분해 반환한다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할
   권한을 부여하지 않는다.
