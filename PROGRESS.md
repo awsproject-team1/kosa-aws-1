@@ -7,8 +7,11 @@
   START/REJECT_DEPLOYMENT와 `AuditEventType` DEPLOYMENT_REQUESTED/REJECTED, `DeploymentRecord` store
   (생성=DEPLOYMENT+JOB+OUTBOX(RUN_DEPLOYMENT)+audit 한 transaction, reject=terminal REJECTION+Job
   CANCELLED), 그리고 4개 endpoint(생성·조회·검증조회·Admin reject)와 composition root 배선.
-  생성·reject는 durable 배선이 끝났고, approve/get/verification은 D live reader 조립기 통합 전까지
-  fail-closed다. 문서(API/CONTRACTS/DATABASE) 동기화. 후속 PR 검토 대기
+  생성·reject는 durable 배선이 끝났고, approve/get/verification은 facts/comparison reader 조립기
+  통합 전까지 fail-closed다. 닫힌 PR #40의 검증 provenance(`plan_verification_assessment`, Assessment
+  phase/correlation/scope-pin 영속화, Worker phase 복원)도 이 브랜치에 되살렸다. PR #48 리뷰 3건 반영:
+  terminal Job(FAILED/CANCELLED)→`MANUAL_REVIEW`, plan/binary artifact의 customer/repository scope
+  강제, plan 투영 fail-closed는 D 정본에서 이미 해결. 문서(API/CONTRACTS/DATABASE) 동기화. 후속 PR 검토 대기
 - M3 D 실행 경계를 PR #49로 올렸다(base `dev`, `feature/m3-d-execution-ports`). ADR-0019
   `Accepted` 근거로 `plan_hash` 허용 목록 투영·destructive 판정 공용 함수, D 실행 port 4종과
   반환형(`PlanRequestOutcome`/`TerraformStateVersion`), revision-bound `DeploymentWorker`,

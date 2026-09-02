@@ -155,9 +155,7 @@ class DeriveDeploymentStatusTest(unittest.TestCase):
 
     def test_rejected_still_wins_over_a_cancelled_job(self) -> None:
         self.assertIs(
-            derive_deployment_status(
-                facts(job_status=JobStatus.CANCELLED, is_rejected=True)
-            ),
+            derive_deployment_status(facts(job_status=JobStatus.CANCELLED, is_rejected=True)),
             DeploymentStatus.REJECTED,
         )
 
