@@ -22,9 +22,11 @@
   승인 판정, Profile publication 거부 규칙) 구현 완료. Rule Registry와 `policies-local/`은
   여전히 개발 seed이며, 업로드 세션·저장·상태 write와 승인 API 배선(A), AI 후보 추출(C),
   고객 간 격리·E2E 통합 테스트(Shared)가 `docs/POLICY_INGESTION.md`(ADR-0015) 기준으로 대기
-- M2 A/B/C mockable flow 완료: A가 B `RemediationPolicy.decide()`를 호출해 decision/context/Job/
-  Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected Patch/Sync port로
-  분기한다. D live GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
+- M2 A/B/C mockable flow와 durable result 경계 완료: A가 B `RemediationPolicy.decide()`를 호출해
+  decision/context/Job/Outbox/audit를 저장하고, C-owned revision-bound Remediation Worker가 injected
+  Patch/Sync port로 분기한다. Worker 결과는 `REMEDIATION#{id}#RESULT`에 exact Job revision과 함께
+  immutable/idempotent하게 저장·조회되며, 다른 내용의 재전달은 fail-closed한다. D live
+  GitHub/Terraform adapter와 customer runtime 배선, Branch/PR/Plan이 다음 조각이다
 - **2026-09-02 일정 단축 운영 합의(M4의 `dev` 병합까지):** 남은 범위는 M2 통합 PR → M3 통합 PR →
   M4 통합 PR 순서로 진행하고, 각 브랜치는 앞 마일스톤이 `dev`에 병합된 뒤 최신 `dev`에서 만든다.
   통합 PR 안에서는 기능·Contract·문서·검증 관심사별 Conventional Commit을 보존하고 squash 없이

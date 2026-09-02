@@ -54,7 +54,8 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective count |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
-| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context, source Finding, optional Job/result reference |
+| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context, source Finding, and optional Job reference |
+| Remediation result | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}#RESULT` | Immutable patch reference or sync target bound to the authoritative Job revision |
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
