@@ -22,6 +22,16 @@ from apps.backend.assessment.model_profiles import (
 from apps.backend.assessment.models import Assessment
 from apps.backend.assessment.quality import GoldenDatasetRunner, GoldenEvaluationReport
 from apps.backend.assessment.readiness import calculate_readiness_score
+from apps.backend.assessment.release_quality import (
+    GoldenObservationBundle,
+    GoldenReleaseQualityError,
+    GoldenReleaseQualityReport,
+    evaluate_golden_release_quality,
+    load_approved_model_profile,
+    load_golden_observation_bundle,
+    load_release_golden_cases,
+    render_golden_release_markdown,
+)
 from apps.backend.assessment.reporting import (
     AssessmentEvaluationPlan,
     AssessmentReport,
@@ -86,6 +96,14 @@ __all__ = [
     "finding_from_result",
     "GoldenDatasetRunner",
     "GoldenEvaluationReport",
+    "GoldenObservationBundle",
+    "GoldenReleaseQualityError",
+    "GoldenReleaseQualityReport",
+    "evaluate_golden_release_quality",
+    "load_approved_model_profile",
+    "load_golden_observation_bundle",
+    "load_release_golden_cases",
+    "render_golden_release_markdown",
     "InMemoryModelProfileRegistry",
     "M1AssessmentTarget",
     "M1RuntimeConfiguration",
