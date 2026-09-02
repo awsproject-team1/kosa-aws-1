@@ -106,10 +106,9 @@ Backend가 발급한다.
 ## M3 planned deployment and verification storage
 
 ADR-0020은 `Accepted`이고 C 비교 Contract가 구현됐으며, 검증 Assessment의 phase/correlation
-저장과 runtime 복원, 그리고 재사용 범위 pin의 저장도 구현됐다. pin을 Worker runtime에서 대조하는
-경계(저장된 Model Profile·rubric과 실제 평가 Profile이 다르면 거부)와 아래 Deployment durable 저장·
-endpoint 배선은 아직 구현되지 않았으며 A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다.
-ADR-0019의 Deployment 상태 기계는 계속 `Proposed`다.
+저장과 runtime 복원, 재사용 범위 pin의 저장, 그리고 Worker runtime의 pin 대조·계획 재사용도
+구현됐다. 아래 Deployment durable 저장과 endpoint 배선은 아직 구현되지 않았으며 A/D는 이 key/field
+경계 밖에 검증 결과를 쓰지 않는다. ADR-0019의 Deployment 상태 기계는 계속 `Proposed`다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -140,7 +139,10 @@ ADR-0019의 Deployment 상태 기계는 계속 `Proposed`다.
   `POST_DEPLOY_VERIFICATION`에만 존재하며 셋 다 있거나 셋 다 없다 (부분 저장은 `ValueError`).
   Initial Assessment는 이 pin을 갖지 않는다 — 그 Model Profile은 생성 경계가 아니라 승인된 Worker
   설정이 고른다. apply와 재조회 사이에 Profile이 교체되면 pin 없이는 다른 rubric으로 평가된 결과가
-  조용히 비교 불가가 되므로, 값이 durable해야 한다 (ADR-0020 §2·§3).
+  조용히 비교 불가가 되므로, 값이 durable해야 한다 (ADR-0020 §2·§3). Worker runtime은 저장된 pin이
+  자신의 승인 Model Profile·rubric과 다르면 그 Assessment를 거부하고, 검증의 planned 집합은 파생하지
+  않고 원 Assessment의 PLAN item에서 읽어 재사용하며, `policy_profile_version` pin을 Policy Context
+  해석에 그대로 넘긴다.
 - 비교 결과(Finding Resolution, 점수·Coverage delta)는 별도 item으로 저장하지 않는다. 두 immutable
   Assessment에서 읽을 때 계산하는 projection이다. 억제 여부도 저장하지 않고 조회 시 유효한 예외를
   join해 표시만 한다. 예외는 만료되므로 저장하면 만료 후 과거 결과가 사실과 달라진다.

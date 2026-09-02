@@ -477,6 +477,11 @@ Assessment의 Repository·`policy_profile_id`·Profile version·planned 좌표 �
 이 코드 어휘는 아직 `packages/contracts/`에 올리지 않았다. 이를 렌더링할 endpoint가 ADR-0019
 서명에 묶여 있어, 확정 전 API 어휘를 Contract에 새기지 않는다.
 
+Worker runtime은 그 pin을 대조한다. 저장된 `model_profile_id`/`rubric_version`이 승인된 Worker
+Model Profile과 다르면 그 Assessment를 거부하고, `AssessmentResourceWork.expected_profile_version`
+으로 Profile version pin을 Policy Context 해석에 넘겨 allow-list가 교체된 경우 평가를 시작하지
+않는다. 검증의 planned 집합은 파생하지 않고 원 Assessment의 PLAN item에서 읽어 재사용한다.
+
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
 M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를

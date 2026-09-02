@@ -5,9 +5,9 @@
 > `calculate_readiness_score`)도 반영됐다. 검증 Assessment의 `phase`·`source_assessment_id`·
 > `deployment_id` durable 저장과 fixture/live runtime phase 복원도 구현됐다. 2·3번의 범위 고정도
 > 구현됐다 — `plan_verification_assessment()`가 원 Assessment의 Repository·Profile version·planned
-> 집합·Model Profile·rubric을 그대로 재사용하고, 그 pin이 검증 Assessment item에 durable하게 저장된다.
-> 남은 것은 저장된 pin과 planned 집합을 Worker runtime에 주입·대조하는 일, 검증 조회 endpoint 배선,
-> D의 apply 완료 뒤 Actual 재조회 입력이다.
+> 집합·Model Profile·rubric을 그대로 재사용하고, 그 pin이 검증 Assessment item에 durable하게 저장되며,
+> Worker runtime이 pin을 자신의 승인 Profile과 대조해 다르면 거부하고 원 Assessment의 planned 집합을
+> 읽어 재사용한다. 남은 것은 검증 조회 endpoint 배선과 D의 apply 완료 뒤 Actual 재조회 입력이다.
 >
 > **결정 대상:** 재평가 결과를 어디에 저장하는지, 무엇을 다시 평가하는지, 어떤 Model Profile로
 > 평가하는지, "Finding이 해소됐다"를 어떤 값으로 표현하는지, 점수·Coverage 변화를 언제 비교

@@ -254,10 +254,17 @@ class StubResolver:
 
     def __init__(self, rules: tuple[PolicyRule, ...]) -> None:
         self._rules = rules
+        self.expected_profile_version: str | None = None
 
     def resolve(
-        self, *, policy_profile_id: str, phase: AssessmentPhase, resource_type: str
+        self,
+        *,
+        policy_profile_id: str,
+        phase: AssessmentPhase,
+        resource_type: str,
+        expected_profile_version: str | None = None,
     ) -> PolicyContext:
+        self.expected_profile_version = expected_profile_version
         return PolicyContext(
             policy_profile_id=policy_profile_id,
             policy_profile_version="v1",
@@ -330,6 +337,20 @@ class InitialAssessmentPerspectiveTest(unittest.TestCase):
         )
         self.assertIs(outcomes[2].status, EvaluationStatus.FAIL)
         self.assertEqual(store.calls[0][2], outcomes)
+
+    def test_forwards_the_pinned_policy_profile_version_to_the_resolver(self) -> None:
+        """A verification must fail rather than evaluate a replaced allow-list."""
+        resolver = StubResolver((RULE,))
+        worker, _, _ = self.build_worker(
+            iac_status=EvaluationStatus.PASS,
+            actual_status=EvaluationStatus.PASS,
+            work_value=replace(work(), expected_profile_version="v1"),
+            context_resolver=resolver,
+        )
+
+        worker.handle(self.task())
+
+        self.assertEqual(resolver.expected_profile_version, "v1")
 
     def test_plan_names_every_perspective_so_coverage_is_not_task_ordered(self) -> None:
         worker, _, plans = self.build_worker(

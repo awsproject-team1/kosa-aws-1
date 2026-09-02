@@ -6,7 +6,13 @@ import unittest
 from apps.backend.assessment import Assessment
 from apps.backend.assessment.runtime import DynamoFixtureWorkRepository, DynamoM1WorkRepository
 from apps.backend.assessment.runtime_config import M1RuntimeConfiguration
-from packages.contracts import AssessmentPhase
+from packages.contracts import (
+    AssessmentPhase,
+    EvaluationPerspective,
+    ModelProfile,
+    ModelProfileRole,
+    PlannedEvaluation,
+)
 
 TARGET = {
     "customer_id": "cust-001",
@@ -35,6 +41,53 @@ PINS = {
     "policy_profile_version": "v2",
 }
 
+MODEL_PROFILE = ModelProfile(
+    model_profile_id="assessment-nova-lite-m1-v2",
+    role=ModelProfileRole.ASSESSMENT,
+    region="us-east-1",
+    model_id="amazon.nova-lite-v1:0",
+    prompt_version="assessment-s3-m1-v2",
+    rubric_version="m1-v2",
+    golden_dataset_version="m1-s3-v2",
+)
+
+M0_MODEL_PROFILE = ModelProfile(
+    model_profile_id="assessment-nova-lite-m0-v1",
+    role=ModelProfileRole.ASSESSMENT,
+    region="us-east-1",
+    model_id="amazon.nova-lite-v1:0",
+    prompt_version="assessment-s3-v1",
+    rubric_version="m1-v2",
+    golden_dataset_version="m0-s3-v1",
+)
+
+SOURCE_PLAN = (
+    PlannedEvaluation(
+        resource_id="customer-test-bucket",
+        rule_id="S3-PUBLIC-001",
+        perspective=EvaluationPerspective.IAC,
+    ),
+    PlannedEvaluation(
+        resource_id="customer-test-bucket",
+        rule_id="S3-PUBLIC-001",
+        perspective=EvaluationPerspective.AWS_ACTUAL,
+    ),
+)
+
+
+class StubPlanReader:
+    """Return the source Assessment's immutable planned set, or refuse like the store."""
+
+    def __init__(self, planned: tuple[PlannedEvaluation, ...] = SOURCE_PLAN) -> None:
+        self._planned = planned
+        self.calls: list[tuple[str, str]] = []
+
+    def get_planned_evaluations(
+        self, *, customer_id: str, assessment_id: str
+    ) -> tuple[PlannedEvaluation, ...]:
+        self.calls.append((customer_id, assessment_id))
+        return self._planned
+
 
 class StubTable:
     """Return one Job row and the stored Assessment item under test."""
@@ -62,11 +115,25 @@ def _stored(**overrides: object) -> dict[str, object]:
     return item
 
 
-def _m1_repository(assessment: dict[str, object]) -> DynamoM1WorkRepository:
+def _stored_verification(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "phase": "POST_DEPLOY_VERIFICATION",
+        "source_assessment_id": "asm-001",
+        "deployment_id": "dep-001",
+        **PINS,
+    }
+    values.update(overrides)
+    return _stored(**values)
+
+
+def _m1_repository(
+    assessment: dict[str, object], *, plan_reader: object | None = None
+) -> DynamoM1WorkRepository:
     return DynamoM1WorkRepository(
         StubTable(assessment),
         M1RuntimeConfiguration.from_json(json.dumps([TARGET])),
-        model_profile_id="assessment-nova-lite-m1-v2",
+        model_profile=MODEL_PROFILE,
+        plan_reader=StubPlanReader() if plan_reader is None else plan_reader,
     )
 
 
@@ -233,35 +300,68 @@ class AssessmentProvenanceTest(unittest.TestCase):
 
 class StoredAssessmentPhaseTest(unittest.TestCase):
     def test_worker_restores_the_persisted_verification_phase(self) -> None:
-        repository = _m1_repository(
-            _stored(
-                phase="POST_DEPLOY_VERIFICATION",
-                source_assessment_id="asm-001",
-                deployment_id="dep-001",
-            )
-        )
+        repository = _m1_repository(_stored_verification())
 
         work = repository.get_resource_work(job_id="job-002", expected_revision=0)
 
         assert work is not None
         self.assertIs(work.phase, AssessmentPhase.POST_DEPLOY_VERIFICATION)
+
+    def test_worker_reuses_the_source_plan_and_profile_version_pin(self) -> None:
+        plan_reader = StubPlanReader()
+        repository = _m1_repository(_stored_verification(), plan_reader=plan_reader)
+
+        work = repository.get_resource_work(job_id="job-002", expected_revision=0)
+
+        assert work is not None
+        self.assertEqual(work.planned_coordinates, SOURCE_PLAN)
+        self.assertEqual(work.expected_profile_version, "v2")
+        self.assertEqual(plan_reader.calls, [("cust-001", "asm-001")])
+
+    def test_an_initial_assessment_derives_its_own_plan_and_pins_no_version(self) -> None:
+        plan_reader = StubPlanReader()
+        repository = _m1_repository(_stored(phase="INITIAL"), plan_reader=plan_reader)
+
+        work = repository.get_resource_work(job_id="job-002", expected_revision=0)
+
+        assert work is not None
+        self.assertIsNone(work.planned_coordinates)
+        self.assertIsNone(work.expected_profile_version)
+        self.assertEqual(plan_reader.calls, [])
+
+    def test_a_pinned_model_profile_the_runtime_cannot_honour_fails_closed(self) -> None:
+        for pinned, message in (
+            ("model_profile_id", "pins a different model_profile_id"),
+            ("rubric_version", "pins a different rubric_version"),
+        ):
+            with self.subTest(pinned=pinned):
+                repository = _m1_repository(_stored_verification(**{pinned: "replaced"}))
+                with self.assertRaisesRegex(ValueError, message):
+                    repository.get_resource_work(job_id="job-002", expected_revision=0)
+
+    def test_a_verification_without_a_plan_reader_fails_closed(self) -> None:
+        repository = DynamoM1WorkRepository(
+            StubTable(_stored_verification()),
+            M1RuntimeConfiguration.from_json(json.dumps([TARGET])),
+            model_profile=MODEL_PROFILE,
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires a planned evaluation reader"):
+            repository.get_resource_work(job_id="job-002", expected_revision=0)
 
     def test_fixture_worker_restores_the_persisted_verification_phase(self) -> None:
         repository = DynamoFixtureWorkRepository(
-            StubTable(
-                _stored(
-                    phase="POST_DEPLOY_VERIFICATION",
-                    source_assessment_id="asm-001",
-                    deployment_id="dep-001",
-                )
-            ),
+            StubTable(_stored_verification(model_profile_id="assessment-nova-lite-m0-v1")),
             SNAPSHOT,
+            model_profile=M0_MODEL_PROFILE,
+            plan_reader=StubPlanReader(),
         )
 
         work = repository.get_resource_work(job_id="job-002", expected_revision=0)
 
         assert work is not None
         self.assertIs(work.phase, AssessmentPhase.POST_DEPLOY_VERIFICATION)
+        self.assertEqual(work.planned_coordinates, SOURCE_PLAN)
 
     def test_legacy_record_without_a_phase_reads_as_initial(self) -> None:
         repository = _m1_repository(_stored())
@@ -272,10 +372,11 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
         self.assertIs(work.phase, AssessmentPhase.INITIAL)
 
     def test_legacy_record_with_correlation_fails_closed(self) -> None:
-        repository = _m1_repository(_stored(source_assessment_id="asm-001"))
-
-        with self.assertRaisesRegex(ValueError, "legacy Assessment cannot contain"):
-            repository.get_resource_work(job_id="job-002", expected_revision=0)
+        for stored in ({"source_assessment_id": "asm-001"}, {"model_profile_id": "profile"}):
+            with self.subTest(stored=sorted(stored)):
+                repository = _m1_repository(_stored(**stored))
+                with self.assertRaisesRegex(ValueError, "legacy Assessment cannot contain"):
+                    repository.get_resource_work(job_id="job-002", expected_revision=0)
 
     def test_explicit_null_or_unknown_phase_fails_closed(self) -> None:
         for phase in (None, "", "INITIAL_PHASE", 1):
@@ -292,39 +393,38 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
         ):
             with self.subTest(correlation=sorted(correlation)):
                 repository = _m1_repository(
-                    _stored(phase="POST_DEPLOY_VERIFICATION", **correlation)
+                    _stored(phase="POST_DEPLOY_VERIFICATION", **PINS, **correlation)
                 )
                 with self.assertRaisesRegex(ValueError, "correlation is incomplete"):
                     repository.get_resource_work(job_id="job-002", expected_revision=0)
 
+    def test_partial_stored_verification_pin_fails_closed(self) -> None:
+        for omitted in PINS:
+            with self.subTest(omitted=omitted):
+                item = _stored_verification()
+                del item[omitted]
+                repository = _m1_repository(item)
+                with self.assertRaisesRegex(ValueError, f"{omitted} pin is missing"):
+                    repository.get_resource_work(job_id="job-002", expected_revision=0)
+
     def test_stored_self_reference_fails_closed(self) -> None:
-        repository = _m1_repository(
-            _stored(
-                phase="POST_DEPLOY_VERIFICATION",
-                source_assessment_id="asm-002",
-                deployment_id="dep-001",
-            )
-        )
+        repository = _m1_repository(_stored_verification(source_assessment_id="asm-002"))
 
         with self.assertRaisesRegex(ValueError, "cannot reference itself"):
             repository.get_resource_work(job_id="job-002", expected_revision=0)
 
     def test_stored_non_verification_phase_with_correlation_fails_closed(self) -> None:
-        repository = _m1_repository(
-            _stored(phase="INITIAL", source_assessment_id="asm-001", deployment_id="dep-001")
-        )
-
-        with self.assertRaisesRegex(ValueError, "has verification correlation"):
-            repository.get_resource_work(job_id="job-002", expected_revision=0)
+        for stored in (
+            {"source_assessment_id": "asm-001", "deployment_id": "dep-001"},
+            {"policy_profile_version": "v2"},
+        ):
+            with self.subTest(stored=sorted(stored)):
+                repository = _m1_repository(_stored(phase="INITIAL", **stored))
+                with self.assertRaisesRegex(ValueError, "has verification correlation"):
+                    repository.get_resource_work(job_id="job-002", expected_revision=0)
 
     def test_blank_stored_correlation_value_fails_closed(self) -> None:
-        repository = _m1_repository(
-            _stored(
-                phase="POST_DEPLOY_VERIFICATION",
-                source_assessment_id="   ",
-                deployment_id="dep-001",
-            )
-        )
+        repository = _m1_repository(_stored_verification(source_assessment_id="   "))
 
         with self.assertRaisesRegex(ValueError, "source_assessment_id is invalid"):
             repository.get_resource_work(job_id="job-002", expected_revision=0)
