@@ -42,6 +42,13 @@ from apps.backend.assessment.runtime_config import (
 )
 from apps.backend.assessment.s3 import S3ActualEvidence, S3ActualEvidenceLoader, S3EvidenceError
 from apps.backend.assessment.s3_evaluator import S3ActualBedrockEvaluator
+from apps.backend.assessment.verification import (
+    VerificationAssessmentScope,
+    VerificationRejectionCode,
+    VerificationScopeError,
+    VerificationSource,
+    plan_verification_assessment,
+)
 from apps.backend.assessment.worker import (
     AssessmentPlanError,
     AssessmentResourceWork,
@@ -87,8 +94,13 @@ __all__ = [
     "ImmutableFindingConflict",
     "ModelProfileNotFoundError",
     "PlannedEvaluation",
+    "plan_verification_assessment",
     "S3ActualEvidence",
     "S3ActualEvidenceLoader",
     "S3ActualBedrockEvaluator",
     "S3EvidenceError",
+    "VerificationAssessmentScope",
+    "VerificationRejectionCode",
+    "VerificationScopeError",
+    "VerificationSource",
 ]

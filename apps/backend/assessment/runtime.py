@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from agent.context import AssessmentInputCollector, AwsResourceSelector, SnapshotReadRequest
 from agent.runtime import AssumeRoleS3ResourceTool, GitHubRestSnapshotTool
@@ -37,18 +39,47 @@ from packages.contracts import (
     EvaluationStatus,
     ModelProfile,
     ModelProfileRole,
+    PlannedEvaluation,
     PolicyRule,
     WorkflowCommand,
     WorkflowTask,
 )
 
 
+class PlannedEvaluationReader(Protocol):
+    """Read the immutable planned set a verification Assessment has to reuse."""
+
+    def get_planned_evaluations(
+        self, *, customer_id: str, assessment_id: str
+    ) -> tuple[PlannedEvaluation, ...]: ...
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _StoredScope:
+    """The phase and, for a verification, the scope pinned to the source Assessment."""
+
+    phase: AssessmentPhase
+    planned_coordinates: tuple[PlannedEvaluation, ...] | None = None
+    expected_profile_version: str | None = None
+
+
 class DynamoFixtureWorkRepository:
     """Reload authoritative selector IDs, then bind them to the M0 synthetic S3 input."""
 
-    def __init__(self, table: object, snapshot: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        table: object,
+        snapshot: Mapping[str, object],
+        *,
+        model_profile: ModelProfile,
+        plan_reader: PlannedEvaluationReader | None = None,
+    ) -> None:
+        if not isinstance(model_profile, ModelProfile):
+            raise TypeError("model_profile must be a ModelProfile")
         self._table = table
         self._snapshot = snapshot
+        self._model_profile = model_profile
+        self._plan_reader = plan_reader
 
     def get_resource_work(
         self, *, job_id: str, expected_revision: int
@@ -77,17 +108,26 @@ class DynamoFixtureWorkRepository:
         profile_id = assessment.get("policy_profile_id")
         if not isinstance(profile_id, str):
             return None
+        scope = _stored_assessment_scope(
+            assessment,
+            assessment_id=assessment_id,
+            customer_id=customer_id,
+            model_profile=self._model_profile,
+            plan_reader=self._plan_reader,
+        )
         return AssessmentResourceWork(
             customer_id=customer_id,
             assessment_id=assessment_id,
             job_id=job_id,
             revision=expected_revision,
             policy_profile_id=profile_id,
-            phase=AssessmentPhase.INITIAL,
+            phase=scope.phase,
             resource_id=_string(self._snapshot.get("resource_id")),
             resource_type=_string(self._snapshot.get("resource_type")),
             perspective=EvaluationPerspective(_string(self._snapshot.get("perspective"))),
-            model_profile_id="assessment-nova-lite-m0-v1",
+            model_profile_id=self._model_profile.model_profile_id,
+            planned_coordinates=scope.planned_coordinates,
+            expected_profile_version=scope.expected_profile_version,
         )
 
 
@@ -99,13 +139,15 @@ class DynamoM1WorkRepository:
         table: object,
         configuration: M1RuntimeConfiguration,
         *,
-        model_profile_id: str,
+        model_profile: ModelProfile,
+        plan_reader: PlannedEvaluationReader | None = None,
     ) -> None:
-        if not isinstance(model_profile_id, str) or not model_profile_id.strip():
-            raise ValueError("model_profile_id must be a non-empty string")
+        if not isinstance(model_profile, ModelProfile):
+            raise TypeError("model_profile must be a ModelProfile")
         self._table = table
         self._configuration = configuration
-        self._model_profile_id = model_profile_id
+        self._model_profile = model_profile
+        self._plan_reader = plan_reader
         self._targets: dict[tuple[str, int], object] = {}
         self._work: dict[tuple[str, int], AssessmentResourceWork] = {}
 
@@ -147,6 +189,13 @@ class DynamoM1WorkRepository:
         )
         if not isinstance(repository_id, str) or not isinstance(profile_id, str):
             return None
+        scope = _stored_assessment_scope(
+            assessment,
+            assessment_id=assessment_id,
+            customer_id=customer_id,
+            model_profile=self._model_profile,
+            plan_reader=self._plan_reader,
+        )
         target = self._configuration.resolve(
             customer_id=customer_id,
             repository_id=repository_id,
@@ -159,13 +208,15 @@ class DynamoM1WorkRepository:
             job_id=job_id,
             revision=expected_revision,
             policy_profile_id=profile_id,
-            phase=AssessmentPhase.INITIAL,
+            phase=scope.phase,
             resource_id=target.s3_bucket_id,
             resource_type="AWS::S3::Bucket",
             # The live Worker runs the full perspective set, so this declares the
             # primary evaluated perspective rather than the only one.
             perspective=EvaluationPerspective.AWS_ACTUAL,
-            model_profile_id=self._model_profile_id,
+            model_profile_id=self._model_profile.model_profile_id,
+            planned_coordinates=scope.planned_coordinates,
+            expected_profile_version=scope.expected_profile_version,
             assessed_commit_sha=target.commit_sha,
         )
         self._work[(job_id, expected_revision)] = work
@@ -238,15 +289,18 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
     table_name = _string(os.environ.get("METADATA_TABLE_NAME"))
     table = boto3.resource("dynamodb").Table(table_name)
     registry = load_rule_registry(_rules_path())
+    report_store = DynamoDbAssessmentReportStore(table)
     worker = AssessmentWorker(
-        work_repository=DynamoFixtureWorkRepository(table, snapshot),
+        work_repository=DynamoFixtureWorkRepository(
+            table, snapshot, model_profile=profile, plan_reader=report_store
+        ),
         context_resolver=PolicyContextResolver(registry.catalog),
         runner=AssessmentRunner(SyntheticS3Evaluator(snapshot)),
         model_profiles=InMemoryModelProfileRegistry((profile,)),
         result_store=DynamoDbEvaluationResultStore(
             table, table_name=table_name, transaction_client=boto3.client("dynamodb")
         ),
-        plan_store=DynamoDbAssessmentReportStore(table),
+        plan_store=report_store,
     )
     for task in _tasks(event):
         worker.handle(task)
@@ -261,11 +315,13 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
     table_name = _string(os.environ.get("METADATA_TABLE_NAME"))
     table = boto3.resource("dynamodb").Table(table_name)
     profile = _model_profile()
+    report_store = DynamoDbAssessmentReportStore(table)
     for task in _tasks(event):
         work_repository = DynamoM1WorkRepository(
             table,
             configuration,
-            model_profile_id=profile.model_profile_id,
+            model_profile=profile,
+            plan_reader=report_store,
         )
         target = work_repository.target_for(
             job_id=task.job_id, expected_revision=task.expected_revision
@@ -340,7 +396,7 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
             result_store=DynamoDbEvaluationResultStore(
                 table, table_name=table_name, transaction_client=boto3.client("dynamodb")
             ),
-            plan_store=DynamoDbAssessmentReportStore(table),
+            plan_store=report_store,
         )
         worker.handle(task)
 
@@ -409,6 +465,88 @@ def _fixture_path(name: str) -> Path:
 
 def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _stored_assessment_scope(
+    assessment: Mapping[str, object],
+    *,
+    assessment_id: str,
+    customer_id: str,
+    model_profile: ModelProfile,
+    plan_reader: PlannedEvaluationReader | None,
+) -> _StoredScope:
+    """Restore the stored phase and, for a verification, the scope it pinned.
+
+    A verification must be evaluated with the Model Profile, rubric, Profile
+    version, and planned set of the Assessment it verifies (ADR-0020 §2·§3). The
+    Worker runtime is configured with one approved Profile, so a pin that names a
+    different one cannot be honoured — the Assessment is refused rather than
+    re-evaluated under a Profile that would make the comparison meaningless.
+    """
+    phase = _stored_assessment_phase(assessment, assessment_id=assessment_id)
+    if phase is not AssessmentPhase.POST_DEPLOY_VERIFICATION:
+        return _StoredScope(phase=phase)
+    for name, configured in (
+        ("model_profile_id", model_profile.model_profile_id),
+        ("rubric_version", model_profile.rubric_version),
+    ):
+        pinned = assessment.get(name)
+        if not isinstance(pinned, str) or not pinned.strip():
+            raise ValueError(f"stored verification Assessment {name} pin is missing")
+        if pinned != configured:
+            raise ValueError(f"stored verification Assessment pins a different {name}")
+    expected_profile_version = assessment.get("policy_profile_version")
+    if not isinstance(expected_profile_version, str) or not expected_profile_version.strip():
+        raise ValueError("stored verification Assessment policy_profile_version pin is missing")
+    if plan_reader is None:
+        raise ValueError("verification Assessment requires a planned evaluation reader")
+    planned = plan_reader.get_planned_evaluations(
+        customer_id=customer_id, assessment_id=str(assessment.get("source_assessment_id"))
+    )
+    if not isinstance(planned, tuple) or not planned:
+        raise ValueError("source Assessment planned evaluations are unavailable")
+    return _StoredScope(
+        phase=phase,
+        planned_coordinates=planned,
+        expected_profile_version=expected_profile_version,
+    )
+
+
+def _stored_assessment_phase(
+    assessment: Mapping[str, object], *, assessment_id: str
+) -> AssessmentPhase:
+    raw_phase = assessment.get("phase")
+    verification_only = {
+        name: assessment.get(name)
+        for name in (
+            "source_assessment_id",
+            "deployment_id",
+            "model_profile_id",
+            "rubric_version",
+            "policy_profile_version",
+        )
+    }
+    source_assessment_id = verification_only["source_assessment_id"]
+    deployment_id = verification_only["deployment_id"]
+    if "phase" not in assessment:
+        if any(value is not None for value in verification_only.values()):
+            raise ValueError("legacy Assessment cannot contain verification correlation")
+        return AssessmentPhase.INITIAL
+    try:
+        phase = AssessmentPhase(raw_phase)
+    except (TypeError, ValueError):
+        raise ValueError("stored Assessment phase is invalid") from None
+    for name, value in verification_only.items():
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"stored Assessment {name} is invalid")
+    if phase is AssessmentPhase.POST_DEPLOY_VERIFICATION:
+        if not isinstance(source_assessment_id, str) or not isinstance(deployment_id, str):
+            raise ValueError("stored verification Assessment correlation is incomplete")
+        if source_assessment_id == assessment_id:
+            raise ValueError("stored verification Assessment cannot reference itself")
+    elif any(value is not None for value in verification_only.values()):
+        raise ValueError("stored non-verification Assessment has verification correlation")
+    return phase
 
 
 def _string(value: object) -> str:
