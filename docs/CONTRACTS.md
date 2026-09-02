@@ -451,7 +451,9 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 `DeploymentStatus`는 **DynamoDB에 저장하지 않는다.** API 응답 shape을 위한 표현 타입이며 값은
 순수 함수 `derive_deployment_status()`가 `JobStatus`, `JobCurrentStep`, approval/rejection record,
 apply run reference, verification 결과에서 read 시 계산한다. 저장하면 `JobStatus`·`JobCurrentStep`과
-같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). 표현 값의 전이는 다음과 같다.
+같은 사실의 두 번째 사본이 생긴다 (ADR-0019 §8). apply 시작 전 Job이 terminal(`FAILED`/`CANCELLED`)
+이면 진행 중 step으로 표시하지 않고 `MANUAL_REVIEW`로 파생한다(거절은 그보다 먼저 `REJECTED`로
+잡힌다). 표현 값의 전이는 다음과 같다.
 
 ```text
 PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
@@ -466,10 +468,10 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 (`repositories/deployment.py`의 `DEPLOYMENT_APPROVED`, `repositories/policy_approval.py`의
 `POLICY_SOURCE_APPROVED`·`POLICY_PROFILE_PUBLISHED`)을 `event_type`으로 개명해, 다섯 writer가 모두
 같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
-`REMEDIATION_EXCEPTION_APPROVED`를 더한 다섯이며, M3의 `DEPLOYMENT_REQUESTED`,
-`DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 서명(`Accepted`)에 따라 M3
-구현 커밋에서 추가한다.
+`REMEDIATION_EXCEPTION_APPROVED`와 A가 구현한 `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더한
+일곱이다. apply 실행 단계의 `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서
+추가한다.
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야

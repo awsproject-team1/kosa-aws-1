@@ -120,8 +120,9 @@ ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. 아래 durable �
   `serial` 단독으로는 state 재생성을 잡지 못하므로 두 값을 쌍으로 둔다.
 - **`DeploymentStatus`는 이 item에 저장하지 않는다.** 배포 생애주기 위치는 `JobStatus`와
   `JobCurrentStep`에 이미 저장돼 있고, 표현 값은 read 시 `derive_deployment_status()`로 계산한다.
-  M1 Readiness Score와 같은 원칙이며, 저장된 두 번째 사본이 없으므로 마이그레이션도 정합성 규칙도
-  필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
+  apply 시작 전 Job이 terminal(`FAILED`/`CANCELLED`)이면 진행 중 step 대신 `MANUAL_REVIEW`로
+  파생한다(거절은 그보다 먼저 `REJECTED`). M1 Readiness Score와 같은 원칙이며, 저장된 두 번째 사본이
+  없으므로 마이그레이션도 정합성 규칙도 필요 없다 (ADR-0019 §8). 상태별 목록 조회가 필요해지면
   `GSI2PK = CUSTOMER#{customer_id}#DEPLOYMENT_STATUS#{status}`로 materialize하며, 그때까지 채우지
   않는다.
 - Deployment 생성은 `DEPLOYMENT#{deployment_id}` item, `JOB#{job_id}`, `OUTBOX#JOB#{job_id}`
