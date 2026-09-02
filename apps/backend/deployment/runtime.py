@@ -10,13 +10,16 @@ authoritative work는 `DynamoDbDeploymentWorkRepository`가 DynamoDB에서 다�
 - `run_tasks(event, worker)`: 파싱 후 각 task를 주입된 Worker로 구동. mode와 무관한 구동 루프.
 - `lambda_handler(event, context)`: mode를 fail-closed로 판단해 live Worker를 조립하고 구동.
 
-**주의(범위):** 완료 Event 경계는 확정됐다(ADR-0019 §7, DATABASE.md "완료 Event 경계"). D는
-`#EVENT#{run_id}` 예약 item에서 `run_reference`를 읽어 채우고 검증 후 `VERIFIED`로 확정하는 경로를
-모두 구현했다. 그 예약 item을 쓰는 주체(A/EventBridge)는 A 몫이며, 예약이 없으면 D Worker가
-`APPLY_COMPLETED`를 fail-closed한다. 아직 남은 것은 live `PlanRequestPort` 구현(GitHub Actions plan
-run dispatch + saved plan/plan_hash/state 회수)과 `_live_worker`의 실제 어댑터 조립이다. 그전까지
-`lambda_handler`의 live 경로는 설정을 검증한 뒤 명시적 오류로 멈춘다. 구동 루프(`run_tasks`)와
-파싱(`parse_tasks`)은 Worker를 주입받아 독립적으로 검증한다.
+**범위:** 완료 Event 경계는 확정됐고(ADR-0019 §7, DATABASE.md "완료 Event 경계") D는 예약 item에서
+`run_reference`를 읽어 검증·확정하는 경로를 구현했다. `_live_worker`가 승인된 단일 target으로 D 실행
+port 4종(`LivePlanRequestPort`/`LiveApplyDispatchPort`/`LiveWorkflowRunReader`/`LiveActualRereadPort`)·
+store 3종·`DynamoDbDeploymentWorkRepository`를 조립한다. 조립 로직은 I/O seam(`plan_outputs_fetcher`,
+boto3 client, secret_reader)을 주입받아 테스트하고, `lambda_handler`가 실제 I/O를 주입한다.
+
+유일하게 실제 검증이 남은 부분은 `_live_plan_outputs_fetcher`의 GitHub plan run I/O(dispatch·run
+매칭·완료 폴링·artifact 다운로드/파싱)다. 실제 sandbox 자격 증명·네트워크가 있어야 동작·검증되므로,
+그 fetcher는 호출 시 명시적으로 막아 검증되지 않은 I/O가 조용히 실행되지 않게 한다. 나머지 조립·
+구동·파싱은 seam 주입으로 이미 검증된다.
 """
 
 from __future__ import annotations
