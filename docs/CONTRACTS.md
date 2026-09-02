@@ -451,8 +451,10 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 ### D 실행 port 시그니처 (M3 병렬 개발 전제)
 
 M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않으려면, 구현보다 port 시그니처를
-먼저 고정해야 한다. 아래 세 port는 D가 소유하고 A/C가 주입받아 Fixture/Mock으로 병렬 구현한다
-(`Mockable` 의존성).
+먼저 고정해야 한다. 아래 표의 네 port는 모두 D가 소유한다. 이 중 A/C가 주입받아 Fixture/Mock으로
+병렬 구현하는 것은 `ApplyDispatchPort`·`WorkflowRunReader`·`ActualRereadPort` **세 개**이며
+(`Mockable` 의존성), `PlanRequestPort`는 D Worker 내부 호출이라 주입 대상이 아니어서 시그니처
+확정에서 제외한다(절 끝의 근거 참조). 따라서 아래 확정 시그니처와 반환형은 세 port 기준이다.
 
 | Port | 호출자 | 입력 → 출력 |
 | --- | --- | --- |
@@ -461,7 +463,7 @@ M2에서 D live adapter가 늦어져 A/C가 대기한 상황을 반복하지 않
 | `WorkflowRunReader` | D Deployment Worker | `run_id` → workflow path, repository, `ref`, conclusion, artifact digest |
 | `ActualRereadPort` | C 검증 경계 | `AwsResourceQuery` → 재조회된 Actual Evidence (기존 read-only Tool 재사용) |
 
-- 네 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
+- 표의 네 port 모두 승인·정책 판정을 하지 않는다. 판정은 계속 A(승인)와 B(정책)가 소유한다.
 - `ApplyDispatchPort`는 같은 approval로 두 번 호출돼도 새 run을 만들지 않아야 한다. 중복 방지의
   정본은 `APPROVED → APPLYING` 조건부 전이다 (ADR-0019 §5).
 - `ActualRereadPort`는 새 표면이 아니라 M1 read-only AWS Resource Tool 재사용이다. 검증 단계에서
@@ -514,7 +516,8 @@ class ActualRereadPort(Protocol):
 - `reread_actual`이 `resource_ids`를 받는 이유 — 전체 재평가가 기본이어도(ADR-0020 §2) 읽기 대상은
   planned 집합에서 나오고, 재조회는 불일치한 리소스로 좁힌다 (ADR-0020 §8).
 
-`PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않으므로 시그니처 확정 대상에서 제외한다.
+위에서 예고한 대로 `PlanRequestPort`는 D Worker 내부 호출이라 A/C가 주입받지 않는다. 그래서
+시그니처 확정 대상에서 제외하며, 확정된 것은 나머지 세 port다.
 
 ## Contract change review
 
