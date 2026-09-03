@@ -311,9 +311,31 @@ def _identity_claims(request_context: Mapping[str, object]) -> Mapping[str, obje
     try:
         authorizer = _mapping(request_context.get("authorizer"))
         jwt = _mapping(authorizer.get("jwt"))
-        return _mapping(jwt.get("claims"))
+        claims = _mapping(jwt.get("claims"))
     except (TypeError, ValueError) as error:
         raise InvalidIdentityClaims("verified JWT claims are required") from error
+    return _normalize_authorizer_claims(claims)
+
+
+def _normalize_authorizer_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
+    """Restore array-shaped claims the HTTP API JWT authorizer serialized as text.
+
+    The identity boundary requires `cognito:groups` as an array of strings, but the
+    HTTP API JWT authorizer flattens multi-valued claims into a single bracketed,
+    space-separated string such as `[Admin]` or `[Admin User]`. This adapter step
+    restores that one claim to the array shape the boundary already validates,
+    without inventing membership: a non-bracketed or empty value yields an empty
+    list, which the boundary then rejects as it would any missing role.
+    """
+    raw_groups = claims.get("cognito:groups")
+    if not isinstance(raw_groups, str):
+        return claims
+    text = raw_groups.strip()
+    if text.startswith("[") and text.endswith("]"):
+        groups = [group for group in text[1:-1].split() if group]
+    else:
+        groups = [group for group in text.split() if group]
+    return {**claims, "cognito:groups": groups}
 
 
 def _assessment_request(raw_body: object) -> AssessmentRequest:

@@ -126,6 +126,29 @@ class JobHttpHandlerTest(unittest.TestCase):
         self.assertEqual(response["statusCode"], 202)
         self.assertEqual(json.loads(response["body"])["job_id"], "job-001")
 
+    def test_authorizer_serialized_groups_string_is_accepted(self) -> None:
+        # The HTTP API JWT authorizer flattens cognito:groups into a bracketed
+        # space-separated string; the handler must restore the array shape.
+        request = event(
+            "POST",
+            "/assessments",
+            '{"repository_id":"repo-001","policy_profile_id":"profile-001"}',
+        )
+        request["requestContext"]["authorizer"]["jwt"]["claims"]["cognito:groups"] = "[User]"
+
+        response = self.handler.handle(request)
+
+        self.assertEqual(response["statusCode"], 202)
+
+    def test_authorizer_empty_groups_string_is_denied(self) -> None:
+        request = event("POST", "/assessments", "{}")
+        request["requestContext"]["authorizer"]["jwt"]["claims"]["cognito:groups"] = "[]"
+
+        response = self.handler.handle(request)
+
+        self.assertEqual(response["statusCode"], 401)
+
+
     def test_client_cannot_supply_tenant_or_lifecycle_fields(self) -> None:
         response = self.handler.handle(
             event(
