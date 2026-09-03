@@ -60,6 +60,32 @@ PRs, workflow logs, or repository files.
 | `M1_ASSESSMENT_SECRET_ARNS` | Comma-separated exact union of the target credential Secret ARNs |
 | `M1_ASSESSMENT_READ_ROLE_ARNS` | Comma-separated exact customer AWS read Role ARNs |
 
+Deployment and remediation write paths need two more Secrets on the same Environment. They are
+all-or-none: the workflow refuses one without the other before calling CloudFormation, and the
+template Rule `DeploymentCommitResolutionAllOrNone` asserts the same. Leaving both empty keeps
+`TERRAFORM_PATCH` pull-request write and apply-target commit resolution fail-closed;
+`ACTUAL_SYNC` still works.
+
+| Secret | Value |
+| --- | --- |
+| `DEPLOYMENT_RUNTIME_JSON` | JSON array with exactly one approved deployment target (customer/repository/full name, GitHub token Secret ARN, AWS account, read Role ARN, external-id Secret ARN, resource types) |
+| `DEPLOYMENT_GITHUB_SECRET_ARNS` | Comma-separated Secrets Manager ARNs holding that repository's GitHub token |
+
+Three non-secret Environment variables complete the deployment. Without them the authoring
+worker has no approved model (candidate extraction stops at configuration) and the Cognito
+Hosted UI keeps its `http://localhost:5173` callback.
+
+| Variable | Value |
+| --- | --- |
+| `POLICY_AUTHORING_MODEL_PROFILE_JSON` | Approved `POLICY_AUTHORING` model profile as JSON |
+| `FRONTEND_CALLBACK_URL` | Exact HTTPS callback URL of the deployed SPA |
+| `FRONTEND_LOGOUT_URL` | Exact HTTPS logout URL of the deployed SPA |
+
+Deployment credentials themselves are **not** stored: the workflow assumes the customer's
+GitHub OIDC deployment role (`permissions: id-token: write` plus `role-to-assume`), and both
+jobs re-verify the STS caller account against `EXPECTED_AWS_ACCOUNT_ID`. No long-lived AWS
+access key exists in this repository or its Environments.
+
 For one S3 target, the configuration JSON shape is:
 
 ```json
