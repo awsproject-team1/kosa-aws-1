@@ -813,6 +813,25 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Remediation decision for one Finding. The handler reads the Finding, calls the
+  # policy gate, and persists the decision/context/Job/Outbox atomically.
+  PostFindingRemediationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /findings/{findingId}/remediations"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Human approval gate for an approved-plan deployment (ADR-0019 §4).
+  PostDeploymentApproveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /deployments/{deploymentId}/approve"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   GetAuditEventsRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
