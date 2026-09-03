@@ -248,6 +248,33 @@ class CloudFormationSecurityTest(unittest.TestCase):
         self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
         self.assertEqual(conditional[2], "AWS::NoValue")
 
+    def test_every_workflow_queue_has_a_consumer(self) -> None:
+        """큐만 있고 소비자가 없으면 task는 재시도만 반복하다 DLQ로 간다."""
+        mappings = {
+            name: _properties(resource)
+            for name, resource in self.resources.items()
+            if resource["Type"] == "AWS::Lambda::EventSourceMapping"
+        }
+        wired = {
+            (mapping["EventSourceArn"], mapping["FunctionName"]) for mapping in mappings.values()
+        }
+        self.assertIn(("AssessmentQueue.Arn", "AssessmentWorkerFunction"), wired)
+        self.assertIn(("RemediationQueue.Arn", "RemediationWorkerFunction"), wired)
+        self.assertIn(("DeploymentQueue.Arn", "DeploymentWorkerFunction"), wired)
+        for mapping in mappings.values():
+            # 부분 실패를 보고해야 성공한 message가 재전달되지 않는다.
+            self.assertEqual(mapping["FunctionResponseTypes"], ["ReportBatchItemFailures"])
+
+    def test_deployment_worker_reads_github_tokens_only_when_configured(self) -> None:
+        policies = _properties(self.resources["WorkflowRuntimeRole"])["Policies"]
+        conditional = policies[2]
+        self.assertEqual(conditional[0], "DeploymentCommitResolutionEnabled")
+        self.assertEqual(conditional[1]["PolicyName"], "DeploymentWorkerGitHubToken")
+        statements = conditional[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
+        self.assertEqual(conditional[2], "AWS::NoValue")
+
     def test_apply_completion_is_the_only_write_path_for_run_events(self) -> None:
         """GitHub Actions에는 DynamoDB write 권한이 없다 — Event는 이 Lambda만 소비한다."""
         rule = _properties(self.resources["ApplyCompletionRule"])
@@ -346,6 +373,8 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
                 "OutboxSweeperFunction",
                 "AssessmentWorkerFunction",
                 "ApplyCompletionFunction",
+                "RemediationWorkerFunction",
+                "DeploymentWorkerFunction",
             },
         )
         for function in functions.values():
