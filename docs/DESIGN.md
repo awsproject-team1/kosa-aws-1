@@ -145,7 +145,23 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
 - `TerraformDeploymentRole`: 제한된 Infrastructure write
 - 고객 AWS Account의 Read-only Role AssumeRole은 customer-role 연결마다 생성한 랜덤
   `ExternalId`를 trust policy와 요청 양쪽에서 일치시켜 confused deputy를 방지하며, 임시
-  자격증명은 만료 60초 전까지만 메모리에 재사용한다.
+  자격증명은 만료 60초 전까지만 메모리에 재사용한다. 자격증명 획득은 서비스별 read adapter가
+  공유하는 한 곳(`AssumeRoleReadSession`)에만 있다 — Resource 유형을 늘리는 것이 두 번째, 더 약한
+  자격증명 경로를 만들 수 없어야 한다.
+- Actual 상태 read는 유형별 adapter(S3/EC2/RDS/ALB)로 나뉘고 `resource_type` 분배는
+  `ResourceTypeRoutingAwsResourceTool`의 등록 목록으로만 이뤄진다. 등록되지 않은 유형은 빈 결과가
+  아니라 실패다. **Assessment Worker와 Deployment Worker는 같은 factory
+  (`build_actual_resource_tool`)로 이 도구를 만든다** — 배포 후 Actual 재조회(ADR-0020)가 평가와
+  다른 유형 집합을 읽으면 검증이 어떤 유형을 조용히 건너뛴다. `DeploymentTarget.resource_types`도
+  같은 어휘(`AWS::S3::Bucket` 형태)로 검증한다. Terraform type 이름(`aws_s3_bucket`)은 거부한다.
+- adapter는 응답을 필드 allow-list로 투영하므로 `UserData`, key 이름, tag 값, `MasterUsername`,
+  `Endpoint`처럼 평가 근거가 아닌 값은 근거 문서·모델 입력·저장 evidence 어디에도 들어가지 않는다.
+  목록은 Rule이 인용하는 필드와 정확히 같으며, 어떤 Rule도 묻지 않는 상태(MultiAZ, 백업 보존, idle
+  timeout)도 넣지 않는다. 배포는 설정에 선언된 유형의 adapter만 만들고, 고객 read Role에는 그 유형의
+  read action만 필요하다.
+- 목록 조회는 continuation token을 끝까지 따라가며, 페이지 상한을 넘으면 부분 목록을 돌려주지 않고
+  실패한다. 한 리소스의 부분 응답(인스턴스가 붙인 볼륨 중 일부만 돌아온 경우)도 거부한다. 잘린
+  근거는 준수 근거와 구별되지 않는다.
 - `GitHubWorkflowEventRole`: GitHub Actions OIDC에서 Plan/Apply 완료 Event만 EventBridge에
   게시하는 최소 권한
 - 고객 관리자는 첫 배포 전에 제공된 bootstrap stack을 한 번 실행해 GitHub OIDC deployment role,
