@@ -57,6 +57,42 @@ A의 customer runtime exporter는 다음 top-level JSON을 private 파일로 만
 
 Private input은 public repository에 커밋하지 않는다. 보호 저장소의 object version/digest와 run URL을 release packet에 기록한다.
 
+## Observation bundle 생성 (A producer)
+
+Bundle을 만드는 producer는 `scripts/export_golden_observations.py`
+(`apps/backend/assessment/golden_observations.py`)다. Post-Deploy 18 Case를 운영과 같은
+`BedrockStructuredEvaluator`로 5회 반복하고, DRIFT는 같은 `(Rule, run_number)`의 IAC/Actual 결과에서
+`derive_drift_results()`로 파생한다. 호출마다 Converse의 `usage`/`metrics.latencyMs`를 기록하며,
+usage가 없는 응답은 0-cost로 기록하지 않고 fail-closed한다. Bundle에는 식별자·digest·안정된
+`error_code`만 남는다 — resource ID 원문, snapshot 본문, prompt/응답/rationale, provider message는 쓰지
+않는다(§3). 첫 Bedrock 호출 전에 12개 snapshot을 모두 읽어 형식과 IAC/Actual resource 일치를 검증하므로
+잘못된 입력은 호출 비용을 쓰지 않는다.
+
+```bash
+# 보호된 customer runtime 안에서 (실제 Bedrock + S3 artifact store)
+python3 scripts/export_golden_observations.py --customer-sandbox \
+  --customer-id <customer_id> --artifact-bucket <artifact bucket> \
+  --snapshot-index /private/path/golden-snapshot-index.json \
+  --platform-commit <40-hex platform commit> \
+  --demo-commit-sha <40-hex demo merge commit> --deployment-id <deployment_id> \
+  --artifact-sha256 <hex> [--artifact-sha256 <hex> ...] \
+  --output /private/path/m4-golden-observations.json
+```
+
+- `--snapshot-index`는 private identifier-only JSON이다: `{"<resource_snapshot_artifact_id>": "sha256:<64 hex>"}`.
+  값은 content-addressed artifact store의 digest이며 store가 내용을 digest로 검증한다. 18 Case가 참조하는
+  12개 artifact ID(`fixtures/m1/golden_dataset_post_deploy_cases.json`)가 모두 있어야 하고, 각 snapshot
+  문서는 정확히 `resource_id`/`resource_document`/`evidence_references` 세 필드다. 같은 Rule의 IAC/Actual
+  snapshot은 같은 `resource_id`를 가져야 한다(DRIFT가 한 resource를 두 관점에서 비교한다).
+- D 결합 digest 세 개는 `--demo-commit-sha`/`--deployment-id`/`--artifact-sha256`에서
+  `derive_release_binding()`으로 계산한다. 원문은 bundle에 들어가지 않는다.
+- producer는 쓴 파일을 C parser(`load_golden_observation_bundle`)로 다시 읽어 schema 불일치를 그 자리에서
+  잡는다. exit `0`은 provider error 0건, `1`은 error가 있는 bundle(gate는 어차피 실패), `2`는 입력 불량.
+- `--customer-sandbox` 없이 `--snapshots DIR`로 실행하면 AWS 없이 배관만 검사한다. 그 bundle의
+  `runtime_mode`는 `DRY_RUN`이고 gate는 이를 거부한다 — 로컬 실행은 evidence가 될 수 없다(§1).
+
+Bundle 파일과 snapshot index는 private input이다. Git에 커밋하지 않는다.
+
 ## Gate 실행
 
 ```bash
