@@ -74,9 +74,13 @@ Event마다 revision이 오르고, Platform은 Event를 신뢰하지 않고 `run
 - `APPLY_COMPLETED`에서 `DeploymentWorker`가 `run_id`로 run을 재조회해 승인 사실
   (repository/workflow_path/ref/plan_hash/conclusion)을 대조한 뒤에만 Actual을 재조회한다
   (ADR-0019 §7, ADR-0020 §8). 승인 사실과 하나라도 다르면 재시도 없이 차단한다.
-- **재조회 시점(ADR-0020 §8):** 1회차는 지연 없이 읽는다. apply가 고친 항목이 여전히 위반으로
-  보일 때만 **15초 → 45초** 간격으로 불일치 리소스만 좁혀 재조회한다. 총 3회는 ADR-0013의 "총 세 번"
-  규칙을 재사용한다. Bedrock 호출은 최종 읽기값 1회에만 발생한다.
+- **검증 Assessment 생성:** run 대조가 끝나면 Deployment Worker가 `PostDeployVerificationService`를
+  호출해 검증 Assessment를 만들고 `ASSESS_RESOURCE` task를 Assessment Queue로 보낸다. 사람이 따로
+  시작하지 않는다. `GET /deployments/{id}`의 `verification_assessment_id`가 채워지면 검증이 시작된
+  것이다.
+- **재조회 시점(ADR-0020 §8):** 1회차는 지연 없이 읽는다. 15초·45초 재조회는 아직 구현되지 않았으므로
+  현재 데모에서는 1회 읽기만 일어난다(ADR-0020 Implementation note). 전파 지연으로 `UNRESOLVED`가
+  보이면 새 Deployment가 아니라 같은 Deployment의 재검증이 아닌, 사람 확인 대상으로 다룬다.
 - 검증은 **새 `assessment_id`**의 Assessment이며, 원 Assessment의 Profile version·rubric·planned
   집합을 그대로 재사용한다(ADR-0020 §1·§2·§3). 3회 후에도 불일치면 자동 실패가 아니라
   `VERIFICATION_INDETERMINATE`로 두고 사람에게 보낸다.

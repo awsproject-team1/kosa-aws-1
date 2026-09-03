@@ -252,9 +252,7 @@ class RdsAdapterTest(unittest.TestCase):
         self.assertEqual(view.attributes["db_subnet_group"]["DBSubnetGroupName"], "demo-subnets")
         self.assertEqual(view.attributes["vpc_security_groups"][0]["VpcSecurityGroupId"], "sg-1")
         self.assertEqual(
-            view.attributes["vpc_security_groups"][0]["IpPermissions"][0]["IpRanges"][0][
-                "CidrIp"
-            ],
+            view.attributes["vpc_security_groups"][0]["IpPermissions"][0]["IpRanges"][0]["CidrIp"],
             "0.0.0.0/0",
         )
 
@@ -585,13 +583,18 @@ class PaginatedListTest(unittest.TestCase):
 
     @staticmethod
     def _tool(adapter, factory_name, client):
+        factories = {factory_name: lambda credentials: client}
+        if adapter is AssumeRoleRdsResourceTool:
+            # RDS-ACCESS-001의 근거는 연결된 VPC 보안 그룹의 실제 ingress이므로 RDS adapter는
+            # EC2 client도 요구한다. 이 테스트의 DB 인스턴스는 보안 그룹이 없어 호출되지 않는다.
+            factories.setdefault("ec2_client_factory", lambda credentials: Ec2())
         return adapter(
             customer_id=CUSTOMER,
             aws_account_id=ACCOUNT,
             role_arn=ROLE,
             external_id=EXTERNAL_ID,
             sts=Sts(),
-            **{factory_name: lambda credentials: client},
+            **factories,
         )
 
 

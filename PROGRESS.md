@@ -2,6 +2,127 @@
 
 ## Current
 
+- **구현 검토(2026-09-03) 후속: Finding 이후 경로 중 A/C/D 조각 세 곳을 이었다.** Remediation 시작
+  API 조립과 Terraform patch/PR 생성은 별도 진행 중이라 손대지 않았다.
+  - **Post-Deploy Verification Assessment가 실제로 만들어진다** (ADR-0020 §1·§7). 전에는
+    `plan_verification_assessment()`를 부르는 곳이 없어 apply 뒤 Actual을 다시 읽고 끝났고,
+    `GET /deployments/{id}/verification`은 입력이 생길 수 없었다. 이제 `DeploymentWorker._verify_apply()`가
+    run facts 확정 뒤 `VerificationStarter`를 호출하고, `apps/backend/deployment/verification.py`의
+    `PostDeployVerificationService`가 원 Assessment의 판본·plan·Model Profile을 pin한 새 Assessment와
+    Deployment Job 다음 revision·`ASSESS_RESOURCE` outbox·record link를 한 transaction으로 쓴다
+    (`apps/backend/repositories/deployment_verification.py`). Deployment Worker Lambda에
+    `ASSESSMENT_QUEUE_URL`이 추가됐다(권한은 기존 `WorkflowRuntimeRole`이 이미 가짐). §8의 15초·45초
+    재조회는 미구현이며 1회 읽기만 한다 — ADR-0020 Implementation note.
+  - **승인된 Rule의 실행 의미가 평가기에 도달한다.** `BedrockStructuredEvaluator`가 authored Rule의
+    `evaluation_rubric`·`applicability_semantics`·evidence capability를 prompt에 싣고, 모델의
+    `EXECUTION_ERROR` 반환을 거부한다. **Prompt가 바뀌어 승인 Profile을 `assessment-nova-lite-m1-v3`
+    (`assessment-three-perspective-rubric-v3`)로 올렸다. 릴리스 전 Golden 36 case 반복 평가를 이 Profile로
+    다시 실행해야 한다** (ADR-0021 gate).
+  - **AWS Actual pre-flight evidence gate** (ADR-0023 §2): `ActualBedrockEvaluator`가 `required_evidence`의
+    `document_paths`를 read 결과에서 먼저 확인하고, 비어 있으면 모델을 부르지 않고 Code가
+    `INSUFFICIENT_EVIDENCE`를 만든다. legacy Rule과 IaC hint는 대상이 아니다.
+  - **live M1 plan이 planner를 따른다** (ADR-0023 §7·§8): `_with_complete_evaluation_plan()`이 모든 Rule에
+    세 관점을 하드코딩하던 것을 `EvaluationExecutionPlanner`로 바꿨다(IaC 전용 Rule은 IAC 좌표만).
+    승인된 MANUAL Rule이 있으면 `governance:{repository_id}` work를 추가해 `ManualReviewEvaluator`로
+    MANUAL 좌표를 남긴다. 검증 경로도 계획의 governance 좌표를 허용한다.
+    `NoApplicablePolicyRulesError`(PolicyNotFoundError의 하위)로 "Rule 없음"과 "Profile 없음"을 구분한다.
+  - **화면이 rationale·evidence를 보여준다.** Finding을 위반(FAIL)과 사람 검토 필요
+    (MANUAL_REVIEW/INSUFFICIENT_EVIDENCE)로 나누고, 판단 이유·정책 근거·리소스 상태 근거·평가 commit·
+    예외 억제 표시를 펼쳐 본다. 검토 필요 항목에는 조치 버튼을 두지 않는다.
+    `test_frontend_response_contracts`에 `Suppression` 매핑을 더했다.
+  - 문서: DESIGN/PRD/ADR-0002의 "AI가 Severity를 선택" 문구를 코드(Rule severity 고정)에 맞췄고,
+    CONTRACTS/API/DATABASE/ADR-0020/runbook을 동기화했다. 기존 unit 실패 3건(RDS `ec2_client_factory`,
+    deployment runtime 조립)도 고쳤다.
+  - 검증: `ruff check .` 통과, unit 1094 / contract 237 / integration 19 / security 102 통과,
+    `npm --prefix apps/frontend run build` 통과.
+
+- **고객이 업로드한 정책이 실제로 평가를 결정하게 됐다.** 그전까지 Runtime은 `fixtures/rules/`에
+  커밋된 Rule을 읽었고, 고객이 무엇을 업로드하든 평가 결과는 같았다 — 업로드·정규화·승인 단계
+  전체가 결과에 아무 영향을 주지 않는 장식이었다. 이제 경로가 이어진다: 업로드 → 정규화 →
+  후보 추출(비동기) → 사람의 부분 승인 → Approved Rule Registry → Profile 게시 → Assessment 생성
+  시 판본 고정 → 고객 partition의 승인된 Rule로 평가 (ADR-0023).
+  - **자동화 경계는 code-owned Governance Control Catalog가 정의한다**
+    (`apps/backend/policy/control_catalog.py`, 17개 Control). 이 경계가 없으면 "AI가 그렇게
+    판단했다"가 곧 "제품이 평가할 수 있다"가 되고, 실행 경로 없는 Rule이 승인 가능해진다.
+    `AVAILABLE`/`KNOWN_UNSUPPORTED`/`MANUAL` 세 상태를 구분한다 — `EC2_SNAPSHOT_NOT_PUBLIC`은
+    M1 planner가 Snapshot work를 못 만들므로 `KNOWN_UNSUPPORTED`다. Catalog에 있다는 것과 지금
+    자동 평가할 수 있다는 것은 다른 말이다.
+  - **AWS와 IaC의 evidence capability를 비대칭으로 뒀다.** AWS는 adapter의 projected document
+    경로를 갖고 Runtime이 모델 호출 전에 근거 유무를 판정한다. 그 경로가 실제 adapter 출력에
+    존재하는지는 손으로 적은 기대값이 아니라 **실제 adapter를 가짜 AWS 응답으로 돌려** 확인한다
+    (`tests/unit/test_governance_control_catalog.py`). IaC는 raw HCL을 받고 Evidence가 파일
+    단위이므로 Terraform hint는 prompt 경계 설명일 뿐이며, `document_paths`를 가질 수 없다.
+    IaC attribute-level pre-flight는 HCL parser 계층이 필요해 이번 범위 밖이다.
+  - **LLM은 제안만 하고 판정하지 않는다.** `ExtractedRequirement`에 `judgment`/`severity`/
+    `score`/`source_score`/`anchor` 자리를 만들지 않았다 — prompt로 금지하는 것과 schema에 자리가
+    없는 것은 다르고, 자리가 있으면 언젠가 채워진다. severity는 Catalog가 정하고 리뷰 API는
+    read-only `proposed_severity`로 노출한다. `SourceReference`도 모델이 주는 locator만 받아
+    서버가 digest를 조회해 만든다. Catalog 밖 evidence 요청은 **빼고 만들지 않고 후보를 거절한다** —
+    빼고 만들면 승인된 Rule과 AI가 제안한 Rule이 달라지고 그 차이가 아무 데도 남지 않는다.
+  - **AUTOMATABLE 후보가 검증에 실패해도 MANUAL로 바꾸지 않는다.** 그것은 검증 실패로부터 사람이
+    승인 가능한 Rule을 만들어내는 일이다. 실패한 후보는 rejection code와 함께 보존하되 Rule로
+    변환하지 않는다. `UNSUPPORTED`(authoring: 만들 수 있는 Rule이 없다)와 `OUT_OF_SCOPE`
+    (Runtime: 이 대상에 적용되지 않는다)는 다른 질문의 답이므로 alias를 만들지 않았다.
+  - **정책 원문은 `ExtractionUnit` 안에만 존재하고 그 타입에는 직렬화가 없다.** 규율이 아니라
+    구조로 막는다 — `to_dict()`가 생기는 순간 DynamoDB item이나 API 응답에 실수로 담을 수 있다.
+    `repr()`도 텍스트를 가린다. Artifact Reader는 READY 상태·크기·payload digest·exact JSON
+    schema·unit 수와 **순서**·locator/kind/origin·정규화 digest를 전부 확인한 뒤에만 텍스트를
+    내놓고, 하나라도 실패하면 후보 하나가 아니라 추출 전체를 중단한다.
+  - **후보를 한 item에 담지 않는다.** 문서가 만드는 후보 수는 문서에 달려 있고, 단일 item은
+    DynamoDB 크기 상한에 걸리는 순간 그 문서의 추출 **전부**가 실패한다. manifest가 완결 경계를
+    담당하고(`PROCESSING → child write → count/digest 검증 → READY`), Review와 Approval은 READY
+    manifest만 읽는다. 같은 source version을 다른 extractor·prompt·Catalog로 재추출하면
+    identity가 달라지므로 재시도가 아니라 **다른 추출**로 보고 fail-closed한다.
+  - **승인이 Rule Registry를 같은 transaction에 쓴다.** 승인 record만 쓰고 Rule item을 나중에
+    쓰면, 그 사이에 게시된 Profile이 참조하는 Rule을 Catalog가 찾지 못한다. Catalog는
+    `entity_type == POLICY_RULE`과 `lifecycle == APPROVED`를 함께 확인하며, 미승인 Rule은
+    "없음"이 아니라 **오류**다 — None을 돌려주면 Profile이 참조하는 Rule이 사라진 경우와 구별되지
+    않는다.
+  - **자체 리뷰에서 잡은 것:** 승인 재시도의 멱등 판정이 서버가 만드는 write 시각까지 비교하고
+    있었다. 그러면 두 write가 같은 마이크로초에 떨어질 때만 통과하므로 흡수 경로가 사실상
+    존재하지 않는다 — 테스트가 순서에 따라 붙었다 떨어졌다 했다. 비교에서 write 시각을 제외하고,
+    Rule item이 승인 시각과 같은 이름(`approved_at`)으로 서버 시각을 쓰던 것을 `recorded_at`으로
+    바꿨다. 5분 뒤 같은 승인이 재전송되는 경우를 테스트로 고정했다.
+  - **Profile을 판본 이력과 current pointer로 나눴다.** 판본을 고정한 Assessment가 나중에 그
+    판본을 직접 읽을 수 있어야 하고(pointer만 두면 불가능), 새 Assessment가 무엇을 고를지 정할
+    곳도 있어야 한다. pointer 교체는 `expected_current_version` 낙관적 동시성으로 보호한다 —
+    없으면 동시에 게시된 두 Profile 중 나중 것이 앞의 것을 조용히 덮어쓰고 두 게시자 모두 자기
+    Profile이 현재 판본이라고 믿는다.
+  - **`policy_profile_version`을 모든 phase의 필수 값으로 올렸다** (ADR-0020 amendment). 전에는
+    verification 전용 pin이었다. 실행 도중 Profile이 교체되면 앞뒤 결과가 다른 allow-list에서
+    나오는데, 그 위험은 검증에만 있는 것이 아니라 실행 시간이 긴 모든 Assessment에 있다 —
+    Profile 게시가 이제 고객 승인으로 수시로 일어나므로 더욱 그렇다. 판본이 없는 저장된 record는
+    최신 pointer로 조용히 대체하지 않고 실패한다.
+  - **Runtime configuration과 Policy Catalog의 책임을 분리했다.** 전자는 "어떤 Repository와 AWS
+    Resource를 읽을 수 있는가", 후자는 "어떤 게시된 Profile을 쓸 수 있는가"에 답한다. Profile을
+    배포 JSON key에 두면 고객이 정책을 승인·게시할 때마다 인프라 배포가 필요해진다 — 승인 직후
+    평가에 쓸 수 있어야 한다는 목표와 정면으로 충돌한다. `ASSESSMENT_SCOPE_JSON`에 아직
+    `policy_profile_id`가 남아 있으면 조용히 무시하지 않고 **거부한다** — 무시하면 운영자는
+    Profile 경계가 여전히 환경변수로 강제된다고 믿은 채 배포한다.
+  - **실행 유형이 Perspective 집합을 정한다.** IaC 전용 Rule은 `IAC`만, AWS 전용은 `AWS_ACTUAL`만
+    만들고 **Drift로 보내지 않는다** — 한쪽만 평가하는 것이 그 Rule의 정의이므로,
+    `derive_drift_results()`가 없는 쪽을 "누락된 Perspective"로 읽어 `MANUAL_REVIEW`를 만들면 실제
+    불일치와 구별되지 않는다. legacy Rule(`evaluation_type is None`)은 지금까지처럼 세 관점을
+    유지한다. 계획·실행·Drift 대상 선택이 모두 `EvaluationExecutionPlanner` 하나를 통과한다.
+  - **`EvaluationPerspective.MANUAL`을 더했다.** 조직 통제를 기존 세 관점 중 하나로 표현하면 그
+    결과가 "IaC를 읽고 내린 판단"처럼 보인다. `ManualReviewEvaluator`는 Bedrock도 Tool도 부르지
+    않고 `MANUAL_REVIEW` 좌표만 남긴다 — 빼면 Coverage가 그 통제를 모르고 Initial/Verification의
+    planned set이 달라져 비교가 깨진다. 좌표는 `governance:{repository_id}`로 Repository 단위 안정
+    값이다(Assessment ID를 쓰면 비교하려고 만든 결과가 비교를 불가능하게 만든다). readiness는
+    **숫자 평균에서만** 제외하며, 제외 기준은 Perspective이지 status가 아니다 — 기존
+    IAC/AWS_ACTUAL의 `MANUAL_REVIEW` 점수 의미는 그대로다.
+  - **Authoring Worker는 전용 큐와 전용 IAM Role을 갖는다.** 정책 원문을 읽는 권한과 고객 AWS
+    계정을 읽는 권한이 같은 Role에 있으면 한쪽의 사고가 다른 쪽 자료까지 닿는다. Role은 정규화
+    artifact를 **읽기만** 하고(write는 정규화 단계의 책임), 자기 큐에 다시 넣지 못하며(실패한
+    추출이 스스로를 무한 재요청하는 것을 막는다), 승인된 authoring 모델이 설정되지 않으면 Bedrock
+    권한 자체가 만들어지지 않는다. DLQ에는 알람을 걸었다 — 추출되지 않은 정책은 "위반 없음"이
+    아니라 "아직 검토할 것이 없음"으로 보인다.
+  - 검증: `ruff check .`/`ruff format` 통과. unit 1056, contract 237, integration 19, security
+    102 통과. **unit 3건은 이 작업 이전부터 실패하던 것으로 그대로 남아 있다** —
+    `test_multiresource_actual_adapters`의 RDS 페이지네이션 2건(`AssumeRoleRdsResourceTool`이
+    `ec2_client_factory`를 요구하는데 테스트가 넘기지 않는다)과
+    `test_deployment_runtime`의 worker 조립 1건이다. 이 변경과 무관하며 손대지 않았다.
+
 - **PR #64 리뷰 후 실행 차단 3건을 보완했다.** 공개 API가 만든 selector 없는 Assessment는 보호된
   runtime target의 전체 리소스로 확장되고, 모든 resource work가 하나의 immutable evaluation plan을
   공유한다. verification은 source plan이 지목한 승인 리소스만 재평가하며 plan 저장은 동일 재시도만

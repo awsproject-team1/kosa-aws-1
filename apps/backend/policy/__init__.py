@@ -5,7 +5,12 @@ from apps.backend.policy.bootstrap import (
     PolicyCatalogBootstrapError,
 )
 from apps.backend.policy.catalog import InMemoryPolicyCatalog, load_m0_fixture_catalog
-from apps.backend.policy.context import PolicyContext, PolicyContextResolver, PolicyNotFoundError
+from apps.backend.policy.context import (
+    NoApplicablePolicyRulesError,
+    PolicyContext,
+    PolicyContextResolver,
+    PolicyNotFoundError,
+)
 from apps.backend.policy.dynamodb_catalog import DynamoDbPolicyCatalog
 from apps.backend.policy.ingestion import (
     ApprovalRejectedError,
@@ -47,6 +52,7 @@ __all__ = [
     "PolicyContext",
     "PolicyCatalogBootstrapError",
     "PolicyContextResolver",
+    "NoApplicablePolicyRulesError",
     "PolicyNotFoundError",
     "PolicyRegistry",
     "PolicyRegistryError",

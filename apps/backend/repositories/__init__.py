@@ -9,6 +9,10 @@ from apps.backend.repositories.deployment import (
     DynamoDbDeploymentRunStore,
     DynamoDbDeploymentVerificationStore,
 )
+from apps.backend.repositories.deployment_verification import (
+    DynamoDbPostDeployVerificationStore,
+    DynamoDbVerificationSourceReader,
+)
 from apps.backend.repositories.deployment_work import DynamoDbDeploymentWorkRepository
 from apps.backend.repositories.dynamodb import (
     DynamoDbAssessmentWorkflowRepository,
@@ -55,6 +59,8 @@ __all__ = [
     "DynamoDbDeploymentVerificationStore",
     "DynamoDbDeploymentWorkRepository",
     "DynamoDbPolicyApprovalRepository",
+    "DynamoDbPostDeployVerificationStore",
+    "DynamoDbVerificationSourceReader",
     "DynamoDbRemediationExceptionRepository",
     "DynamoDbRemediationResultStore",
     "DynamoDbRemediationWorkRepository",

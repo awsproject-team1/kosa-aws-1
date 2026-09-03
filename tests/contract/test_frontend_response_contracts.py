@@ -34,6 +34,7 @@ _RESPONSE_CONTRACTS = {
     "RemediationDecision": ("packages/contracts/remediation_policy.py", "RemediationDecision"),
     "RemediationStart": ("packages/contracts/remediation.py", "RemediationStartResponse"),
     "Report": ("apps/backend/assessment/reporting.py", "AssessmentReport"),
+    "Suppression": ("apps/backend/policy/remediation.py", "FindingSuppression"),
 }
 
 _TS_TYPE = "type {name} = {{"
@@ -129,7 +130,7 @@ class FrontendResponseContractTest(unittest.TestCase):
 
     def test_login_round_trip_restores_the_requested_screen(self) -> None:
         self.assertIn(
-            'sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`)',
+            "sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`)",
             self.source,
         )
         self.assertIn('history.replaceState({}, "", destination)', self.source)

@@ -146,7 +146,14 @@ def _assemble_worker(targets: list[dict[str, object]]) -> DeploymentWorker:
         secret_reader=lambda secret_id: "secret-value",
         sts_client=object(),
         client_factory_provider=lambda service: lambda credentials: object(),
+        assessment_dispatcher=_NoDispatch(),
+        assessment_id_factory=lambda: "asm-verify",
     )
+
+
+class _NoDispatch:
+    def dispatch(self, task) -> None:
+        raise AssertionError("assembly must not publish anything")
 
 
 class LiveWorkerAssemblyTest(unittest.TestCase):
@@ -179,10 +186,14 @@ class LiveWorkerAssemblyTest(unittest.TestCase):
             client_factory_provider=lambda service: (
                 services.append(service) or (lambda credentials: object())
             ),
+            assessment_dispatcher=_NoDispatch(),
+            assessment_id_factory=lambda: "asm-verify",
         )
 
         self.assertIsInstance(worker, DeploymentWorker)
-        self.assertEqual(services, ["s3", "ec2", "rds"])
+        # RDS adapter는 연결된 VPC 보안 그룹의 ingress를 읽으려고 EC2 client도 만든다
+        # (`_ADAPTERS`의 RDS 항목). 그래서 마지막 `ec2`는 중복이 아니라 RDS의 두 번째 client다.
+        self.assertEqual(services, ["s3", "ec2", "rds", "ec2"])
 
     def test_rejects_a_terraform_type_name_as_a_resource_type(self) -> None:
         """`aws_s3_bucket`은 Terraform 어휘다. Actual 재조회는 AWS resource type을 쓴다."""

@@ -2,10 +2,11 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-type Result = { resource_id: string; rule_id: string; perspective: string; status: string; score: number; severity: string; rationale: string };
-type Finding = { finding_id: string; resource_id: string; rule_id: string; perspective: string; status: string; severity: string; score: number; rationale: string };
+type Result = { resource_id: string; rule_id: string; perspective: string; status: string; score: number; severity: string; rationale: string; evidence_references: string[] };
+type Finding = { finding_id: string; resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; assessed_commit_sha: string | null; evaluated_at: string | null };
 type ReadinessScore = { score: number; evaluated_evaluations: number };
-type Report = { assessment_id: string; results: Result[]; findings: Finding[]; readiness_score: ReadinessScore | null; next_cursor: string | null; findings_next_cursor: string | null; coverage: { planned_evaluations: number; completed_evaluations: number; percentage: number } };
+type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string; ticket_reference: string | null };
+type Report = { assessment_id: string; results: Result[]; findings: Finding[]; readiness_score: ReadinessScore | null; next_cursor: string | null; findings_next_cursor: string | null; coverage: { planned_evaluations: number; completed_evaluations: number; percentage: number }; suppressions: Suppression[] };
 type RemediationDecision = { finding_id: string; resource_id: string; rule_id: string; rule_version: string; perspective: string; action: string; manual_review_code: string | null; exception_id: string | null };
 type RemediationStart = { decision: RemediationDecision; job: { job_id: string; status: string } | null };
 type Deployment = { deployment_id: string; status: string; commit_sha: string; remediation_id: string; source_assessment_id: string; plan_hash: string | null; verification_assessment_id: string | null };
@@ -92,6 +93,16 @@ function StartAssessment({ accessToken, onStarted }: { accessToken: string; onSt
   return <main><h1>Initial Assessment</h1><form onSubmit={event => void submit(event).catch((reason: Error) => setError(reason.message))}><label>Repository ID <input required value={repositoryId} onChange={event => setRepositoryId(event.target.value)} /></label><label>Policy Profile ID <input required value={policyProfileId} onChange={event => setPolicyProfileId(event.target.value)} /></label><button type="submit">Assessment 시작</button>{error && <p role="alert">{error}</p>}</form></main>;
 }
 
+//: Statuses a person has to settle rather than remediate. MANUAL_REVIEW means no tool observes
+//: the control; INSUFFICIENT_EVIDENCE means the read-only Actual read did not carry what the rule
+//: needs. Neither is a violation, so they are listed apart from FAIL and never labelled as one.
+const reviewStatuses = new Set(["MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
+
+//: Resource-state evidence namespaces (docs/CONTRACTS.md "Evidence reference boundary"). Anything
+//: else is a policy locator `{source_id}@{source_version}#{locator}`.
+const resourceEvidencePrefixes = ["aws:", "terraform:", "s3://"];
+const isResourceEvidence = (reference: string) => resourceEvidencePrefixes.some(prefix => reference.startsWith(prefix));
+
 function AssessmentReport({ assessmentId, accessToken }: { assessmentId: string; accessToken: string }) {
   const [report, setReport] = useState<Report | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -104,12 +115,68 @@ function AssessmentReport({ assessmentId, accessToken }: { assessmentId: string;
     if (cursor) params.set("cursor", cursor);
     if (findingsCursor) params.set("findings_cursor", findingsCursor);
     api<Report>(`/assessments/${encodeURIComponent(assessmentId)}?${params}`, accessToken)
-      .then(next => setReport(previous => previous && (cursor || findingsCursor) ? { ...next, results: uniqueResults([...previous.results, ...next.results]), findings: uniqueFindings([...previous.findings, ...next.findings]) } : next))
+      .then(next => setReport(previous => previous && (cursor || findingsCursor) ? { ...next, results: uniqueResults([...previous.results, ...next.results]), findings: uniqueFindings([...previous.findings, ...next.findings]), suppressions: uniqueSuppressions([...previous.suppressions, ...next.suppressions]) } : next))
       .catch((reason: Error) => setError(reason.message));
   }, [accessToken, assessmentId, cursor, findingsCursor]);
   if (error) return <p role="alert">{error}</p>;
   if (!report) return <p>Assessment 결과를 불러오는 중…</p>;
-  return <main><h1>Initial Assessment</h1><section><strong>평가 실행률 {report.coverage.percentage}%</strong><span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span><strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong></section><h2>Findings ({report.findings.length})</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Severity</th><th>Score</th><th>조치</th></tr></thead><tbody>{report.findings.map(finding => <tr key={finding.finding_id}><td>{finding.resource_id}</td><td>{finding.rule_id}</td><td>{finding.perspective}</td><td>{finding.status}</td><td>{finding.severity}</td><td>{finding.score}</td><td><RemediateFinding finding={finding} accessToken={accessToken} /></td></tr>)}</tbody></table>{report.findings_next_cursor && <button onClick={() => setFindingsCursor(report.findings_next_cursor)}>Findings 더 보기</button>}<h2>Evaluation results</h2><table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td></tr>)}</tbody></table>{report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}</main>;
+  const suppressionByFinding = new Map(report.suppressions.map(note => [note.finding_id, note]));
+  const violations = report.findings.filter(finding => !reviewStatuses.has(finding.status));
+  const reviews = report.findings.filter(finding => reviewStatuses.has(finding.status));
+  return <main>
+    <h1>Initial Assessment</h1>
+    <section>
+      <strong>평가 실행률 {report.coverage.percentage}%</strong>
+      <span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span>
+      <strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong>
+      <span>severity 가중 평균이며 인증 판정이 아닙니다. Drift와 사람 검토 항목은 평균에서 제외됩니다.</span>
+    </section>
+    <h2>위반 Finding ({violations.length})</h2>
+    {violations.length === 0 && <p>FAIL로 판정된 항목이 없습니다.</p>}
+    {violations.map(finding => <FindingCard key={finding.finding_id} finding={finding} suppression={suppressionByFinding.get(finding.finding_id)} accessToken={accessToken} />)}
+    <h2>사람 검토 필요 ({reviews.length})</h2>
+    {reviews.length === 0 && <p>도구가 판단하지 못한 항목이 없습니다.</p>}
+    {reviews.map(finding => <FindingCard key={finding.finding_id} finding={finding} suppression={suppressionByFinding.get(finding.finding_id)} accessToken={accessToken} />)}
+    {report.findings_next_cursor && <button onClick={() => setFindingsCursor(report.findings_next_cursor)}>Findings 더 보기</button>}
+    <h2>Evaluation results</h2>
+    <table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th><th>근거</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td><td><details><summary>{result.evidence_references.length}건</summary><EvidenceList references={result.evidence_references} /><p>{result.rationale}</p></details></td></tr>)}</tbody></table>
+    {report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}
+  </main>;
+}
+
+/** Policy locators and resource-state evidence are listed apart so a reviewer can trace both. */
+function EvidenceList({ references }: { references: string[] }) {
+  const policy = references.filter(reference => !isResourceEvidence(reference));
+  const resource = references.filter(isResourceEvidence);
+  return <dl>
+    <dt>정책 근거</dt><dd>{policy.length ? <ul>{policy.map(reference => <li key={reference}><code>{reference}</code></li>)}</ul> : "없음"}</dd>
+    <dt>리소스 상태 근거</dt><dd>{resource.length ? <ul>{resource.map(reference => <li key={reference}><code>{reference}</code></li>)}</ul> : "없음"}</dd>
+  </dl>;
+}
+
+/**
+ * One Finding with the explanation a reviewer needs before deciding anything.
+ *
+ * The rationale and evidence are the point of the row (docs/PRD.md: evidence traceability), not the
+ * score. A suppression note is display-only — the Finding itself is unchanged and the exception
+ * expires (ADR-0020 §6). Review statuses get no remediation button: there is nothing to patch until a
+ * person settles what the tool could not observe.
+ */
+function FindingCard({ finding, suppression, accessToken }: { finding: Finding; suppression: Suppression | undefined; accessToken: string }) {
+  const isReview = reviewStatuses.has(finding.status);
+  return <article>
+    <header>
+      <strong>{finding.severity}</strong> · {finding.status} · {finding.resource_id} · {finding.rule_id}@{finding.rule_version} · {finding.perspective} · score {finding.score}
+      {!isReview && <> · <RemediateFinding finding={finding} accessToken={accessToken} /></>}
+    </header>
+    {suppression && <p role="note">예외로 억제됨 ({suppression.reason}, {suppression.expires_at}까지{suppression.ticket_reference ? `, ${suppression.ticket_reference}` : ""}). 위반 사실은 그대로이며 조치 판정에서만 제외됩니다.</p>}
+    <details open={isReview}>
+      <summary>판단 이유와 근거</summary>
+      <p>{finding.rationale}</p>
+      <EvidenceList references={finding.evidence_references} />
+      {finding.assessed_commit_sha && <p>평가 commit {finding.assessed_commit_sha.slice(0, 12)} · {finding.evaluated_at}</p>}
+    </details>
+  </article>;
 }
 
 /**
@@ -162,6 +229,7 @@ function App() {
 
 function uniqueResults(values: Result[]) { return [...new Map(values.map(value => [`${value.resource_id}:${value.rule_id}:${value.perspective}`, value])).values()]; }
 function uniqueFindings(values: Finding[]) { return [...new Map(values.map(value => [value.finding_id, value])).values()]; }
+function uniqueSuppressions(values: Suppression[]) { return [...new Map(values.map(value => [`${value.finding_id}:${value.exception_id}`, value])).values()]; }
 
 /** Call the governance API with the customer's access token, surfacing the API error body. */
 async function api<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {

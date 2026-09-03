@@ -6,7 +6,7 @@
 
 - `fixtures/m4/demo_policy_coverage.json` 검증 통과
 - protected customer sandbox에 현재 platform revision 배포
-- `assessment-nova-lite-m1-v2` 전체 Model Profile과 `m1-three-perspective-v1` rubric 사용
+- `assessment-nova-lite-m1-v3` 전체 Model Profile과 `m1-three-perspective-v1` rubric 사용
 - D demo apply 완료 및 Post-Deploy artifact set 고정
 - private evidence 보관 위치와 release reviewer 지정
 
@@ -34,11 +34,11 @@ A의 customer runtime exporter는 다음 top-level JSON을 private 파일로 만
   "deployment_id_sha256": "<64 lowercase hex>",
   "artifact_set_sha256": "<64 lowercase hex>",
   "model_profile": {
-    "model_profile_id": "assessment-nova-lite-m1-v2",
+    "model_profile_id": "assessment-nova-lite-m1-v3",
     "role": "ASSESSMENT",
     "region": "us-east-1",
     "model_id": "amazon.nova-lite-v1:0",
-    "prompt_version": "assessment-s3-three-perspective-v2",
+    "prompt_version": "assessment-three-perspective-rubric-v3",
     "rubric_version": "m1-three-perspective-v1",
     "golden_dataset_version": "m3-s3-initial-post-deploy-six-rule-three-perspective-v1"
   },

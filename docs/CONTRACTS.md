@@ -56,10 +56,23 @@ M0 Assessment 기본 Profile은 `fixtures/m0/assessment_model_profile.json`의
 `assessment-nova-lite-m0-v1`이며, `us-east-1`의 `amazon.nova-lite-v1:0`을 사용한다.
 
 M1 C의 Bedrock adapter는 injected Converse client로만 호출하며, 모델에는 선택된 Resource
-Snapshot과 해당 Rule·Profile 정보만 전달한다. 모델 응답은 `status`, `score`, `rationale`,
-`evidence_references` 네 필드의 JSON으로 한정된다. Resource/Rule/Perspective/Severity/Version과
-Model Profile은 Runtime이 authoritative input에서 재구성하고, evidence는 Snapshot과 Rule이
-허용한 locator의 부분집합만 허용한다. 정책 근거의 정규형은
+Snapshot과 해당 Rule·Profile 정보만 전달한다. Rule은 identity(`rule_id`/`version`/`title`/
+`severity`/`source_references`)에 더해, authoring이 만든 Rule이면 **사람이 승인한 실행 의미**
+(`evaluation_type`, `applicability_semantics`, `evaluation_rubric`, `required_evidence`,
+`optional_evidence`, `exception_semantics`, `compensating_control_semantics`)를 함께 받는다 —
+title만 보내면 승인된 rubric이 판정에 아무 영향을 주지 않는다. legacy Rule은 이전과 같은 view다.
+모델 응답은 `status`, `score`, `rationale`, `evidence_references` 네 필드의 JSON으로 한정되고,
+`status`에 `EXECUTION_ERROR`는 올 수 없다(그 값은 Code가 기록하는 실행 실패이지 판정이 아니다).
+Resource/Rule/Perspective/Severity/Version과 Model Profile은 Runtime이 authoritative input에서
+재구성하고, evidence는 Snapshot과 Rule이 허용한 locator의 부분집합만 허용한다.
+
+**AWS Actual pre-flight gate (ADR-0023 §2).** `ActualBedrockEvaluator`는 authored Rule의
+`required_evidence`가 가리키는 Catalog binding의 `document_paths`를 projected document에서 먼저
+확인한다. 하나라도 비어 있으면 모델을 부르지 않고 Code가 `INSUFFICIENT_EVIDENCE` 결과를 만든다.
+rationale에는 빠진 경로 이름만 들어가고, evidence에는 실제로 수행한 `aws:` read locator와 Rule의
+정책 판본이 남는다. IaC hint는 authoritative가 아니므로 이 gate의 대상이 아니다. Prompt가 바뀌었으므로
+승인 Assessment Profile은 `assessment-nova-lite-m1-v3`(`assessment-three-perspective-rubric-v3`)이며,
+릴리스 전에 Golden 36 case 반복 평가를 이 Profile로 다시 실행해야 한다. 정책 근거의 정규형은
 `{source_id}@{source_version}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
 `aws:` namespace를 사용하므로 정책 원문 근거와 구분된다.
 
@@ -200,7 +213,12 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
   항상 Source version까지 고정한다. 평가 Evidence는 `evidence_reference`
   (`{source_id}@{source_version}#{locator}`) 형식을 사용해 어떤 판본을 인용했는지 복원한다.
 - `PolicyRule`: versioned rule, severity, 적용 평가 단계, Resource 유형과 하나 이상의
-  Source Reference
+  Source Reference. authoring이 만든 Rule은 실행 의미 필드를 추가로 갖는다 — `control_key`,
+  `control_catalog_version`, `evaluation_type`, `required_evidence`/`optional_evidence`,
+  `evaluation_rubric`과 자유 텍스트 semantics. **`evaluation_type is None`이면 authoring 이전에
+  커밋된 legacy Rule**이며, 그런 Rule이 신규 필드를 일부만 갖는 상태는 금지한다 — 절반만 채워진
+  실행 의미는 어느 계약을 따르는지 알 수 없다. `judgment`/`score`/`source_score`/`anchor`는
+  정의하지 않는다.
 - `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
 - `PolicyProfile`: `rule_references`로 구성된 versioned allow-list. Repository/AWS Account 권한은
   Profile이 아니라 Backend의 JWT scope에서 강제한다.
@@ -210,9 +228,42 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가
 Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
 
-Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, 비동기 Job은 승인 시점의 Profile
-version도 함께 고정한다. `PolicyContextResolver.resolve(..., expected_profile_version=...)`은
-그 사이에 Profile이 교체되면 다른 allow-list로 평가하지 않고 `PolicyNotFoundError`로 실패한다.
+Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, **모든** Assessment는 생성 시점의 Profile
+version을 함께 고정한다(ADR-0020 amendment). `PolicyContextResolver.resolve(...,
+expected_profile_version=...)`은 그 판본 item을 직접 읽으므로, 실행 도중 새 Profile이 게시돼도 이미
+계획된 평가는 같은 allow-list로 끝난다. 판본이 사라졌거나 Profile 자체가 없으면
+`PolicyNotFoundError`로 실패하며, 두 경우의 메시지는 다르다 — "설정이 잘못됐다"와 "게시 이력이
+어긋났다"는 서로 다른 문제다.
+
+## Policy authoring boundary
+
+`packages/contracts/policy_authoring.py`는 **authoring 단계의 어휘만** 정의한다. Runtime 평가 결과
+(`EvaluationStatus`, `score`, `severity`)는 여기 없다. 두 어휘를 한 모듈에 두면 "이 Requirement를
+어떤 Rule로 만들 수 있는가"와 "그 Rule을 평가한 결과가 무엇인가"가 같은 값으로 표현되기 시작한다.
+`CandidateClassification`과 `EvaluationStatus` 사이에는 alias도 변환 함수도 만들지 않는다.
+
+- `CandidateClassification`: `AUTOMATABLE` / `MANUAL` / `UNSUPPORTED`. 분류마다 요구되는 모양이
+  다르다 — AUTOMATABLE은 Control·실행 유형·evidence·rubric이 필수이고, MANUAL은 MANUAL Control에
+  매핑되며 evidence를 가질 수 없고, UNSUPPORTED는 어떤 실행 의미도 갖지 않는다.
+- `GovernanceControl` / `GovernanceControlCatalog`: 제품이 평가할 수 있는 범위의 정본.
+  `automation_support`가 `AVAILABLE`/`KNOWN_UNSUPPORTED`/`MANUAL`을 구분한다.
+- `EvidenceCapabilityBinding`: **AWS와 IaC가 비대칭이다.** AWS_ACTUAL binding은 projected document의
+  실제 경로(`document_paths`)를 갖고 Runtime이 그것으로 pre-flight 판정을 한다. IAC binding은
+  `terraform_resource_types`/`terraform_attribute_names` hint만 가지며, 이는 prompt 경계와 화면
+  설명 용도의 non-authoritative 값이다.
+- `ExtractedRequirement`: LLM structured output. source ID·version·hash를 만들지 않고 locator만
+  돌려준다. 평가 결과 필드(`FORBIDDEN_EXTRACTION_FIELDS`)는 정의되지 않는다.
+- `AcceptedRequirement`: Rule로 변환한 뒤에도 원 Requirement·분류·매핑 이유·read-only
+  `proposed_severity`를 잃지 않게 둘을 함께 보존한다.
+- `RejectedRequirement` / `CandidateRejectionCode`: 거절 사유는 자유 문장이 아니라 열거값이다.
+  Artifact 자체의 무결성 실패는 후보 하나의 문제가 아니므로 `ArtifactReadFailureCode`로 분리한다.
+- `AuthoringManifest` / `AuthoringRunStatus`: 한 추출 실행의 완결 경계. Review와 Approval은
+  `READY`만 읽는다.
+- `CandidateReviewEntry`: 리뷰 화면이 받는 값. `proposed_severity`는 read-only이고 locator는 서버가
+  만든 `SourceReference`다.
+
+정책 원문은 이 어휘에 없다. 원문은 `ExtractionUnit`(추출 worker 내부 값) 안에만 존재하며 그 타입은
+직렬화를 제공하지 않는다 — 실수로 저장할 수 없게 만드는 것이 목적이다.
 Assessment/Work 레코드에 이 version을 영속화하는 것은 Backend(A)의 저장 경계다.
 
 ### Evidence reference boundary

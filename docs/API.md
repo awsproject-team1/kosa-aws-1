@@ -37,22 +37,37 @@ route 없이 남아 있었다).
 
 ## Customer policy ingestion endpoints
 
-업로드 세션 3개(`uploads`/`process`/status 조회)와 승인(`/approve`)·Profile 게시(`/policy-profiles`)는
-API Gateway 라우트와 Lambda composition root(`apps/backend/api/runtime.py`)에 배선돼 노출된다.
-승인·게시의 검토 read(`load_review`/`load_publication`)는 C가 넘긴 `PolicyCandidateExtraction`을
-저장한 `#CANDIDATES` item에서 후보를 읽는다. 다만 그 후보를 실제로 저장하는 경로
-(`record_candidate_extraction` 호출자 = C의 AI 후보 추출 실행)는 아직 배선되지 않아, 후보가 없는
-Source를 승인하면 빈 후보로 `EMPTY_PROFILE` 거부가 난다. 상세 workflow와 인수 조건은
-`docs/POLICY_INGESTION.md`를 따른다.
+업로드 세션 3개(`uploads`/`process`/status 조회), 후보 추출(`/candidates`), 승인(`/approve`),
+Profile 게시(`/policy-profiles`)가 API Gateway 라우트와 Lambda composition root
+(`apps/backend/api/runtime.py`)에 배선돼 노출된다. 후보를 저장하는 경로는 Policy Authoring
+Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manifest**가 선언한 후보만
+읽는다 — 일부만 쓰인 후보 집합을 완전한 것으로 읽으면 승인 경계가 형식이 된다. 상세 workflow와
+인수 조건은 `docs/POLICY_INGESTION.md`를 따른다.
 
 | Method | Path | Status | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/policy-sources/uploads` | 배선됨 | JWT-derived customer Scope의 업로드 세션 생성 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
-| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 배선됨(후보 저장 대기) | 검토된 Source/Control/Rule version 승인 |
-| `POST` | `/policy-profiles` | 배선됨(후보 저장 대기) | 승인된 Rule version으로 versioned Policy Profile 게시 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 후보 추출 요청. `202`와 `{authoring_run_id, status}` |
+| `GET` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 실행 상태와 후보/미지원/거절 결과 페이지 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 배선됨 | 검토된 Source/Control/Rule version 승인 |
+| `POST` | `/policy-profiles` | 배선됨 | 승인된 Rule version으로 versioned Policy Profile 게시 |
 | `POST` | `/policy-profiles/{profileId}/versions` | 대기 | 승인된 Rule version으로 Profile 새 version 게시 |
+
+### 후보 조회 응답
+
+`GET .../candidates`는 `limit`(1–50)과 opaque `cursor`로 페이지네이션한다. 완결되지 않은 실행은
+상태와 provenance만 돌려주고 후보는 비운다 — 부분 결과를 전체로 착각한 승인을 막는다.
+
+후보 항목은 모델이 쓴 재진술(`requirement`, `requirement_summary`, `mapping_reason`), 매핑된
+Control과 실행 유형, evidence capability, 그리고 **서버가 만든** locator + `content_sha256`를
+담는다. `proposed_severity`는 Governance Control Catalog가 정한 read-only 값이며, 리뷰어는 그것을
+승인하거나 후보를 거절한다 — 화면에서 등급을 고르게 하면 AI가 만든 근거와 사람이 정한 등급이
+섞여 나중에 누가 무엇을 정했는지 말할 수 없다.
+
+응답에는 정규화 문서의 원문이 들어가지 않는다. `judgment`·`score`·`source_score`·`anchor`·
+`severity` 필드는 존재하지 않는다.
 
 업로드 세션 응답이 후속 호출에 필요한 `sourceId`와 `version`을 돌려준다. Client는 이 값을
 그대로 사용하며 스스로 만들지 않는다.
@@ -79,11 +94,26 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
 - Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`만 지정한다. Resource/AWS
   Account Scope는 JWT claim과 보호된 Worker runtime 설정에서 판정하며 요청 body에는 포함하지
   않는다. target에 여러 리소스가 승인돼 있으면 Worker가 모두 하나의 평가 계획으로 확장한다.
+  **어떤 Profile을 쓸 수 있는지는 고객 partition의 Policy Catalog가 정한다** — 배포 구성이 아니다
+  (ADR-0023). 게시되지 않은 Profile을 지정하면 생성 단계에서 거절한다.
+- Assessment 생성은 그 시점의 current Profile 판본을 고정한다. Runtime은 latest pointer를 따라가지
+  않고 고정된 판본을 직접 조회하므로, 실행 도중 새 Profile이 게시돼도 이 Assessment의 Rule 집합은
+  바뀌지 않는다. 판본 고정은 모든 phase에 적용된다(ADR-0020 amendment).
+- 승인된 MANUAL Rule은 `MANUAL` 관점 결과를 만든다. 좌표는 `AWS::Governance::Assessment` 유형의
+  `governance:{repository_id}`이며 Repository 단위로 안정적이다. 이 결과는 readiness 숫자 평균에서
+  제외되지만 Coverage와 plan 완료에는 포함된다. live M1 Worker는 고정된 Profile 판본에 MANUAL Rule이
+  있을 때 이 governance work를 자동으로 추가하며, 계획 좌표는 Rule의 `evaluation_type`이 정하는
+  Perspective 집합만 담는다(IaC 전용 Rule에 AWS_ACTUAL/DRIFT 좌표를 계획하지 않는다).
+- `INSUFFICIENT_EVIDENCE`는 모델의 답일 수도, Code의 답일 수도 있다. AWS_ACTUAL 관점에서 authored
+  Rule의 `required_evidence` 문서 경로가 read 결과에 비어 있으면 Runtime이 모델을 부르지 않고 이
+  상태를 기록한다. `rationale`에 빠진 경로 이름이, `evidence_references`에 수행한 `aws:` read
+  locator가 남는다.
 - Policy Profile 조회·평가는 `PolicyProfile.rule_references`로 version이 고정된 Rule만 사용하고,
   정책 Evidence는 `SourceReference.evidence_reference`의 `{source_id}@{source_version}#{locator}`
   정규형으로 반환한다. AWS Actual Evidence는 `aws:` namespace를 사용한다.
-- Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT` 관점을
-  구분해 반환한다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할
+- Initial Assessment 결과는 같은 관리 대상의 `IAC`, `AWS_ACTUAL`, `DRIFT`, `MANUAL` 관점을
+  구분해 반환한다. 어떤 관점이 생기는지는 Rule의 `evaluation_type`이 정한다 — IaC 전용 Rule은
+  `IAC`만, AWS 전용 Rule은 `AWS_ACTUAL`만 만들고 Drift 비교 대상이 아니다. Drift는 Finding 근거일 뿐 API나 AI가 고객 워크로드를 직접 변경할
   권한을 부여하지 않는다.
 - `GET /assessments/{assessmentId}`의 Coverage는 서버가 Assessment 시작 시 저장한 적용 가능
   `Resource × Rule × Perspective` 계획을 분모로 사용한다. 응답에는
@@ -183,7 +213,7 @@ C의 readiness 판정을 함께 돌려준다. `GET /deployments/{id}`의 readine
 | --- | --- | --- | --- |
 | `POST` | `/remediations/{remediationId}/deployments` | 배선됨 | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
 | `GET` | `/deployments/{deploymentId}` | 배선됨 | plan 요약, readiness 사유, 승인 상태, apply/검증 진행 상태 조회 |
-| `GET` | `/deployments/{deploymentId}/verification` | 배선됨 | Post-Deploy Verification의 before/after 비교 projection 조회 |
+| `GET` | `/deployments/{deploymentId}/verification` | 배선됨 | Post-Deploy Verification의 before/after 비교 projection 조회. 검증 Assessment는 D Deployment Worker가 apply run을 승인 사실과 대조해 확정한 직후 A 경계(`PostDeployVerificationService`)가 자동 생성·발행하며, `GET /deployments/{id}`의 `verification_assessment_id`가 그 시점에 채워진다 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
 | `POST` | `/deployments/{deploymentId}/approve` | 배선됨 | 저장된 plan과 파생 readiness로 승인. 요청의 `commit_sha`/`plan_hash`가 저장된 plan과 다르면 거절 |
 | `GET` | `/deployments/{deploymentId}/observability` | 배선됨(live source 대기) | Admin 전용 데모 폐루프 관측·비용 기록 조회 (ADR-0021 §3). live metric source가 주입되지 않은 배포에서는 route가 없다(404) |
