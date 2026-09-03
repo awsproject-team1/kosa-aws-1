@@ -2,6 +2,22 @@
 
 ## Current
 
+- **배포 workflow가 CloudFormation 파라미터 다섯 개를 넘기지 않고 있었다.** 템플릿에는 선언돼 있지만
+  `--parameter-overrides`에 없어 **값을 설정할 통로 자체가 없었고**, 그래서 세 기능이 "배선됨"으로
+  적혀 있으면서 프로덕션에서는 영구히 fail-closed였다.
+  - `DeploymentRuntimeJson`·`DeploymentGitHubSecretArns` → TERRAFORM_PATCH의 PR write(#66)와 apply 대상
+    commit 해석(#65)이 동작할 수 없었다.
+  - `PolicyAuthoringModelProfileJson` → ADR-0023 정책 후보 추출 worker의 Bedrock 권한이 만들어지지 않는다.
+  - `FrontendCallbackUrl`/`FrontendLogoutUrl` → Cognito Hosted UI가 `localhost:5173`에 고정된다.
+  - 다섯 개를 workflow env와 `--parameter-overrides`에 추가하고, 배포 pair(runtime JSON + token ARNs)를
+    CloudFormation 호출 **전에** all-or-none으로 검증한다. 회귀는
+    `tests/unit/test_deploy_workflow_parameters.py`가 템플릿 파라미터 집합과 workflow override 집합을
+    대조해 고정한다 — 파라미터를 추가하고 통로를 만들지 않으면 테스트가 먼저 깨진다.
+  - 같은 테스트가 배포 인증이 OIDC임을 고정한다(`id-token: write` + `role-to-assume`, 정적 access key
+    문자열 부재). **재배포에 AWS access key는 필요 없다.**
+  - 검증: `ruff check .`/`format` 통과, unit 1178 / contract 237 / integration 21 / security 102 통과,
+    workflow YAML 파싱 확인.
+
 - **폐루프의 마지막 코드 조각 — patch → GitHub PR write — 를 이었다** (#65 handoff §6 B, ADR-0019 §3·§6).
   - `BedrockPatchGenerator`는 digest만 남기고 변경 내용을 버리고 있었다. 이제 canonical patch 바이트
     (`apps/backend/remediation/patch_content.py`)를 `content_sha256`으로 저장한다

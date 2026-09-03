@@ -268,6 +268,18 @@ jobs:
       M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
       M1_ASSESSMENT_SECRET_ARNS: ${{ secrets.M1_ASSESSMENT_SECRET_ARNS }}
       M1_ASSESSMENT_READ_ROLE_ARNS: ${{ secrets.M1_ASSESSMENT_READ_ROLE_ARNS }}
+      # 승인된 배포 대상과 그 GitHub token. 둘은 템플릿 Rule
+      # `DeploymentCommitResolutionAllOrNone`이 all-or-none으로 강제하므로 같은 Environment에서
+      # 함께 정의한다. 비어 있으면 TERRAFORM_PATCH의 PR write와 apply 대상 commit 해석이
+      # fail-closed로 남는다(ADR-0019 §3·§4).
+      DEPLOYMENT_RUNTIME_JSON: ${{ secrets.DEPLOYMENT_RUNTIME_JSON }}
+      DEPLOYMENT_GITHUB_SECRET_ARNS: ${{ secrets.DEPLOYMENT_GITHUB_SECRET_ARNS }}
+      # 승인된 POLICY_AUTHORING model profile. 비어 있으면 authoring worker의 Bedrock 권한이
+      # 만들어지지 않아 정책 후보 추출이 설정 단계에서 멈춘다(ADR-0023).
+      POLICY_AUTHORING_MODEL_PROFILE_JSON: ${{ vars.POLICY_AUTHORING_MODEL_PROFILE_JSON }}
+      # Cognito Hosted UI 콜백. 기본값은 localhost이므로 배포된 SPA로 로그인하려면 지정해야 한다.
+      FRONTEND_CALLBACK_URL: ${{ vars.FRONTEND_CALLBACK_URL }}
+      FRONTEND_LOGOUT_URL: ${{ vars.FRONTEND_LOGOUT_URL }}
       EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out approved repository revision
@@ -284,6 +296,14 @@ jobs:
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
           test -n "${LANGGRAPH_LAYER_S3_KEY}"
           test -n "${LANGGRAPH_LAYER_S3_OBJECT_VERSION}"
+          # 배포 대상과 그 token은 함께 있거나 함께 없어야 한다. 템플릿 Rule도 같은 것을
+          # 강제하지만, 여기서 걸면 CloudFormation 호출 전에 이름을 밝히고 멈춘다.
+          if [[ -n "${DEPLOYMENT_RUNTIME_JSON}" || -n "${DEPLOYMENT_GITHUB_SECRET_ARNS}" ]]; then
+            test -n "${DEPLOYMENT_RUNTIME_JSON}" \
+              || { echo "DEPLOYMENT_RUNTIME_JSON is required alongside DEPLOYMENT_GITHUB_SECRET_ARNS"; exit 1; }
+            test -n "${DEPLOYMENT_GITHUB_SECRET_ARNS}" \
+              || { echo "DEPLOYMENT_GITHUB_SECRET_ARNS is required alongside DEPLOYMENT_RUNTIME_JSON"; exit 1; }
+          fi
 
       - name: Validate assessment deployment configuration
         run: python3 -m scripts.validate_m1_deployment_config
@@ -338,6 +358,11 @@ jobs:
               "M1AssessmentRuntimeJson=${M1_ASSESSMENT_RUNTIME_JSON}" \
               "M1AssessmentSecretArns=${M1_ASSESSMENT_SECRET_ARNS}" \
               "M1AssessmentReadRoleArns=${M1_ASSESSMENT_READ_ROLE_ARNS}" \
+              "DeploymentRuntimeJson=${DEPLOYMENT_RUNTIME_JSON}" \
+              "DeploymentGitHubSecretArns=${DEPLOYMENT_GITHUB_SECRET_ARNS}" \
+              "PolicyAuthoringModelProfileJson=${POLICY_AUTHORING_MODEL_PROFILE_JSON}" \
+              "FrontendCallbackUrl=${FRONTEND_CALLBACK_URL:-http://localhost:5173}" \
+              "FrontendLogoutUrl=${FRONTEND_LOGOUT_URL:-http://localhost:5173}" \
             --no-fail-on-empty-changeset
 
       - name: Diagnose failed CloudFormation deployment

@@ -194,8 +194,14 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
 - remediation PR 머지 → `POST /remediations/{id}/deployments` → plan → `POST /deployments/{id}/approve`
   → OIDC apply → post-deploy 재평가.
 - 선행: DEPLOYMENT_RUNTIME_JSON이 현재 api Lambda env에서 **빈값**이라 TERRAFORM_PATCH commit 해석이
-  fail-closed. deploy Environment에 DeploymentRuntimeJson + DeploymentGitHubSecretArns 설정 필요
-  (템플릿 Rule DeploymentCommitResolutionAllOrNone: 둘 다 있거나 둘 다 없어야 함). ACTUAL_SYNC는 GitHub 없이 동작.
+  fail-closed. **2026-09-03 확인: deploy workflow가 이 파라미터를 CloudFormation에 넘기지 않아 값을
+  설정할 통로 자체가 없었다.** workflow에 다섯 파라미터(`DeploymentRuntimeJson`,
+  `DeploymentGitHubSecretArns`, `PolicyAuthoringModelProfileJson`, `FrontendCallbackUrl`,
+  `FrontendLogoutUrl`)를 추가했으므로, 이제 deploy Environment에 아래를 정의하면 재배포로 반영된다.
+  - Secret: `DEPLOYMENT_RUNTIME_JSON`, `DEPLOYMENT_GITHUB_SECRET_ARNS` (둘 다 있거나 둘 다 없어야 함 —
+    workflow와 템플릿 Rule `DeploymentCommitResolutionAllOrNone`이 각각 강제)
+  - Variable: `POLICY_AUTHORING_MODEL_PROFILE_JSON`, `FRONTEND_CALLBACK_URL`, `FRONTEND_LOGOUT_URL`
+  ACTUAL_SYNC는 GitHub 없이 동작.
 - 고객 repo `test`에 terraform-plan/apply workflow + OIDC role 준비됨. deploy Environment 승인자 필요.
 
 ### D. Parent Orchestrator 라우트 배포 + 라이브 검증 (선행: 재배포)
