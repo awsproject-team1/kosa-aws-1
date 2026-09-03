@@ -592,6 +592,7 @@ Resources:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          REMEDIATION_QUEUE_URL: !Ref RemediationQueue
           DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
@@ -615,7 +616,11 @@ Resources:
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
+          # Sweeper drains every workflow command from the shared Outbox, so it needs
+          # each queue to route Assessment/Remediation/Deployment tasks correctly.
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          REMEDIATION_QUEUE_URL: !Ref RemediationQueue
+          DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
 
   ApplyCompletionFunction:
     Type: AWS::Lambda::Function

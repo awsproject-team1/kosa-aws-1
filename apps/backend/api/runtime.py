@@ -32,8 +32,10 @@ from apps.backend.deployment.runtime_config import (
 )
 from apps.backend.jobs import (
     AssessmentScopeDenied,
+    CommandRoutingWorkflowDispatcher,
     OutboxDispatcher,
     SqsDeploymentWorkflowDispatcher,
+    SqsRemediationWorkflowDispatcher,
     SqsWorkflowDispatcher,
 )
 from apps.backend.policy import load_rule_registry
@@ -54,6 +56,7 @@ from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsRe
 from apps.backend.repositories.deployment_plan import DynamoDbDeploymentPlanReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
+from packages.contracts import WorkflowCommand
 
 
 class EnvironmentAssessmentScope(AssessmentScope):
@@ -94,10 +97,50 @@ def lambda_handler(event: Mapping[str, object], context: object) -> dict[str, ob
 
 
 def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
-    """EventBridge-scheduled at-least-once dispatch of durable Assessment tasks."""
-    repository, dispatcher = _workflow_components()
-    dispatched = OutboxDispatcher(repository=repository, dispatcher=dispatcher).dispatch_pending()
+    """EventBridge-scheduled at-least-once dispatch of every durable workflow task.
+
+    The Outbox holds Assessment, Remediation, and Deployment commands in one table, so
+    the sweeper must route each task to the queue its command belongs to rather than
+    assume every entry is an Assessment task. A single-queue dispatcher would leave
+    Remediation/Deployment entries PENDING forever.
+    """
+    repository, _ = _workflow_components()
+    dispatched = OutboxDispatcher(
+        repository=repository, dispatcher=_all_command_dispatcher()
+    ).dispatch_pending()
     return {"dispatched": dispatched}
+
+
+def _all_command_dispatcher() -> CommandRoutingWorkflowDispatcher:
+    """Build a dispatcher that routes each workflow command to its own internal queue."""
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    sqs = boto3.client("sqs")
+    assessment_url = _required_string(
+        os.environ.get("ASSESSMENT_QUEUE_URL"), "ASSESSMENT_QUEUE_URL"
+    )
+    remediation_url = _required_string(
+        os.environ.get("REMEDIATION_QUEUE_URL"), "REMEDIATION_QUEUE_URL"
+    )
+    deployment_url = _required_string(
+        os.environ.get("DEPLOYMENT_QUEUE_URL"), "DEPLOYMENT_QUEUE_URL"
+    )
+    return CommandRoutingWorkflowDispatcher(
+        {
+            WorkflowCommand.ASSESS_RESOURCE: SqsWorkflowDispatcher(sqs, queue_url=assessment_url),
+            WorkflowCommand.GENERATE_REMEDIATION: SqsRemediationWorkflowDispatcher(
+                sqs, queue_url=remediation_url
+            ),
+            WorkflowCommand.SYNC_ACTUAL_STATE: SqsRemediationWorkflowDispatcher(
+                sqs, queue_url=remediation_url
+            ),
+            WorkflowCommand.RUN_DEPLOYMENT: SqsDeploymentWorkflowDispatcher(
+                sqs, queue_url=deployment_url
+            ),
+        }
+    )
 
 
 def apply_completion_handler(event: Mapping[str, object], context: object) -> dict[str, str]:
@@ -249,12 +292,18 @@ def _remediation_components(
     - `decision_maker`: B의 `RemediationPolicy`. 커밋된 eligibility(`fixtures/rules/remediation.json`)가
       정본이며, 등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 닫힌다.
     - `repository`/`outbox_dispatcher`: 판정 record와 (actionable일 때) Job·outbox를 한
-      workflow repository로 쓰고, GENERATE_REMEDIATION/SYNC_ACTUAL_STATE task를 assessment
-      Worker 큐로 dispatch한다.
+      workflow repository로 쓰고, GENERATE_REMEDIATION/SYNC_ACTUAL_STATE task를 **Remediation
+      Worker 큐**로 dispatch한다. Assessment dispatcher는 ASSESS_RESOURCE만 받으므로 여기에
+      쓰면 remediation task가 거부되어 outbox에 PENDING으로 남는다.
     """
-    _, dispatcher = _workflow_components()
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    queue_url = _required_string(os.environ.get("REMEDIATION_QUEUE_URL"), "REMEDIATION_QUEUE_URL")
     remediation_policy = load_rule_registry(_rules_path()).remediation
     context_reader = DynamoDbRemediationContextReader(_metadata_table())
+    dispatcher = SqsRemediationWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url)
     return RemediationApiService(
         contexts=context_reader,
         targets=context_reader,
