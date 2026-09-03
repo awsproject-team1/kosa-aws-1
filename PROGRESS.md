@@ -2,6 +2,20 @@
 
 ## Current
 
+- M4 A 관측·비용 기록 조립 경계를 구현했다(ADR-0021 §3, `feature/m4-a-observability`, base=dev).
+  데모 폐루프 1회 실행의 일곱 항목(Assessment 성공률, Bedrock 호출, Queue 건전성, Job 재개,
+  plan/apply, 감사 이력, 비용)을 immutable하게 묶는 `DemoRunObservability` 계약을 두고, 각 항목은
+  "값이 비어 있으면 미충족"을 `meets_gate`로 판정하며 `unmet_items()`가 미충족 항목을 열거한다.
+  민감 원문 부재 확인 플래그가 없으면 전체 게이트는 통과가 아니다. 조립은 A의 Admin 전용 경계
+  (`DemoRunObservabilityService`, `READ_OBSERVABILITY`)가 주입된 read-only source가 돌려준 사실만
+  묶고, source가 사실을 돌려주지 못하면 fail-closed한다(값을 지어내지 않는다). `AuditEventType`을
+  게이트의 네 범주(Remediation/Approval/Apply/Verification)로 결정적 매핑하는
+  `assemble_audit_trail_metric`을 함께 두었다. D가 live 어댑터를 주입할 진입점을 열도록
+  `DemoRunMetricsSource`의 결정적 Mock(`MockDemoRunMetricsSource`, 다른 실행 port Mock과 같은
+  scope 강제·register seed 관례)도 함께 제공한다. live CloudWatch/CloudTrail/Cost Explorer adapter
+  실제 구현과 HTTP 라우트 배선은 D 배포 통합·M3 A audit-events의 dev 병합 뒤 이어지며, 실제 데모
+  실행값 기록은 Shared/D/C 공동에 sandbox 실행(Blocked)에 의존한다. 문서(CONTRACTS/DESIGN) 동기화.
+  후속 리뷰 대기
 - M4 B/C release-readiness 구현: Demo Policy Coverage manifest/validator가 승인 Profile의 6 Rule,
   5 Control, 12 version-pinned policy locator와 Initial/Post-Deploy 36 Golden 좌표를 교차 검증한다.
   M4 C live gate는 customer-sandbox Post-Deploy 18 Case를 5회 반복한 60 Bedrock IAC/Actual 결과와
@@ -10,7 +24,6 @@
   private observation/sanitized report 경계는 ADR-0022(`Accepted`) 및 두 M4 runbook에 기록했다.
   실제 protected sandbox observation·관측/비용·demo run은 외부 승인 대기이며 fixture/dry-run을
   release evidence로 표시하지 않는다.
-
 - M4 D 데모 문서 몫(데모 IaC 참조·폐루프 runbook)을 최신 `dev`에 정합화했다. `docs/M4-DEMO-IAC-REFERENCE.md`·
   `docs/M4-DEMO-RUNBOOK.md`가 병합된 dev의 실제 경계(`ci/terraform/` template, `agent/runtime/live_deployment_ports.py`,
   `apps/backend/deployment/worker.py`, `packages/contracts/terraform_plan.py`)와 정합함을 재확인했다 — 6개 S3 Rule

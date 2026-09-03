@@ -49,6 +49,11 @@ from agent.runtime.mock_deployment_ports import (
 )
 from agent.runtime.mock_github_tool import MockGitHubTool
 from agent.runtime.mock_github_write_tool import MockGitHubWriteTool
+from agent.runtime.mock_observability_source import (
+    MockDemoRunMetricsSource,
+    ObservabilitySourceError,
+    ObservabilitySourceScopeError,
+)
 from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
@@ -86,10 +91,13 @@ __all__ = [
     "MockActualRereadPort",
     "MockApplyDispatchPort",
     "MockAwsResourceTool",
+    "MockDemoRunMetricsSource",
     "MockGitHubTool",
     "MockGitHubWriteTool",
     "MockPlanRequestPort",
     "MockWorkflowRunReader",
+    "ObservabilitySourceError",
+    "ObservabilitySourceScopeError",
     "PlanRequestPort",
     "ProposedPullRequest",
     "WorkflowRunReader",
