@@ -811,6 +811,16 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Natural-language entry to the Parent Orchestrator (ADR-0012). The Parent only
+  # classifies and proposes; it starts no workflow, so this route returns a decision.
+  PostOrchestrateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /orchestrate"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   GetJobsRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
