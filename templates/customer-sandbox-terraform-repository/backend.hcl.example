@@ -1,0 +1,6 @@
+# Customer-controlled values. Do not commit the completed file to a public repo.
+bucket         = "<CUSTOMER_TERRAFORM_STATE_BUCKET>"
+key            = "state/<CUSTOMER_ID>/<REPOSITORY_ID>/sandbox.tfstate"
+region         = "us-east-1"
+dynamodb_table = "<CUSTOMER_TERRAFORM_LOCK_TABLE>"
+encrypt        = true

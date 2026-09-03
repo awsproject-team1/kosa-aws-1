@@ -60,6 +60,8 @@ jobs:
       lambda_code_s3_key: ${{ steps.bind-artifact.outputs.lambda_code_s3_key }}
       lambda_code_s3_object_version: ${{ steps.bind-artifact.outputs.lambda_code_s3_object_version }}
       lambda_zip_sha256: ${{ steps.bind-artifact.outputs.lambda_zip_sha256 }}
+      langgraph_layer_s3_key: ${{ steps.bind-layer.outputs.langgraph_layer_s3_key }}
+      langgraph_layer_s3_object_version: ${{ steps.bind-layer.outputs.langgraph_layer_s3_object_version }}
     env:
       AWS_REGION: ${{ inputs.aws_region }}
       DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
@@ -78,6 +80,9 @@ jobs:
 
       - name: Build and verify the Lambda ZIP
         run: bash scripts/package-m0-lambda.sh "${RUNNER_TEMP}/m0-lambda.zip"
+
+      - name: Build and verify the LangGraph Layer ZIP
+        run: bash scripts/build-langgraph-layer.sh "${RUNNER_TEMP}/langgraph-layer.zip"
 
       - name: Validate protected artifact inputs
         run: |
@@ -181,6 +186,65 @@ jobs:
             echo "- Next gate: approve the separate artifact deployment Environment only after reviewing these values"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Create or verify immutable LangGraph Layer artifact
+        id: bind-layer
+        run: |
+          set -euo pipefail
+
+          layer_sha256_hex=$(sha256sum "${RUNNER_TEMP}/langgraph-layer.zip" | cut -d ' ' -f1)
+          layer_sha256_base64=$(openssl dgst -sha256 -binary "${RUNNER_TEMP}/langgraph-layer.zip" | base64)
+          # Content-addressed key: identical dependency sets reuse the same object.
+          layer_key="lambda/m0/langgraph-layer-${layer_sha256_hex}.zip"
+          put_error="${RUNNER_TEMP}/put-layer.error"
+
+          set +e
+          upload_response=$(
+            aws s3api put-object \
+              --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+              --key "${layer_key}" \
+              --body "${RUNNER_TEMP}/langgraph-layer.zip" \
+              --if-none-match "*" \
+              --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+              --checksum-algorithm SHA256 \
+              --checksum-sha256 "${layer_sha256_base64}" \
+              --metadata "layer-sha256=${layer_sha256_hex}" \
+              --output json \
+              2> "${put_error}"
+          )
+          upload_status=$?
+          set -e
+
+          if (( upload_status == 0 )); then
+            layer_response="${upload_response}"
+            layer_disposition="created"
+          else
+            if ! layer_response=$(
+              aws s3api head-object \
+                --bucket "${LAMBDA_CODE_S3_BUCKET}" \
+                --key "${layer_key}" \
+                --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+                --checksum-mode ENABLED \
+                --output json
+            ); then
+              cat "${put_error}" >&2
+              exit "${upload_status}"
+            fi
+            layer_disposition="verified existing"
+          fi
+
+          layer_version=$(jq -r '.VersionId // empty' <<< "${layer_response}")
+          test -n "${layer_version}"
+
+          echo "langgraph_layer_s3_key=${layer_key}" >> "${GITHUB_OUTPUT}"
+          echo "langgraph_layer_s3_object_version=${layer_version}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### LangGraph Layer artifact awaiting deployment approval"
+            echo "- Disposition: ${layer_disposition}"
+            echo "- Object key: \`${layer_key}\`"
+            echo "- S3 Version ID: \`${layer_version}\`"
+            echo "- Layer SHA-256: \`${layer_sha256_hex}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   deploy:
     needs: prepare-artifact
     runs-on: ubuntu-latest
@@ -197,6 +261,8 @@ jobs:
       LAMBDA_CODE_S3_KEY: ${{ needs.prepare-artifact.outputs.lambda_code_s3_key }}
       LAMBDA_CODE_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.lambda_code_s3_object_version }}
       LAMBDA_ZIP_SHA256: ${{ needs.prepare-artifact.outputs.lambda_zip_sha256 }}
+      LANGGRAPH_LAYER_S3_KEY: ${{ needs.prepare-artifact.outputs.langgraph_layer_s3_key }}
+      LANGGRAPH_LAYER_S3_OBJECT_VERSION: ${{ needs.prepare-artifact.outputs.langgraph_layer_s3_object_version }}
       ASSESSMENT_SCOPE_JSON: ${{ inputs.assessment_scope_json }}
       M1_ASSESSMENT_MODE: ${{ vars.M1_ASSESSMENT_MODE }}
       M1_ASSESSMENT_RUNTIME_JSON: ${{ secrets.M1_ASSESSMENT_RUNTIME_JSON }}
@@ -216,6 +282,8 @@ jobs:
           test -n "${LAMBDA_CODE_S3_KEY}"
           test -n "${LAMBDA_CODE_S3_OBJECT_VERSION}"
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test -n "${LANGGRAPH_LAYER_S3_KEY}"
+          test -n "${LANGGRAPH_LAYER_S3_OBJECT_VERSION}"
 
       - name: Validate assessment deployment configuration
         run: python3 -m scripts.validate_m1_deployment_config
@@ -264,6 +332,8 @@ jobs:
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaCodeS3ObjectVersion=${LAMBDA_CODE_S3_OBJECT_VERSION}" \
+              "LangGraphLayerS3Key=${LANGGRAPH_LAYER_S3_KEY}" \
+              "LangGraphLayerS3ObjectVersion=${LANGGRAPH_LAYER_S3_OBJECT_VERSION}" \
               "AssessmentScopeJson=${ASSESSMENT_SCOPE_JSON}" \
               "M1AssessmentRuntimeJson=${M1_ASSESSMENT_RUNTIME_JSON}" \
               "M1AssessmentSecretArns=${M1_ASSESSMENT_SECRET_ARNS}" \

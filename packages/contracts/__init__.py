@@ -71,6 +71,12 @@ from packages.contracts.observability import (
     PlanApplyMetric,
     QueueHealthMetric,
 )
+from packages.contracts.orchestration import (
+    OrchestrationDecision,
+    OrchestrationIntent,
+    OrchestrationRequest,
+    WorkflowSelectorCandidate,
+)
 from packages.contracts.policy import (
     GoldenDatasetCase,
     PolicyControl,
@@ -182,6 +188,10 @@ __all__ = [
     "NormalizedDocumentUnit",
     "NormalizedPolicyDocument",
     "ObservabilityGateItem",
+    "OrchestrationDecision",
+    "OrchestrationIntent",
+    "OrchestrationRequest",
+    "WorkflowSelectorCandidate",
     "PlanApplyMetric",
     "PolicyControl",
     "PolicyCandidateExtraction",

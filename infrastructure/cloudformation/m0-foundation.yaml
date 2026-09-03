@@ -26,6 +26,14 @@ Parameters:
     Type: String
     MinLength: 1
     ConstraintDescription: Immutable S3 Version ID returned by the approved Lambda ZIP upload.
+  LangGraphLayerS3Key:
+    Type: String
+    MinLength: 1
+    ConstraintDescription: Object key for the LangGraph dependency Layer ZIP.
+  LangGraphLayerS3ObjectVersion:
+    Type: String
+    MinLength: 1
+    ConstraintDescription: Immutable S3 Version ID returned by the approved LangGraph Layer upload.
   AssessmentScopeJson:
     Type: String
     Default: "{}"
@@ -378,10 +386,18 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                # DynamoDB transactions authorize each underlying item action; there is no
-                # separate dynamodb:TransactWriteItems IAM action.
+                # `TransactWriteItems`(POST /assessments·remediation 등 원자적 다중 write)는
+                # 하위 item action과 별개로 `dynamodb:TransactWriteItems` action을 요구한다.
+                # 이 action이 없으면 트랜잭션이 AccessDenied로 거부되어 POST /assessments가
+                # 503을 낸다(라이브에서 확인).
                 Action:
-                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
+                  [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:Query",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:TransactWriteItems",
+                  ]
                 Resource:
                   - !GetAtt MetadataTable.Arn
                   - !Sub "${MetadataTable.Arn}/index/*"
@@ -476,6 +492,23 @@ Resources:
       UserPoolName: !Sub "${ProjectName}-${Environment}-users"
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      # Backend identity 경계(apps.backend.auth.principal)는 access token에 non-empty
+      # custom:customer_id claim을 요구한다. 이 커스텀 속성은 관리자만 설정하며 caller가
+      # 조작할 수 없는 tenant 식별자다. Cognito는 커스텀 속성을 access token에 기본으로
+      # 넣지 않으므로 아래 PreTokenGeneration 트리거가 발급 시점에 이 값을 복사한다.
+      Schema:
+        - Name: customer_id
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "1"
+            MaxLength: "128"
+      # V2 트리거만 access token claim 주입을 지원한다(V1은 ID token만).
+      LambdaConfig:
+        PreTokenGenerationConfig:
+          LambdaVersion: V2_0
+          LambdaArn: !GetAtt PreTokenGenerationFunction.Arn
   AdminUserGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -497,7 +530,9 @@ Resources:
       UserPoolId: !Ref UserPool
       ClientName: !Sub "${ProjectName}-${Environment}-api"
       GenerateSecret: false
-      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      # ALLOW_USER_PASSWORD_AUTH는 E2E/CLI에서 initiate-auth로 토큰을 직접 발급받기 위한
+      # 것이다. 브라우저 OAuth PKCE 흐름에는 필요 없으므로 운영 배포에서는 제거를 고려한다.
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_PASSWORD_AUTH]
       PreventUserExistenceErrors: ENABLED
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
@@ -505,6 +540,63 @@ Resources:
       CallbackURLs: [!Ref FrontendCallbackUrl]
       LogoutURLs: [!Ref FrontendLogoutUrl]
       SupportedIdentityProviders: [COGNITO]
+
+  # Cognito Pre-Token-Generation V2 트리거: 저장된 custom:customer_id를 access token에
+  # 복사한다. 속성이 없거나 비면 fail-closed로 token을 수정하지 않고, Backend가 그 token을
+  # 거부한다. tenant claim은 관리자 설정 속성에서만 나오며 caller가 조작할 수 없다.
+  PreTokenGenerationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-pretoken"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: "*"
+
+  PreTokenGenerationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-pretoken"
+      Runtime: python3.12
+      Handler: apps.backend.auth.pre_token_generation.lambda_handler
+      Role: !GetAtt PreTokenGenerationRole.Arn
+      Timeout: 5
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+
+  AllowCognitoInvokePreTokenGeneration:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PreTokenGenerationFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # LangGraph and its runtime dependencies for the Parent Orchestrator and workflow
+  # subgraphs (ADR-0012). Kept in a Layer so the function ZIP stays first-party and
+  # deterministic; the plan_hash boundary (Terraform show-json only) is unaffected.
+  LangGraphLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub "${ProjectName}-${Environment}-langgraph"
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [x86_64]
+      Content:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LangGraphLayerS3Key
+        S3ObjectVersion: !Ref LangGraphLayerS3ObjectVersion
 
   ApiRuntimeFunction:
     Type: AWS::Lambda::Function
@@ -514,6 +606,7 @@ Resources:
       Handler: apps.backend.api.runtime.lambda_handler
       Role: !GetAtt ApiRuntimeRole.Arn
       Timeout: 30
+      Layers: [!Ref LangGraphLayer]
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -522,6 +615,7 @@ Resources:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          REMEDIATION_QUEUE_URL: !Ref RemediationQueue
           DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
@@ -545,7 +639,11 @@ Resources:
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
+          # Sweeper drains every workflow command from the shared Outbox, so it needs
+          # each queue to route Assessment/Remediation/Deployment tasks correctly.
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+          REMEDIATION_QUEUE_URL: !Ref RemediationQueue
+          DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
 
   ApplyCompletionFunction:
     Type: AWS::Lambda::Function
@@ -573,6 +671,7 @@ Resources:
       Handler: apps.backend.assessment.runtime.lambda_handler
       Role: !GetAtt WorkflowRuntimeRole.Arn
       Timeout: 900
+      Layers: [!Ref LangGraphLayer]
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -600,6 +699,7 @@ Resources:
       Handler: apps.backend.remediation.runtime.lambda_handler
       Role: !GetAtt WorkflowRuntimeRole.Arn
       Timeout: 900
+      Layers: [!Ref LangGraphLayer]
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -623,6 +723,7 @@ Resources:
       Handler: apps.backend.deployment.runtime.lambda_handler
       Role: !GetAtt WorkflowRuntimeRole.Arn
       Timeout: 900
+      Layers: [!Ref LangGraphLayer]
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -707,6 +808,16 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /assessments"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Natural-language entry to the Parent Orchestrator (ADR-0012). The Parent only
+  # classifies and proposes; it starts no workflow, so this route returns a decision.
+  PostOrchestrateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /orchestrate"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
@@ -810,6 +921,25 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /deployments/{deploymentId}/reject"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Remediation decision for one Finding. The handler reads the Finding, calls the
+  # policy gate, and persists the decision/context/Job/Outbox atomically.
+  PostFindingRemediationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /findings/{findingId}/remediations"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Human approval gate for an approved-plan deployment (ADR-0019 §4).
+  PostDeploymentApproveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /deployments/{deploymentId}/approve"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]

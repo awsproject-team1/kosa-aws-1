@@ -118,11 +118,46 @@ def _live_worker() -> RemediationWorker:
         work_repository=DynamoDbRemediationWorkRepository(
             boto3.resource("dynamodb").Table(table_name)
         ),
-        patch_action=UnavailablePatchAction(),
+        patch_action=_patch_action(boto3),
         sync_action=SnapshotSyncAction(),
         result_store=DynamoDbRemediationResultStore(
             table_name=table_name, transaction_client=boto3.client("dynamodb")
         ),
+    )
+
+
+def _patch_action(boto3: object) -> object:
+    """Build the C Remediation Agent that generates the Terraform patch (ADR-0018).
+
+    Replaces the fail-closed `UnavailablePatchAction`: TERRAFORM_PATCH now produces a
+    real, snapshot-bound patch from the approved remediation Model Profile via Bedrock.
+    """
+    from apps.backend.remediation.bedrock import BedrockPatchGenerator
+
+    profile = _remediation_model_profile()
+    return BedrockPatchGenerator(
+        client=boto3.client("bedrock-runtime", region_name=profile.region),
+        model_profile=profile,
+    )
+
+
+def _remediation_model_profile() -> object:
+    from pathlib import Path
+
+    from packages.contracts import ModelProfile, ModelProfileRole
+
+    raw = (
+        Path(__file__).parents[3] / "fixtures" / "m1" / "remediation_model_profile.json"
+    ).read_text()
+    data = json.loads(raw)
+    return ModelProfile(
+        model_profile_id=data["model_profile_id"],
+        role=ModelProfileRole(data["role"]),
+        region=data["region"],
+        model_id=data["model_id"],
+        prompt_version=data["prompt_version"],
+        rubric_version=data["rubric_version"],
+        golden_dataset_version=data["golden_dataset_version"],
     )
 
 

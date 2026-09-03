@@ -2,6 +2,13 @@
 
 ## Current
 
+- 고객 sandbox의 Terraform 구성요소 검증을 완료했다. 고객 관리자 경계에서 state/lock backend, GitHub
+  OIDC Plan/Apply Role 분리, Environment 변수·reviewer 승인, refreshed saved plan과 state
+  lineage/serial 재검증 뒤 Apply까지 성공했다. 초기 부분 state/누락 S3 read 권한은 stale plan 재사용이
+  아니라 새 plan으로 회복했으며, Organization custom OIDC subject는 repository 이름이 아닌 immutable
+  ID를 포함할 수 있어 실제 claim과 같은 trust를 사용했다. 이 결과는 Foundation bootstrap, 플랫폼 API
+  승인, Post-Deploy Verification 또는 release evidence가 아니다.
+
 - PR #58–#62를 최신 `dev`에서 하나의 M4 통합 브랜치로 합쳤다. runtime/IaC API Gateway·SQS Worker
   배선, Admin audit read, Deployment plan/approval/read/completion 경계가 함께 존재한다. Deployment
   live plan runner는 승인 target의 `terraform-plan.yml` dispatch → exact GitHub run 재조회/폴링 →
@@ -292,6 +299,25 @@
   M4 구현 PR 뒤의 최종 `dev → main` Release PR은 별도로 유지한다.
 
 ## Completed
+
+- Finding→Remediation 폐루프를 실제 sandbox에서 완주하고 원래 AI-주도 설계를 복원했다. AI가 rule
+  적용성을 `OUT_OF_SCOPE`로 판정(plan 분모는 코드가 고정, ADR-0002 §Rule applicability mechanism),
+  Bedrock Remediation Agent가 finding+snapshot에서 최소 Terraform patch를 생성(`UnavailablePatchAction`
+  차단 대체), LangGraph를 Lambda Layer로 도입하고 Parent Orchestrator(`POST /orchestrate`)가 자연어를
+  PolicyQA/ASSESSMENT/REMEDIATION/DEPLOYMENT로 라우팅(판단·제안만, 실행 권한 없음, ADR-0012). remediation
+  outbox를 remediation 큐로 라우팅하는 dispatch 버그도 수정. 라이브 검증: assessment 18/18·findings 12,
+  S3-PUBLIC IAC finding → decision TERRAFORM_PATCH → worker가 실제 patch(changed_paths=[main.tf],
+  base_commit 바인딩) 생성. 상세 인수인계와 계정·토큰·선행조건은 `docs/SESSION-HANDOFF-2026-09-03.md`.
+  Secret 값은 저장소에 두지 않으며, 실제 sandbox 버킷은 E2E용 insecure 상태라 복원이 필요하다.
+
+- 고객 sandbox Terraform component test: 별도 고객-owned 테스트 repository에 최소 secure S3
+  baseline, Plan/Apply workflow, canonical plan hash helper와 provider lock을 설치하고, 고객 관리자
+  승인 아래 OIDC plan → protected Environment 승인 → saved-plan apply를 성공시켰다. state artifact나
+  자격 증명·고객 식별자는 이 저장소에 기록하지 않는다. 부분 생성/state write 실패는 IAM 최소권한의
+  state object path와 provider read 범위를 보완한 뒤 새 plan으로 회복했다. 이 성공을 M1/M4 release
+  증적으로 사용하지 않는다.
+
+- 고객 Terraform/AWS 리소스가 아직 없는 sandbox 시작 단계를 위해 고객 관리자용 사전 준비 요청서와, 별도 customer-owned repository에만 복사하는 secure S3 baseline Terraform starter를 추가했다. 템플릿은 state backend·Plan/Apply OIDC Role·protected Apply Environment·workflow 수동 설치·`.terraform.lock.hcl` 생성/commit을 요구하며, 이 저장소에는 고객 account ID·role ARN·state backend·credential·Terraform state를 저장하지 않는다. 실제 customer resource 생성·workflow 실행은 승인된 고객 관리자만 수행한다.
 
 - M4 B/C repository release gate 준비 완료: `fixtures/m4/demo_policy_coverage.json`과 strict validator/
   CLI로 Demo의 version-pinned Rule·Control·근거·36 Coverage 좌표를 고정하고, Post-Deploy 18 Case ×
@@ -647,6 +673,13 @@
   report에 명시했으며 모델 ID와 runtime Model Profile 배정은 변경하지 않음
 
 ## Next
+
+- **고객 sandbox의 다음 단계:** Terraform component test는 Foundation과 분리된 사전 검증으로
+  성공했으므로, 고객 관리자가 `m1-customer-bootstrap.yaml`을 실행하고 Foundation 배포용 두
+  protected GitHub Environment·OIDC Role·artifact binding을 준비한다. 그 뒤 Foundation을 배포하고
+  platform runtime에 승인된 customer repository/read role을 연결해, 플랫폼 Deployment 생성 → plan →
+  플랫폼 Human Approval → apply → Post-Deploy Verification E2E를 실행한다. 이전 Terraform test의
+  public repository·식별자·state를 Foundation/release evidence에 재사용하지 않는다.
 
 - **M2 → M3 → M4 순차 통합 PR (M4의 `dev` 병합까지 한시 적용):**
   1. M2 PR은 D의 live GitHub branch/commit/PR·refreshed plan/runtime 배선과

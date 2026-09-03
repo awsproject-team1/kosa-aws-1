@@ -1,0 +1,9 @@
+{
+  "model_profile_id": "parent-nova-lite-m1-v1",
+  "role": "PARENT",
+  "region": "us-east-1",
+  "model_id": "amazon.nova-lite-v1:0",
+  "prompt_version": "parent-routing-v1",
+  "rubric_version": "parent-routing-v1",
+  "golden_dataset_version": "parent-routing-v1"
+}
