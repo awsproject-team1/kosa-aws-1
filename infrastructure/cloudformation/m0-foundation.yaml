@@ -947,7 +947,7 @@ Resources:
         AllowOrigins:
           - !Ref FrontendCallbackUrl
           - http://localhost:5173
-        AllowMethods: [GET, POST, PUT, OPTIONS]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
         AllowHeaders: [authorization, content-type]
         AllowCredentials: false
         MaxAge: 300

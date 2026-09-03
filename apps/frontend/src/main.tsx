@@ -29,8 +29,8 @@ type LightState = "pending" | "active" | "done" | "failed";
 type GraphNodeId = "parent" | "policy_qa" | "assessment" | "remediation" | "deployment" | "authoring";
 type QueueJob = { id: string; label: string; queue: string; state: LightState; meta?: string };
 type PipelineStep = { key: string; label: string; state: LightState };
-type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null };
-const OBS_DEFAULT: Observer = { nodeStates: {}, jobs: [], pipeline: null };
+type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null; repos: string[]; userProfiles: { email: string; profile: string | null }[] };
+const OBS_DEFAULT: Observer = { nodeStates: {}, jobs: [], pipeline: null, repos: [], userProfiles: [] };
 
 function useObserver() {
   const [obs, setObs] = useState<Observer>(OBS_DEFAULT);
@@ -39,6 +39,8 @@ function useObserver() {
     upsertJob(job: QueueJob) { setObs(o => ({ ...o, jobs: [job, ...o.jobs.filter(j => j.id !== job.id)].slice(0, 8) })); },
     setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
     patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
+    setRepos(repos: string[]) { setObs(o => ({ ...o, repos })); },
+    setUserProfiles(userProfiles: { email: string; profile: string | null }[]) { setObs(o => ({ ...o, userProfiles })); },
   }), []);
   return { obs, ...api };
 }
@@ -132,6 +134,16 @@ function ObserverPanel({ obs }: { obs: Observer }) {
     <div className="obs-title">Queue / Jobs</div>
     {obs.jobs.length === 0 && <div className="obs-empty">진행 중인 작업이 없습니다.</div>}
     {obs.jobs.map(j => <div key={j.id} className="queue-item"><span className={`light ${j.state}`} /><span className="q-label">{j.label}</span><span className="q-meta">{j.meta ?? j.queue}</span></div>)}
+
+    <div className="obs-title">연결된 리포지토리</div>
+    {obs.repos.length === 0
+      ? <div className="obs-empty">연결된 리포지토리가 없습니다.</div>
+      : <div className="repo-list">{obs.repos.map(r => <div key={r} className="repo-chip"><span className="light done" /><span className="q-label">{r}</span></div>)}</div>}
+
+    <div className="obs-title">사용자 · 지정 Profile</div>
+    {obs.userProfiles.length === 0
+      ? <div className="obs-empty">등록된 사용자가 없습니다.</div>
+      : obs.userProfiles.map(u => <div key={u.email} className="queue-item"><span className={`light ${u.profile ? "done" : "pending"}`} /><span className="q-label">{u.email}</span><span className="q-meta">{u.profile ?? "미지정"}</span></div>)}
   </aside>;
 }
 
@@ -239,7 +251,7 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     catch (e) { setError((e as Error).message); }
   };
   const refreshScope = async () => {
-    try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); setRepos(r.repositories.map(x => x.repository_id)); }
+    try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); const ids = r.repositories.map(x => x.repository_id); setRepos(ids); obs.setRepos(ids); }
     catch { /* scope는 부가정보이므로 실패해도 문서 화면은 유지 */ }
   };
   useEffect(() => { void refresh(); void refreshScope(); /* eslint-disable-next-line */ }, []);
@@ -247,13 +259,18 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   async function deleteDoc(d: Doc) {
     setError(null); setNotice(null);
     if (!confirm(`문서 '${d.filename}' (${d.status})를 삭제할까요? S3 원본·정규화 아티팩트와 DynamoDB 기록이 영구 삭제됩니다.`)) return;
+    const jobId = "del-" + d.source_id;
+    obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "active" });
     try {
       await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}`, session.accessToken, { method: "DELETE" });
+      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "done", meta: "완료" });
       setNotice(`삭제됨: ${d.filename}`);
       await refresh();
     } catch (e) {
       const msg = (e as Error).message;
-      setError(msg.includes("CONFLICT") ? "승인된 문서는 삭제할 수 없습니다(Profile이 참조 중)." : `삭제 실패: ${msg}`);
+      const friendly = msg.includes("CONFLICT") ? "승인된 문서는 삭제할 수 없습니다(Profile이 참조 중)." : `삭제 실패: ${msg}`;
+      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "failed", meta: msg.includes("CONFLICT") ? "승인됨" : "실패" });
+      setError(friendly);
     }
   }
 
@@ -391,7 +408,7 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
 /* =========================================================================
  * Admin: user registration, list, and per-user profile assignment (backend)
  * =======================================================================*/
-function UsersPanel({ session }: { session: Session }) {
+function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
   type User = { username: string; email: string; customer_id: string; profile: string | null; status: string; enabled: boolean };
   const [users, setUsers] = useState<User[]>([]);
   const [profiles] = useState<string[]>(loadProfiles());
@@ -404,7 +421,7 @@ function UsersPanel({ session }: { session: Session }) {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
-    try { const r = await api<{ users: User[] }>("/admin/users", session.accessToken); setUsers(r.users); }
+    try { const r = await api<{ users: User[] }>("/admin/users", session.accessToken); setUsers(r.users); obs.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); }
     catch (e) { setError((e as Error).message); }
   };
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
@@ -487,8 +504,16 @@ function App() {
   const [assessmentId, setAssessmentId] = useState<string | null>(null);
   const observer = useObserver();
   useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
+  const isAdmin = !!session?.groups.includes("Admin");
+  useEffect(() => {
+    if (!session || !isAdmin) return;
+    void (async () => {
+      try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); observer.setRepos(r.repositories.map(x => x.repository_id)); } catch { /* keep panel */ }
+      try { const r = await api<{ users: { email: string; profile: string | null }[] }>("/admin/users", session.accessToken); observer.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); } catch { /* keep panel */ }
+    })();
+    /* eslint-disable-next-line */
+  }, [session, isAdmin]);
   if (!session) return <Login error={error} />;
-  const isAdmin = session.groups.includes("Admin");
   const myProfile = session.profile;
   const nav: { id: View; label: string; admin?: boolean }[] = [
     { id: "chat", label: "챗봇" },
@@ -510,7 +535,7 @@ function App() {
       </div>
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
-      {view === "users" && isAdmin && <UsersPanel session={session} />}
+      {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
       {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} />}
     </div>
   </div>;
