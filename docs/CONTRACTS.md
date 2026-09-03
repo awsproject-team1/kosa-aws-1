@@ -689,6 +689,12 @@ ADR-0022의 M4 live gate는 Post-Deploy 18 Case를 각 5회 실행한 identifier
 Bedrock 결과(60 calls)이고, DRIFT 6 Case는 같은 `(rule_id, run_number)`의 두 결과에서 Code로
 파생한 30개 결과다. DRIFT가 Bedrock 사용량을 갖거나 `derive_drift_results()`와 다르면 거부한다.
 
+이 bundle의 producer(ADR-0022 §4 "A producer")는 `apps/backend/assessment/golden_observations.py`와
+`scripts/export_golden_observations.py`다. 같은 `BedrockStructuredEvaluator`로 평가하고 같은
+`derive_drift_results()`로 DRIFT를 파생하므로 producer와 consumer가 한 코드에서 정합한다. producer는
+`runtime_mode`를 호출자 선언으로만 채우며, `--customer-sandbox` 밖의 실행은 `DRY_RUN`으로 표시해 consumer가
+거부하게 한다. 실행 절차는 `docs/M4-GOLDEN-RELEASE-GATE.md`에 있다.
+
 `apps/backend/assessment/release_quality.py`의 exact-key parser가 observation bundle의 실행 ID,
 platform commit, repository/deployment/artifact digest, exact Model Profile, case/run/rule version,
 평가 결과와 usage를 검증한다. 누락·추가·중복 run, fixture mode, Profile/rubric/Golden version 불일치는

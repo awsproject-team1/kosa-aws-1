@@ -2,6 +2,25 @@
 
 ## Current
 
+- **Golden 릴리스 게이트의 입력을 만드는 producer가 없었다.** ADR-0022는 C consumer(`release_quality.py`,
+  `evaluate_m4_golden_release_gate.py`)와 D 결합(`release_binding.py`)을 구현했지만, §4의 "A producer" —
+  customer runtime에서 Post-Deploy 18 Case를 5회 돌려 `m4-golden-observations-v1` bundle을 내보내는 쪽 —
+  는 코드에 없었다. 게이트는 완성돼 있으나 먹일 것이 없는 상태였다.
+  - `apps/backend/assessment/golden_observations.py`: `GoldenObservationExporter`가 운영
+    `BedrockStructuredEvaluator`로 IAC/Actual을 평가하고 DRIFT는 `derive_drift_results()`로 파생한다.
+    `UsageRecordingConverseClient`가 호출마다 latency/token을 기록하고, usage 없는 응답은 fail-closed.
+    provider 실패는 `stable_error_code()`(예: `PROVIDER_THROTTLED`)로만 남기고 message는 버린다.
+    bundle에는 resource ID·snapshot 본문·rationale이 들어가지 않는다(회귀 테스트로 고정).
+  - snapshot reader 두 종: `DirectoryGoldenSnapshotReader`(dry run)와 `ArtifactStoreGoldenSnapshotReader`
+    (S3 content-addressed store + private `artifact_id → sha256:` index). 첫 Bedrock 호출 전에 12개를 모두
+    읽어 형식·IAC/Actual resource 일치를 검증한다.
+  - `scripts/export_golden_observations.py`: `--customer-sandbox`(실제 Bedrock/S3, D 결합 digest 계산, 쓴
+    파일을 C parser로 자체 검증) / 기본 dry run(`runtime_mode=DRY_RUN`, gate가 거부). 로컬에서
+    export → gate 연결을 실제로 돌려 확인했다: dry-run bundle 90 observation / 60 call, gate exit 2
+    "release evidence must come from CUSTOMER_SANDBOX".
+  - 남은 것은 코드가 아니라 실행이다: sandbox에서 12개 Golden snapshot artifact를 만들어 index로 넘기고,
+    `--customer-sandbox`로 한 번 돌린 뒤 gate report를 release packet에 첨부한다.
+
 - **배포 workflow가 CloudFormation 파라미터 다섯 개를 넘기지 않고 있었다.** 템플릿에는 선언돼 있지만
   `--parameter-overrides`에 없어 **값을 설정할 통로 자체가 없었고**, 그래서 세 기능이 "배선됨"으로
   적혀 있으면서 프로덕션에서는 영구히 fail-closed였다.

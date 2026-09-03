@@ -5,6 +5,11 @@
 > **Owner:** C(quality gate consumer/report) + A(customer runtime observation producer/관측 결합) + D(demo repository/deployment binding)
 >
 > **관련:** ADR-0002, ADR-0003, ADR-0011, ADR-0014, ADR-0019, ADR-0020, ADR-0021
+>
+> **구현 메모 (2026-09-03):** §4의 A producer는 `apps/backend/assessment/golden_observations.py`
+> (`GoldenObservationExporter`)와 `scripts/export_golden_observations.py`로 구현했다. C consumer와 같은
+> 평가기·DRIFT 파생 함수를 쓰고, `runtime_mode`는 `--customer-sandbox`를 명시한 실행에서만
+> `CUSTOMER_SANDBOX`가 된다(그 외 `DRY_RUN`, gate 거부). D producer는 `release_binding.py`로 결합한다.
 
 ## Context
 
