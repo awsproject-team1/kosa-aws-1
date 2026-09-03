@@ -148,7 +148,6 @@ class JobHttpHandlerTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 401)
 
-
     def test_client_cannot_supply_tenant_or_lifecycle_fields(self) -> None:
         response = self.handler.handle(
             event(
