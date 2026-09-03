@@ -2,6 +2,11 @@
 
 ## Current
 
+- M4 A 관측·비용 조회를 HTTP 경계에 붙였다(`GET /deployments/{id}/observability`, Admin 전용).
+  `DemoRunObservabilityService`는 정의만 있고 route가 없었다. live CloudWatch/CloudTrail/Cost
+  Explorer adapter는 아직 없으므로 composition root는 source를 `None`으로 두고 route는 404로
+  남는다 — 주입할 source가 없는 것을 항상 실패하는 endpoint(500)로 보여주지 않는다. 남은 조각은
+  live metric source 하나이고, 그건 실제 AWS 자격 증명이 있어야 동작·검증된다.
 - **A/D 공유 계약의 A 몫(apply 완료 Event 예약 write)을 구현했다**(ADR-0019 §7, DATABASE.md
   "완료 Event 경계"). D는 예약 item에서 `run_reference`를 읽어 검증·확정하는 경로를 이미 갖고
   있었지만 예약을 쓰는 쪽이 없어 live `APPLY_COMPLETED`가 영원히 fail-closed였다.

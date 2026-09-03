@@ -13,6 +13,7 @@ from apps.backend.api.audit_events import AuditEventApiService
 from apps.backend.api.deployments import DeploymentApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
+from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
@@ -158,6 +159,10 @@ def _http_handler() -> JobHttpHandler:
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
+        # 관측·비용 조회는 live metric source가 주입된 배포에서만 존재한다. source 없이
+        # route만 노출하면 항상 실패하는 endpoint가 생기고, 그 실패가 "값이 없다"인지
+        # "배선이 없다"인지 호출자가 구분할 수 없다.
+        observability=_observability_components(),
         audit_events=AuditEventApiService(events=DynamoDbAuditEventRepository(_metadata_table())),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
@@ -376,6 +381,16 @@ class UnconfiguredDeploymentCommitResolver:
         raise DeploymentRuntimeConfigurationError(
             "deployment commit resolution is not configured for this deployment"
         )
+
+
+def _observability_components() -> DemoRunObservabilityService | None:
+    """Return the Admin observability service, or `None` when no live source is wired.
+
+    `DemoRunObservabilityService`는 주입된 read-only source가 돌려준 사실만 묶는다. live
+    CloudWatch/CloudTrail/Cost Explorer adapter는 아직 없으므로 이 배포에서는 `None`이고,
+    route는 404로 남는다 — 조회할 source가 없는 것을 500으로 보여주지 않는다.
+    """
+    return None
 
 
 def _deployment_commit_resolver() -> object:

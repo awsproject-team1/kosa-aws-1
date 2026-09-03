@@ -179,6 +179,7 @@ readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan �
 | `GET` | `/deployments/{deploymentId}/verification` | 배선됨 | Post-Deploy Verification의 before/after 비교 projection 조회 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
 | `POST` | `/deployments/{deploymentId}/approve` | fail-closed | 승인 plan reader가 D의 plan 요약 영속화를 기다린다 |
+| `GET` | `/deployments/{deploymentId}/observability` | 배선됨(live source 대기) | Admin 전용 데모 폐루프 관측·비용 기록 조회 (ADR-0021 §3). live metric source가 주입되지 않은 배포에서는 route가 없다(404) |
 | `GET` | `/audit-events` | 배선됨 | Admin 전용 감사 이력 조회 |
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
