@@ -146,25 +146,26 @@ class JobHttpHandler:
                 if self._scope is None:
                     raise JobNotFoundError("scope route not found")
                 return _response(200, self._scope.get_scope(principal))
-            if path == "/admin/users":
+            if method == "GET" and path == "/admin/users":
                 if self._users is None:
                     raise JobNotFoundError("user management route not found")
-                if method == "GET":
-                    return _response(200, {"users": list(self._users.list_users(principal))})
-                if method == "POST":
-                    try:
-                        body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
-                        from apps.backend.api.users import CreateUserRequest
-                        req = CreateUserRequest(
-                            email=_non_empty_string(body.get("email"), "email"),
-                            role=_non_empty_string(body.get("role"), "role"),
-                            temporary_password=_non_empty_string(
-                                body.get("temporary_password"), "temporary_password"
-                            ),
-                        )
-                    except (TypeError, ValueError, json.JSONDecodeError) as error:
-                        raise RequestValidationError("user create body is invalid") from error
-                    return _response(201, self._users.create_user(principal, req))
+                return _response(200, {"users": list(self._users.list_users(principal))})
+            if method == "POST" and path == "/admin/users":
+                if self._users is None:
+                    raise JobNotFoundError("user management route not found")
+                try:
+                    body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
+                    from apps.backend.api.users import CreateUserRequest
+                    req = CreateUserRequest(
+                        email=_non_empty_string(body.get("email"), "email"),
+                        role=_non_empty_string(body.get("role"), "role"),
+                        temporary_password=_non_empty_string(
+                            body.get("temporary_password"), "temporary_password"
+                        ),
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("user create body is invalid") from error
+                return _response(201, self._users.create_user(principal, req))
             if method == "POST" and path == "/admin/users/profile":
                 if self._users is None:
                     raise JobNotFoundError("user management route not found")

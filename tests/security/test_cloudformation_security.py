@@ -437,6 +437,7 @@ class CloudFormationSecurityTest(unittest.TestCase):
         # 이 셋은 handler가 문자열 비교가 아니라 전용 파서로 처리한다.
         helper_served = {
             "GET /policy-sources/{sourceId}/versions/{version}",
+            "DELETE /policy-sources/{sourceId}/versions/{version}",
             "POST /policy-sources/{sourceId}/versions/{version}/process",
             "POST /policy-sources/{sourceId}/versions/{version}/approve",
             "POST /policy-sources/{sourceId}/versions/{version}/candidates",
