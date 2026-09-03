@@ -2,6 +2,26 @@
 
 ## Current
 
+- **세 Worker 큐 중 둘에 소비자가 없었다.** `docs/DESIGN.md`는 Assessment/Remediation/Deployment
+  세 Worker Lambda를 아키텍처로 기술하지만 CloudFormation에는 Assessment 하나만 있었다. Deployment
+  Worker는 composition root(`apps/backend/deployment/runtime.py`)까지 다 만들어 두고도 그것을
+  실행할 Lambda와 event source가 없었고, Remediation Worker는 composition root조차 없었다. 큐에
+  task가 쌓여도 소비자가 없으면 재시도만 반복하다 DLQ로 간다.
+  - `apps/backend/remediation/runtime.py`를 Deployment Worker runtime과 같은 구조로 추가했다
+    (`parse_tasks`/`run_tasks`/`lambda_handler`). 이 큐는 두 remediation command만 받는다 — 다른
+    큐의 command가 흘러들면 Worker가 "지원하지 않는 command"로 실패하기 전에 파싱에서 막는다.
+    큐를 잘못 지목한 것은 재시도로 나아지지 않는다.
+  - `SnapshotSyncAction`으로 **`ACTUAL_SYNC` 경로를 완결 배선**했다. 대상은 평가된 snapshot
+    commit이고 GitHub를 읽지 않는다 — 지금의 default branch head를 읽으면 평가 이후 merge된 다른
+    변경까지 apply 대상에 들어오는데, 그건 아무도 이 Finding의 조치로 승인한 적 없는 코드다.
+    `RemediationWorker._require_sync_result`가 요구하는 불변식도 정확히 이것이다.
+  - **`TERRAFORM_PATCH`는 막았다.** 그 port는 승인된 snapshot에 바인딩된 Terraform 변경을 실제로
+    생성해야 하는데 저장소에 있는 것은 변경 계획을 주입받는 fixture generator뿐이다. 고객 실행
+    경로에서 그것을 쓰면 사람이 검토한 적 없는 patch가 고객 repository에 제안된다.
+  - CloudFormation에 `RemediationWorkerFunction`/`DeploymentWorkerFunction`과 두 event source
+    mapping을 추가하고, **모든 workflow 큐에 소비자가 있음**을 security 회귀로 고정했다. Deployment
+    Worker의 live GitHub token 읽기 정책도 설정됐을 때만 만들어지도록 조건부로 붙였다.
+
 - **`POST /deployments/{id}/approve`를 열었다** — M3 폐루프의 사람 승인 게이트다. 막고 있던 건
   결정 하나였고, ADR-0019에 §1-a 보완으로 확정했다: `plan_hash`는 "이 plan이 무엇인가"를 고정하지만
   C readiness가 묻는 세 가지(refresh 여부, 파괴적 변경, **그 plan이 건드리는 AWS 리소스**)를 담지

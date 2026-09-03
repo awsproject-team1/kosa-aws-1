@@ -455,6 +455,18 @@ Resources:
                   Action: bedrock:InvokeModel
                   Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
           - !Ref AWS::NoValue
+        # Deployment Worker의 live 경로는 승인 repository의 GitHub token을 읽는다. 미설정
+        # 배포에서는 Worker가 설정 오류로 먼저 멈추므로 이 정책 자체가 없어야 한다.
+        - !If
+          - DeploymentCommitResolutionEnabled
+          - PolicyName: DeploymentWorkerGitHubToken
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Split [",", !Ref DeploymentGitHubSecretArns]
+          - !Ref AWS::NoValue
 
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -575,6 +587,56 @@ Resources:
     Properties:
       EventSourceArn: !GetAtt AssessmentQueue.Arn
       FunctionName: !Ref AssessmentWorkerFunction
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
+  # Remediation/Deployment Worker는 코드만 있고 이 스택에 실행체가 없었다. 큐에 task가 쌓여도
+  # 소비자가 없으면 재시도만 반복하다 DLQ로 간다.
+  RemediationWorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-remediation-worker"
+      Runtime: python3.12
+      Handler: apps.backend.remediation.runtime.lambda_handler
+      Role: !GetAtt WorkflowRuntimeRole.Arn
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+  RemediationQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt RemediationQueue.Arn
+      FunctionName: !Ref RemediationWorkerFunction
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
+  DeploymentWorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-deployment-worker"
+      Runtime: python3.12
+      Handler: apps.backend.deployment.runtime.lambda_handler
+      Role: !GetAtt WorkflowRuntimeRole.Arn
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          # 승인된 배포 대상. 비어 있으면 Worker가 fail-closed로 멈춘다(ADR-0019).
+          DEPLOYMENT_RUNTIME_JSON: !Ref DeploymentRuntimeJson
+  DeploymentQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt DeploymentQueue.Arn
+      FunctionName: !Ref DeploymentWorkerFunction
       BatchSize: 1
       FunctionResponseTypes: [ReportBatchItemFailures]
 
