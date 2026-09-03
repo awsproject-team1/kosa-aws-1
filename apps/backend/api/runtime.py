@@ -7,6 +7,7 @@ import os
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.audit_events import AuditEventApiService
@@ -17,6 +18,7 @@ from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
+from apps.backend.api.remediations import RemediationApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
@@ -34,12 +36,14 @@ from apps.backend.jobs import (
     SqsDeploymentWorkflowDispatcher,
     SqsWorkflowDispatcher,
 )
+from apps.backend.policy import load_rule_registry
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbAuditEventRepository,
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
     DynamoDbPolicyApprovalRepository,
+    DynamoDbRemediationContextReader,
     DynamoDbRemediationExceptionRepository,
 )
 from apps.backend.repositories.comparison_input import DynamoDbComparisonInputReader
@@ -157,6 +161,7 @@ def _http_handler() -> JobHttpHandler:
             now=lambda: datetime.now(UTC),
         ),
         deployments=_deployment_components(repository, reports),
+        remediations=_remediation_components(repository),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
@@ -228,6 +233,43 @@ def _deployment_components(
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         now=lambda: datetime.now(UTC),
     )
+
+
+def _remediation_components(
+    workflow_repository: DynamoDbAssessmentWorkflowRepository,
+) -> RemediationApiService:
+    """Wire `POST /findings/{findingId}/remediations` to its durable stores and B policy.
+
+    A(this service)는 finding_id 하나로 B의 정책 판정을 먼저 적용한 뒤에만 remediation을
+    영속화·dispatch한다. 조립 순서가 곧 경계다:
+
+    - `contexts`/`targets`: 같은 `DynamoDbRemediationContextReader`가 immutable 증거(Finding,
+      IAC/Actual 결과, 평가된 commit)를 되돌린다. 조치 유형은 정하지 않는다.
+    - `exceptions`: 읽기 전용 예외 view. `list_exceptions`만 쓰인다.
+    - `decision_maker`: B의 `RemediationPolicy`. 커밋된 eligibility(`fixtures/rules/remediation.json`)가
+      정본이며, 등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 닫힌다.
+    - `repository`/`outbox_dispatcher`: 판정 record와 (actionable일 때) Job·outbox를 한
+      workflow repository로 쓰고, GENERATE_REMEDIATION/SYNC_ACTUAL_STATE task를 assessment
+      Worker 큐로 dispatch한다.
+    """
+    _, dispatcher = _workflow_components()
+    remediation_policy = load_rule_registry(_rules_path()).remediation
+    context_reader = DynamoDbRemediationContextReader(_metadata_table())
+    return RemediationApiService(
+        contexts=context_reader,
+        targets=context_reader,
+        exceptions=_remediation_exception_reader(),
+        decision_maker=remediation_policy,
+        repository=workflow_repository,
+        outbox_dispatcher=OutboxDispatcher(repository=workflow_repository, dispatcher=dispatcher),
+        now=lambda: datetime.now(UTC),
+        job_id_factory=lambda: f"job-{uuid.uuid4()}",
+        remediation_id_factory=lambda: f"rem-{uuid.uuid4()}",
+    )
+
+
+def _rules_path() -> Path:
+    return Path(__file__).parents[3] / "fixtures" / "rules"
 
 
 def _remediation_exception_components() -> RemediationExceptionApiService:

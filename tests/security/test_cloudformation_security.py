@@ -375,6 +375,7 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
                 "ApplyCompletionFunction",
                 "RemediationWorkerFunction",
                 "DeploymentWorkerFunction",
+                "PreTokenGenerationFunction",
             },
         )
         for function in functions.values():
