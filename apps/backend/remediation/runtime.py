@@ -11,10 +11,12 @@ event source로 소비해 `RemediationWorker`를 구동한다. Queue payload는
 - `lambda_handler(event, context)`: Worker를 조립해 구동한다.
 
 **범위:** `ACTUAL_SYNC`는 완결 배선됐다 — 대상이 평가된 snapshot commit이므로 port가 결정적이고
-외부 I/O가 없다(`SnapshotSyncAction`). `TERRAFORM_PATCH`는 아직 막는다. 그 port는 승인된 snapshot에
-바인딩된 Terraform 변경을 실제로 **생성**해야 하는데, 저장소에 있는 것은 변경 계획을 주입받는
-fixture generator뿐이다. 미구현 생성기를 조용히 fixture로 대체하면 고객 repository에 아무도 만들지
-않은 patch가 제안된다.
+외부 I/O가 없다(`SnapshotSyncAction`). `TERRAFORM_PATCH`는 Bedrock Remediation Agent가 patch를
+생성하고(`BedrockPatchGenerator`), 그 바이트를 content-addressed로 저장한 뒤
+(`DynamoDbPatchContentStore`), D의 live GitHub write 어댑터가 branch/commit/PR을 연다
+(`LiveGitHubWriteTool`, ADR-0019 §3·§6). PR write에 필요한 승인 repository·token scope는 Deployment와
+같은 `DEPLOYMENT_RUNTIME_JSON`에서 읽는다. 그 설정이 비어 있으면 Worker는 patch를 생성하기 전에
+fail-closed하고, `ACTUAL_SYNC`만 동작한다.
 """
 
 from __future__ import annotations
@@ -23,19 +25,18 @@ import json
 import os
 from collections.abc import Mapping
 
+from agent.runtime.live_github_write_tool import LiveGitHubWriteTool
+from apps.backend.deployment.runtime_config import DeploymentRuntimeConfiguration
+from apps.backend.remediation.patch_content import PatchContentStore
+from apps.backend.remediation.pull_request import PatchPullRequestAction
 from apps.backend.remediation.sync import SnapshotSyncAction
 from apps.backend.remediation.worker import RemediationWorker
 from apps.backend.repositories import (
+    DynamoDbPatchContentStore,
     DynamoDbRemediationResultStore,
     DynamoDbRemediationWorkRepository,
 )
-from packages.contracts import (
-    RemediationContext,
-    RemediationDecision,
-    RemediationPatch,
-    WorkflowCommand,
-    WorkflowTask,
-)
+from packages.contracts import WorkflowCommand, WorkflowTask
 
 _REMEDIATION_COMMANDS = frozenset(
     {WorkflowCommand.GENERATE_REMEDIATION, WorkflowCommand.SYNC_ACTUAL_STATE}
@@ -44,26 +45,6 @@ _REMEDIATION_COMMANDS = frozenset(
 
 class RemediationRuntimeError(RuntimeError):
     """Remediation Worker runtime가 설정되지 않았거나 실행할 수 없다."""
-
-
-class PatchGenerationUnavailableError(RemediationRuntimeError):
-    """승인된 snapshot에 바인딩되는 실제 Terraform patch 생성기가 아직 없다."""
-
-
-class UnavailablePatchAction:
-    """Refuse to produce a patch until a real generator exists (ADR-0018).
-
-    `FixturePatchGenerator`는 "어떤 파일을 어떻게 바꿀지"를 미리 주입받는다. 고객 실행 경로에서
-    그것을 쓰면 사람이 검토한 적 없는 변경이 고객 repository에 제안된다. 그래서 막는 쪽이 기본이고,
-    `ACTUAL_SYNC` 경로는 이 port를 거치지 않으므로 영향을 받지 않는다.
-    """
-
-    def generate(
-        self, *, context: RemediationContext, decision: RemediationDecision
-    ) -> RemediationPatch:
-        raise PatchGenerationUnavailableError(
-            "live Terraform patch generation is not implemented; TERRAFORM_PATCH is blocked"
-        )
 
 
 def lambda_handler(event: Mapping[str, object], context: object) -> None:
@@ -114,23 +95,27 @@ def parse_tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
 def _live_worker() -> RemediationWorker:
     table_name = _required_env("METADATA_TABLE_NAME")
     boto3 = _boto3()
+    table = boto3.resource("dynamodb").Table(table_name)
+    content_store = DynamoDbPatchContentStore(table)
     return RemediationWorker(
-        work_repository=DynamoDbRemediationWorkRepository(
-            boto3.resource("dynamodb").Table(table_name)
-        ),
-        patch_action=_patch_action(boto3),
+        work_repository=DynamoDbRemediationWorkRepository(table),
+        patch_action=_patch_action(boto3, content_store),
         sync_action=SnapshotSyncAction(),
         result_store=DynamoDbRemediationResultStore(
             table_name=table_name, transaction_client=boto3.client("dynamodb")
         ),
+        pull_request_action=_pull_request_action(
+            boto3, content_store, os.environ.get("DEPLOYMENT_RUNTIME_JSON")
+        ),
     )
 
 
-def _patch_action(boto3: object) -> object:
+def _patch_action(boto3: object, content_store: PatchContentStore) -> object:
     """Build the C Remediation Agent that generates the Terraform patch (ADR-0018).
 
-    Replaces the fail-closed `UnavailablePatchAction`: TERRAFORM_PATCH now produces a
-    real, snapshot-bound patch from the approved remediation Model Profile via Bedrock.
+    TERRAFORM_PATCH produces a real, snapshot-bound patch from the approved remediation
+    Model Profile via Bedrock, and the generator stores the patch bytes under their
+    digest so the pull request writer can read exactly what was digested.
     """
     from apps.backend.remediation.bedrock import BedrockPatchGenerator
 
@@ -138,7 +123,45 @@ def _patch_action(boto3: object) -> object:
     return BedrockPatchGenerator(
         client=boto3.client("bedrock-runtime", region_name=profile.region),
         model_profile=profile,
+        content_store=content_store,
     )
+
+
+def _pull_request_action(
+    boto3: object, content_store: PatchContentStore, raw_configuration: object
+) -> PatchPullRequestAction | None:
+    """Build D's pull request writer for the one approved repository, or None if unconfigured.
+
+    `None`은 Worker가 TERRAFORM_PATCH를 생성 전에 거부하게 만드는 값이다(patch는 만들었는데 올릴
+    곳이 없는 상태를 만들지 않는다). 설정은 Deployment와 같은 `DEPLOYMENT_RUNTIME_JSON`이며
+    단일 승인 target을 요구한다 — 어댑터가 (customer_id, repository_id) scope로 고정 생성되기
+    때문이다(deployment runtime과 같은 규칙).
+    """
+    if not isinstance(raw_configuration, str) or not raw_configuration.strip():
+        return None
+    configuration = DeploymentRuntimeConfiguration.from_json(raw_configuration)
+    targets = configuration.targets
+    if len(targets) != 1:
+        raise RemediationRuntimeError("pull request write requires exactly one approved target")
+    target = targets[0]
+    secrets = boto3.client("secretsmanager")
+    writer = LiveGitHubWriteTool(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.repository_full_name,
+        token_provider=lambda: _secret_string(secrets, target.github_token_secret_id),
+    )
+    return PatchPullRequestAction(writer=writer, content_store=content_store)
+
+
+def _secret_string(client: object, secret_id: str) -> str:
+    try:
+        response = client.get_secret_value(SecretId=secret_id)
+    except Exception:
+        raise RemediationRuntimeError("remediation runtime secret read failed") from None
+    if not isinstance(response, Mapping):
+        raise RemediationRuntimeError("remediation runtime secret response is invalid")
+    return _string(response.get("SecretString"))
 
 
 def _remediation_model_profile() -> object:

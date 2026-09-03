@@ -39,11 +39,13 @@ Event마다 revision이 오르고, Platform은 Event를 신뢰하지 않고 `run
 
 ### 1-2. Remediation → PR
 
-- 자동 조치가 열리는 Rule(`AUTOMATIC`: S3-PUBLIC-001, S3-ACL-001, S3-TLS-001)은 Remediation이
-  Terraform Patch/PR을 **제안**한다(ADR-0018, ADR-0007 read-only 원칙). Manual Review Rule
+- 자동 조치가 열리는 Rule(`AUTOMATIC`: S3-PUBLIC-001, S3-ACL-001, S3-TLS-001)은 Remediation Worker가
+  Bedrock으로 Terraform patch를 생성해 저장하고, 데모 저장소에 branch(`remediation/{finding_id}/…`)·
+  commit·PR을 **자동으로 연다**(ADR-0018, ADR-0019 §3·§6). Worker Lambda의 `DEPLOYMENT_RUNTIME_JSON`이
+  비어 있으면 이 단계는 patch 생성 전에 fail-closed한다. Manual Review Rule
   (`MANUAL_ONLY`: S3-POLICY-001, S3-ENCRYPT-001, S3-LOGGING-001)은 사람이 토글을 준수 상태(`true`)로 바꾼다.
-- 제안된 변경은 데모 저장소의 PR로 올라가고, 사람이 검토·머지해 default branch의 merge commit이
-  된다. apply 대상은 이 merge commit이다(ADR-0019).
+- 열린 PR은 사람이 검토·머지해 default branch의 merge commit이 된다. apply 대상은 이 merge commit이다
+  (ADR-0019). Platform은 merge하지 않는다.
 
 ### 1-3. Plan
 

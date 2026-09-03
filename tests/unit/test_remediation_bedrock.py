@@ -4,6 +4,7 @@ import json
 import unittest
 
 from apps.backend.remediation.bedrock import BedrockPatchError, BedrockPatchGenerator
+from apps.backend.remediation.patch_content import InMemoryPatchContentStore
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
@@ -104,8 +105,28 @@ SECURE_MAIN_TF = (
 
 
 class BedrockPatchGeneratorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.content_store = InMemoryPatchContentStore()
+
     def generator(self, client: Client) -> BedrockPatchGenerator:
-        return BedrockPatchGenerator(client=client, model_profile=REMEDIATION_PROFILE)
+        return BedrockPatchGenerator(
+            client=client, model_profile=REMEDIATION_PROFILE, content_store=self.content_store
+        )
+
+    def test_stores_the_patch_bytes_under_the_patch_digest(self) -> None:
+        """digest만 남기고 내용을 버리면 PR write는 만들 것이 없다."""
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        patch = self.generator(client).generate(context=context(), decision=decision())
+        stored = self.content_store.get(patch=patch)
+        self.assertEqual(stored.changes, {"main.tf": SECURE_MAIN_TF})
+        self.assertEqual(stored.finding_id, patch.finding_id)
+        self.assertEqual(stored.base_commit_sha, patch.base_commit_sha)
+
+    def test_requires_a_content_store(self) -> None:
+        with self.assertRaises(TypeError):
+            BedrockPatchGenerator(
+                client=Client({}), model_profile=REMEDIATION_PROFILE, content_store=None
+            )
 
     def test_binds_generated_patch_to_the_snapshot_and_finding(self) -> None:
         client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
@@ -128,7 +149,11 @@ class BedrockPatchGeneratorTest(unittest.TestCase):
 
     def test_rejects_a_non_remediation_model_profile(self) -> None:
         with self.assertRaisesRegex(BedrockPatchError, "not approved for remediation"):
-            BedrockPatchGenerator(client=Client({}), model_profile=ASSESSMENT_PROFILE)
+            BedrockPatchGenerator(
+                client=Client({}),
+                model_profile=ASSESSMENT_PROFILE,
+                content_store=InMemoryPatchContentStore(),
+            )
 
     def test_rejects_paths_outside_the_repository(self) -> None:
         client = Client({"changes": {"../outside.tf": SECURE_MAIN_TF}})

@@ -830,6 +830,9 @@ Resources:
       Environment:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
+          # TERRAFORM_PATCH의 PR write는 Deployment와 같은 승인 repository·GitHub token scope를
+          # 쓴다(ADR-0019 §6). 비어 있으면 patch 경로가 fail-closed하고 ACTUAL_SYNC만 동작한다.
+          DEPLOYMENT_RUNTIME_JSON: !Ref DeploymentRuntimeJson
   RemediationQueueEventSource:
     Type: AWS::Lambda::EventSourceMapping
     Properties:

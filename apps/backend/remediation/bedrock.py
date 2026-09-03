@@ -17,11 +17,16 @@ Boundary, mirroring the Assessment evaluator:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from typing import Protocol
 
+from apps.backend.remediation.patch_content import (
+    PatchContentError,
+    PatchContentStore,
+    encode_patch_content,
+    patch_content_digest,
+)
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
@@ -51,15 +56,26 @@ class BedrockPatchGenerator:
     the requested finding and snapshot before persisting it.
     """
 
-    def __init__(self, *, client: BedrockConverseClient, model_profile: ModelProfile) -> None:
+    def __init__(
+        self,
+        *,
+        client: BedrockConverseClient,
+        model_profile: ModelProfile,
+        content_store: PatchContentStore,
+    ) -> None:
         if client is None:
             raise TypeError("client is required")
         if not isinstance(model_profile, ModelProfile):
             raise TypeError("model_profile must be a ModelProfile")
         if model_profile.role is not ModelProfileRole.REMEDIATION:
             raise BedrockPatchError("model profile is not approved for remediation")
+        if content_store is None:
+            # digest만 남기고 내용을 버리면 PR write는 만들 것이 없고 digest는 아무것도 가리키지
+            # 않는다. 저장소 없이 생성기를 만들 수 없게 한다.
+            raise TypeError("content_store is required")
         self._client = client
         self._model_profile = model_profile
+        self._content_store = content_store
 
     def generate(
         self, *, context: RemediationContext, decision: RemediationDecision
@@ -79,17 +95,29 @@ class BedrockPatchGenerator:
         )
         changes = _response_changes(_response_object(response))
 
-        # Content-addressed digest over the normalized change set bound to the base
-        # commit. Same finding + commit + changes -> same artifact identity, so an
-        # at-least-once retry produces an identical patch.
-        digest = _content_digest(
-            finding_id=finding.finding_id,
-            commit_sha=snapshot.commit_sha,
-            changes=changes,
-        )
+        # Content-addressed digest over the canonical patch bytes bound to the base
+        # commit. Same finding + commit + changes -> same bytes -> same artifact identity,
+        # so an at-least-once retry produces an identical patch. The bytes themselves are
+        # stored below under that digest; the PR writer reads them back from there.
+        try:
+            content = encode_patch_content(
+                finding_id=finding.finding_id,
+                base_commit_sha=snapshot.commit_sha,
+                changes=changes,
+            )
+        except PatchContentError as error:
+            # An unsafe path (absolute or `..`) is a boundary violation; anything else
+            # (size, empty set) is a patch that cannot be stored.
+            message = (
+                "model patch is outside the repository boundary"
+                if "path" in str(error)
+                else f"model patch is not storable: {error}"
+            )
+            raise BedrockPatchError(message) from error
+        digest = patch_content_digest(content)
         changed_paths = tuple(sorted(changes))
         try:
-            return RemediationPatch(
+            patch = RemediationPatch(
                 finding_id=finding.finding_id,
                 base_commit_sha=snapshot.commit_sha,
                 artifact=ArtifactReference(
@@ -106,6 +134,8 @@ class BedrockPatchGenerator:
         except (TypeError, ValueError) as error:
             # The model proposed an unsafe path (absolute or `..`) or an empty change set.
             raise BedrockPatchError("model patch is outside the repository boundary") from error
+        self._content_store.put(patch=patch, content=content)
+        return patch
 
     def _request_body(self, context: RemediationContext) -> str:
         finding = context.finding
@@ -141,20 +171,6 @@ _SYSTEM_PROMPT = (
     "not create resources unrelated to the Finding, do not perform any AWS write or "
     "apply, and do not wrap the JSON in code fences or add prose."
 )
-
-
-def _content_digest(*, finding_id: str, commit_sha: str, changes: Mapping[str, str]) -> str:
-    payload = json.dumps(
-        {
-            "finding_id": finding_id,
-            "base_commit_sha": commit_sha,
-            "changes": {path: changes[path] for path in sorted(changes)},
-        },
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _response_object(response: Mapping[str, object]) -> dict[str, object]:

@@ -37,6 +37,7 @@ from apps.backend.repositories.ports import (
 )
 from apps.backend.repositories.remediation import DynamoDbRemediationExceptionRepository
 from apps.backend.repositories.remediation_context import DynamoDbRemediationContextReader
+from apps.backend.repositories.remediation_patch_content import DynamoDbPatchContentStore
 from apps.backend.repositories.remediation_result import DynamoDbRemediationResultStore
 from apps.backend.repositories.remediation_work import DynamoDbRemediationWorkRepository
 from apps.backend.repositories.s3 import S3ArtifactStore
@@ -59,6 +60,7 @@ __all__ = [
     "DynamoDbDeploymentRunStore",
     "DynamoDbDeploymentVerificationStore",
     "DynamoDbDeploymentWorkRepository",
+    "DynamoDbPatchContentStore",
     "DynamoDbPolicyApprovalRepository",
     "DynamoDbPostDeployVerificationStore",
     "DynamoDbRemediationContextReader",

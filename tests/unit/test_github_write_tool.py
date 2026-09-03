@@ -106,7 +106,9 @@ class GitHubWriteToolTest(unittest.TestCase):
     def test_tool_only_exposes_the_write_proposal_operation(self) -> None:
         # write 경계는 PR 제안 표면만 노출한다(실제 write/apply 없음).
         public_methods = {name for name in dir(MockGitHubWriteTool) if not name.startswith("_")}
-        self.assertEqual(public_methods, {"propose_pull_request"})
+        # `open_pull_request`는 ADR-0019 §6가 허용한 세 write 표면(branch ref·contents·pull request)을
+        # 한 operation으로 묶은 것이다. merge·apply·workflow write는 여전히 없다.
+        self.assertEqual(public_methods, {"open_pull_request", "propose_pull_request"})
 
     def test_mock_tool_satisfies_the_write_tool_protocol(self) -> None:
         self.assertIsInstance(build_tool(), GitHubWriteTool)

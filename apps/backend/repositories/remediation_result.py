@@ -13,6 +13,7 @@ get이 된다. 두 item으로 나누면 decision은 보이고 결과는 아직 �
 from collections.abc import Mapping
 from typing import Protocol
 
+from agent.runtime.github_write_tool import OpenedPullRequest
 from apps.backend.remediation.worker import RemediationWork
 from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.ports import RepositoryError
@@ -75,6 +76,59 @@ class DynamoDbRemediationResultStore:
             }:
                 return
             raise RepositoryError("remediation result write failed") from None
+
+    def put_pull_request_if_absent(
+        self, *, work: RemediationWork, pull_request: OpenedPullRequest
+    ) -> None:
+        """Record the pull request GitHub actually opened for this remediation, once.
+
+        PR 번호·URL·head commit은 감사와 화면 표시용 사실이다. Deployment 생성은 이 값이 아니라
+        branch 이름으로 merge commit을 다시 찾는다(ADR-0019 §3·§4). 이미 기록돼 있으면 재전달이므로
+        흡수한다.
+        """
+        if not isinstance(work, RemediationWork):
+            raise TypeError("work must be a RemediationWork")
+        if not isinstance(pull_request, OpenedPullRequest):
+            raise TypeError("pull_request must be an OpenedPullRequest")
+        if (
+            pull_request.customer_id != work.customer_id
+            or pull_request.repository_id != work.context.snapshot.repository_id
+            or pull_request.finding_id != work.context.finding.finding_id
+        ):
+            raise ValueError("pull request is outside remediation work")
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": self._table_name,
+                            "Key": marshal_item(
+                                {
+                                    "PK": f"CUSTOMER#{work.customer_id}",
+                                    "SK": f"REMEDIATION#{work.remediation_id}",
+                                }
+                            ),
+                            "UpdateExpression": "SET pull_request = :pull_request",
+                            # patch result가 먼저 있어야 하고, PR은 한 번만 기록한다.
+                            "ConditionExpression": (
+                                "attribute_exists(PK) AND attribute_exists(#result) "
+                                "AND attribute_not_exists(pull_request)"
+                            ),
+                            "ExpressionAttributeNames": {"#result": "result"},
+                            "ExpressionAttributeValues": marshal_item(
+                                {":pull_request": pull_request.to_dict()}
+                            ),
+                        }
+                    }
+                ]
+            )
+        except Exception as error:
+            if _error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                return
+            raise RepositoryError("remediation pull request write failed") from None
 
 
 def _result_attribute(
