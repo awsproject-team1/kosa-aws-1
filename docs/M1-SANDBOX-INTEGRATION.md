@@ -93,7 +93,6 @@ For one S3 target, the configuration JSON shape is:
   {
     "customer_id": "<Cognito customer claim>",
     "repository_id": "<product repository ID>",
-    "policy_profile_id": "profile-mvp-baseline",
     "commit_sha": "<reviewed 40-character Git commit SHA>",
     "github_repository": "<owner>/<repository>",
     "github_token_secret_id": "<GitHub installation-token Secret ARN>",
@@ -114,7 +113,6 @@ other, never both:
   {
     "customer_id": "<Cognito customer claim>",
     "repository_id": "<product repository ID>",
-    "policy_profile_id": "profile-multiresource-baseline",
     "commit_sha": "<reviewed 40-character Git commit SHA>",
     "github_repository": "<owner>/<repository>",
     "github_token_secret_id": "<GitHub installation-token Secret ARN>",
@@ -215,7 +213,9 @@ sanitized gate result before customer deployment.
    | `lambda_code_s3_bucket` | Bootstrap `LambdaCodeBucketName` |
    | `assessment_scope_json` | Customer-keyed selector map matching the runtime target tuples exactly |
 
-   Example selector shape: `{"<customer-id>":[{"repository_id":"<product-repository-id>","policy_profile_id":"profile-mvp-baseline"}]}`.
+   Example selector shape: `{"<customer-id>":[{"repository_id":"<product-repository-id>"}]}`. The selector
+   names the Repository boundary only; the Policy Profile is chosen per Assessment from the
+   customer partition's Catalog (ADR-0023), and a `policy_profile_id` key here fails validation.
    `M1_ASSESSMENT_MODE` is a protected Environment variable, not a dispatch input.
    The workflow validates mode, selector equality, canonical GitHub repository
    identity, exact ARN sets and credential-role
