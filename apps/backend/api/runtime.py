@@ -19,6 +19,10 @@ from apps.backend.api.remediation_exceptions import RemediationExceptionApiServi
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
+from apps.backend.deployment.runtime_config import (
+    DeploymentRuntimeConfiguration,
+    DeploymentRuntimeConfigurationError,
+)
 from apps.backend.jobs import (
     AssessmentScopeDenied,
     OutboxDispatcher,
@@ -33,6 +37,7 @@ from apps.backend.repositories import (
     DynamoDbPolicyApprovalRepository,
     DynamoDbRemediationExceptionRepository,
 )
+from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
 
@@ -116,10 +121,11 @@ def _deployment_components(
 ) -> DeploymentApiService:
     """Wire the deployment creation and reject paths to their durable stores.
 
-    Only create and reject are wired here: they persist through the deployment
-    record store and the Job store. The approve/get/verification reader
-    assemblers depend on D's live plan and verification data and arrive with the
-    D live adapter integration; until then those routes fail closed. The
+    Create and reject persist through the deployment record store and the Job
+    store; creation also reads the remediation's stored decision and worker result
+    through the deployment source reader. The approve/get/verification reader
+    assemblers depend on D's live plan and verification data and arrive with the D
+    live adapter integration; until then those routes fail closed. The
     RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
     is delivered to the Deployment Worker queue.
     """
@@ -140,6 +146,9 @@ def _deployment_components(
     )
     return DeploymentApiService(
         approvals=DeploymentApprovalService(approval_repository),
+        sources=DynamoDbDeploymentSourceReader(
+            _metadata_table(), commits=_deployment_commit_resolver()
+        ),
         deployments=deployment_repository,
         jobs=workflow_repository,
         outbox_dispatcher=OutboxDispatcher(repository=workflow_repository, dispatcher=dispatcher),
@@ -255,6 +264,70 @@ def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWor
         ),
         SqsWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
     )
+
+
+class ConfiguredDeploymentCommitResolver:
+    """Dispatch commit resolution to the adapter for the requested approved target.
+
+    `LiveDeploymentCommitResolver` is bound to one `(customer_id, repository_id)`, the
+    same shape as D's other live adapters. Deployment creation, though, resolves the
+    repository from the stored remediation, so the composition root does the lookup and
+    hands the request to the adapter for that exact scope. A target outside the approved
+    configuration is refused rather than resolved with some other target's token.
+    """
+
+    def __init__(self, configuration: DeploymentRuntimeConfiguration) -> None:
+        self._configuration = configuration
+
+    def resolve_default_branch_commit(
+        self, *, customer_id: str, repository_id: str, patch: object
+    ) -> str | None:
+        from agent.runtime.live_deployment_commit_resolver import LiveDeploymentCommitResolver
+
+        target = self._configuration.resolve(customer_id=customer_id, repository_id=repository_id)
+        resolver = LiveDeploymentCommitResolver(
+            customer_id=target.customer_id,
+            repository_id=target.repository_id,
+            repository_full_name=target.repository_full_name,
+            token_provider=lambda: _secret_value(target.github_token_secret_id),
+        )
+        return resolver.resolve_default_branch_commit(
+            customer_id=customer_id, repository_id=repository_id, patch=patch
+        )
+
+
+class UnconfiguredDeploymentCommitResolver:
+    """Refuse to resolve a merge commit when no approved target is configured.
+
+    A `TERRAFORM_PATCH` deployment must apply the merge commit on the default branch
+    (ADR-0019 §3), and without GitHub configuration that commit cannot be observed.
+    Refusing keeps the missing configuration visible instead of letting the base commit
+    stand in for code no human merged. `ACTUAL_SYNC` never reaches this resolver, so a
+    stack deployed without GitHub configuration still creates sync deployments.
+    """
+
+    def resolve_default_branch_commit(
+        self, *, customer_id: str, repository_id: str, patch: object
+    ) -> str | None:
+        raise DeploymentRuntimeConfigurationError(
+            "deployment commit resolution is not configured for this deployment"
+        )
+
+
+def _deployment_commit_resolver() -> object:
+    raw = os.environ.get("DEPLOYMENT_RUNTIME_JSON")
+    if not raw or not raw.strip():
+        return UnconfiguredDeploymentCommitResolver()
+    return ConfiguredDeploymentCommitResolver(DeploymentRuntimeConfiguration.from_json(raw))
+
+
+def _secret_value(secret_id: str) -> str:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    response = boto3.client("secretsmanager").get_secret_value(SecretId=secret_id)
+    return _required_string(response.get("SecretString"), "SecretString")
 
 
 def _metadata_table() -> object:

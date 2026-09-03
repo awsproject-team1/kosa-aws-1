@@ -2,6 +2,32 @@
 
 ## Current
 
+- M3 A Deployment 생성 경로를 실제로 살렸다(`feature/m3-a-deployment-readers`, base=dev). 문서는
+  생성이 "durable 배선 완결"이라고 적었지만, composition root가 `DeploymentApiService(sources=...)`
+  를 넘기지 않아 `POST /remediations/{id}/deployments`는 프로덕션에서 항상
+  `deployment creation dependencies are not configured`로 죽고 있었다. 원인은 그 아래에 하나 더
+  있었다 — **C Remediation Worker 결과를 저장하는 DynamoDB 구현이 아예 없었다**
+  (`RemediationResultStore`의 실구현이 테스트 fake뿐). 결과가 저장되지 않으니 생성이 확인해야 할
+  전제조건("worker 결과가 존재") 자체를 만들 수 없었다. 세 조각을 넣어 경로를 닫았다:
+  (1) `DynamoDbRemediationResultStore` — `REMEDIATION#{id}` item에 `result`를 conditional
+  update로 한 번만 채운다. plan facts와 같은 관례(멱등 흡수, 덮어쓰기 불가)이고, 별도 `#RESULT`
+  item으로 나누지 않은 이유는 생성이 decision과 결과를 **함께** 봐야 하기 때문이다 — 한 item이면
+  단일 strongly-consistent get이고, 두 item이면 decision만 보이는 중간 상태를 읽는다.
+  (2) `DynamoDbDeploymentSourceReader` — decision·worker 결과·source Assessment를 한 번에 읽고
+  대상 commit을 정한다. `ACTUAL_SYNC`는 저장된 sync target commit이 곧 대상이라 GitHub read가
+  없고, `TERRAFORM_PATCH`는 ADR-0019 §3대로 **merge된 default branch commit**이 대상이다.
+  merge 전이면 도달 불가로 표시하고 commit을 지어내지 않는다. `source_assessment_id`가 없으면
+  검증을 정확한 before-state에 묶을 수 없으므로 fail-closed한다.
+  (3) `DeploymentCommitResolver` port(D 소유)와 `LiveDeploymentCommitResolver` — default branch
+  이름을 repository에서 읽고(설정을 믿지 않는다), patch에서 결정적으로 유도한 head branch로 PR을
+  찾고, merge commit이 default branch에서 **여전히** 도달 가능한지 compare로 확인한다. `merged_at`만
+  보면 merge 뒤 revert된 commit을 배포하게 된다. 미설정 배포에서는 `TERRAFORM_PATCH`만 fail-closed
+  되고 `ACTUAL_SYNC` 배포는 GitHub 없이 그대로 동작한다.
+  CloudFormation에 `DeploymentRuntimeJson`/`DeploymentGitHubSecretArns` 파라미터와 all-or-none
+  Rule, API Lambda 환경 변수, 조건부 secret 정책(와일드카드 아님)을 추가하고 security 회귀로
+  고정했다. 문서(CONTRACTS/DATABASE) 동기화. **남은 reader 3종**(`DeploymentPlanReader`/
+  `DeploymentFactsReader`/`ComparisonInputReader`)은 approve/get/verification을 여는 후속이다.
+
 - M2 A Admin 감사 이력 조회(`GET /audit-events`)를 구현했다(`feature/m2-a-audit-events`, base=dev).
   일곱 writer가 이미 `AUDIT#{occurred_at}#{event_id}` 한 SK 규약과 `event_type` 한 필드명을 쓰고
   있어, 조회는 writer별 분기 없이 고객 partition의 `AUDIT#` prefix를 SK 역순으로 읽는 단일 query다

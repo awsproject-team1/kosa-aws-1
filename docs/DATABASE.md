@@ -55,7 +55,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
-| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job/result reference |
+| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job 참조, 그리고 C Worker 결과 `result` |
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
@@ -104,6 +104,23 @@ Finding/Snapshot/evidence 값이며 immutable하다. `MANUAL_REVIEW`와 `SUPPRES
 audit 두 항목만 쓰고 Job/Outbox는 만들지 않는다. 고객 예외 등록도 exact Rule version key와
 `REMEDIATION_EXCEPTION_APPROVED` audit event를 같은 transaction에 쓰며 ID/customer/approver/time은
 Backend가 발급한다.
+
+C Remediation Worker의 결과는 같은 `REMEDIATION#{remediation_id}` item에 `result` 속성으로
+conditional update(`attribute_not_exists(result)`)한다. plan facts를 `DEPLOYMENT#` item에 채우는
+것과 같은 관례이며 이유도 같다 — at-least-once 재시도는 흡수되고, 다른 결과는 이미 기록된 것을
+덮어쓰지 못한다. `result.kind`는 `RemediationAction` 값(`TERRAFORM_PATCH`/`ACTUAL_SYNC`)이고
+payload는 각각 `patch`(`RemediationPatch`)와 `sync_target`(`RemediationSyncTarget`)이다. 별도
+`#RESULT` item으로 나누지 않는 이유는 Deployment 생성 경로에 있다 — 생성은 decision과 결과를 함께
+확인해야 하는데(ADR-0019 §4), 한 item이면 그 확인이 단일 strongly-consistent get이고, 두 item이면
+decision은 보이는데 결과는 아직 안 보이는 중간 상태를 읽을 수 있다.
+
+Deployment 생성의 대상 commit은 action마다 다르다(ADR-0019 §3). `ACTUAL_SYNC`는 저장된
+`sync_target.commit_sha`(이미 `IAC` 관점을 통과한 default branch commit)를 그대로 쓰므로 GitHub
+read가 필요 없다. `TERRAFORM_PATCH`는 사람이 merge한 **default branch의 merge commit**이 대상이며,
+그 값은 저장돼 있지 않고 D 소유 read-only port(`DeploymentCommitResolver`)가 GitHub에서 해석한다.
+merge 전이면 해석 결과가 없고, 생성은 도달 불가로 거절된다. patch의 `base_commit_sha`를 대신 쓰지
+않는다 — base는 patch를 만든 시점의 스냅샷이고, 그걸 apply하면 사람이 승인하지 않은 코드를
+배포하게 된다.
 
 ## M3 planned deployment and verification storage
 
