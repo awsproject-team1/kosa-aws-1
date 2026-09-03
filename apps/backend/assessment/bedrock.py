@@ -155,9 +155,31 @@ class BedrockStructuredEvaluator:
 _SYSTEM_PROMPT = (
     "Evaluate exactly the supplied resource against the supplied approved rule. "
     "Return one JSON object only, with exactly status, score, rationale, and "
-    "evidence_references. status must be a supported evaluation status, score must be "
-    "0 through 100, and every evidence reference must come from allowed_evidence_references."
+    "evidence_references. status must be exactly one of "
+    + ", ".join(status.value for status in EvaluationStatus)
+    + " (use PASS when the resource satisfies the rule and FAIL when it violates it); "
+    "score must be 0 through 100, and every evidence reference must come from "
+    "allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
 )
+
+
+def _strip_json_fence(text: str) -> str:
+    """Remove a Markdown code fence the model may wrap around the JSON object.
+
+    Nova models frequently return the structured object inside a ```json ... ``` or
+    ``` ... ``` fence despite a JSON-only instruction. Unwrap exactly one leading and
+    trailing fence so parsing sees the object; text without a fence is returned as is,
+    and any non-JSON content still fails closed in the caller's json.loads.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    # Drop the opening fence line (which may carry a language tag such as ```json).
+    lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
 
 
 def _response_object(response: Mapping[str, object]) -> dict[str, object]:
@@ -176,7 +198,7 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(text, str):
         raise BedrockEvaluationError("Bedrock response text is missing")
     try:
-        value = json.loads(text)
+        value = json.loads(_strip_json_fence(text))
     except json.JSONDecodeError as error:
         raise BedrockEvaluationError("Bedrock response is not JSON") from error
     if not isinstance(value, dict):

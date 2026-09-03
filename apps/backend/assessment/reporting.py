@@ -460,8 +460,8 @@ def _plan_from_item(
 ) -> tuple[int, int | None, tuple[PlannedEvaluation, ...] | None]:
     if item.get("customer_id") != customer_id or item.get("assessment_id") != assessment_id:
         raise AssessmentReportStoreError("assessment plan scope is invalid")
-    value = item.get("planned_evaluations")
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    value = _stored_int(item.get("planned_evaluations"))
+    if value is None or value <= 0:
         raise AssessmentReportStoreError("assessment plan is invalid")
     coordinates = _plan_coordinates_from_item(item)
     if coordinates is not None and len(coordinates) != value:
@@ -469,9 +469,26 @@ def _plan_from_item(
     completed = item.get("completed_evaluations")
     if completed is None:
         return value, None, coordinates
-    if isinstance(completed, bool) or not isinstance(completed, int) or not 0 <= completed <= value:
+    completed = _stored_int(completed)
+    if completed is None or not 0 <= completed <= value:
         raise AssessmentReportStoreError("assessment completed counter is invalid")
     return value, completed, coordinates
+
+
+def _stored_int(value: object) -> int | None:
+    """Normalize a stored integer, accepting the Decimal that boto3 resources return.
+
+    The DynamoDB resource client unmarshals Number attributes as decimal.Decimal, so a
+    plain isinstance(value, int) check rejects a legitimately stored count. Accept int
+    and integral Decimal, reject bool and any fractional or non-numeric value.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Decimal) and value == value.to_integral_value():
+        return int(value)
+    return None
 
 
 def _plan_coordinates_from_item(

@@ -25,6 +25,35 @@ from packages.contracts import (
 NOW = datetime(2026, 9, 1, 8, 0, tzinfo=UTC)
 
 
+def _unmarshal(value):
+    """Convert a low-level DynamoDB AttributeValue tree back to plain Python.
+
+    Transaction writes go through the low-level client, so items are marshaled as
+    AttributeValues ({"S": ...}, {"M": {...}}, {"N": ...}); unwrap them for assertions.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        ((tag, inner),) = value.items()
+        if tag == "S":
+            return inner
+        if tag == "N":
+            return int(inner) if str(inner).lstrip("-").isdigit() else float(inner)
+        if tag == "BOOL":
+            return inner
+        if tag == "NULL":
+            return None
+        if tag == "M":
+            return {key: _unmarshal(item) for key, item in inner.items()}
+        if tag == "L":
+            return [_unmarshal(item) for item in inner]
+    if isinstance(value, dict):
+        return {key: _unmarshal(item) for key, item in value.items()}
+    return value
+
+
+def _item(put) -> dict:
+    return _unmarshal(put["Put"]["Item"])
+
+
 class Table:
     def query(self, **kwargs):
         return {"Items": []}
@@ -134,11 +163,11 @@ class RemediationWorkflowRepositoryTest(unittest.TestCase):
 
         puts = self.transactions.calls[0]["TransactItems"]
         self.assertEqual(len(puts), 4)
-        remediation = puts[0]["Put"]["Item"]
+        remediation = _item(puts[0])
         self.assertEqual(remediation["decision"]["action"], "TERRAFORM_PATCH")
         self.assertNotIn("strategy", remediation)
         self.assertNotIn("strategy", remediation["context"])
-        audit = puts[3]["Put"]["Item"]
+        audit = _item(puts[3])
         # The two fields mean different things in one item: the audit kind and the
         # decided RemediationAction.  Unifying them on `action` would lose one.
         self.assertEqual(audit["event_type"], "REMEDIATION_DECIDED")
@@ -155,9 +184,9 @@ class RemediationWorkflowRepositoryTest(unittest.TestCase):
 
         puts = self.transactions.calls[0]["TransactItems"]
         self.assertEqual(len(puts), 2)
-        entity_types = {entry["Put"]["Item"]["entity_type"] for entry in puts}
+        entity_types = {_item(entry)["entity_type"] for entry in puts}
         self.assertEqual(entity_types, {"REMEDIATION", "AUDIT_EVENT"})
-        self.assertEqual(puts[0]["Put"]["Item"]["status"], "DECIDED_NO_ACTION")
+        self.assertEqual(_item(puts[0])["status"], "DECIDED_NO_ACTION")
 
     def test_command_must_match_stored_decision(self):
         job = replace(

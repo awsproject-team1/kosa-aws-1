@@ -138,3 +138,21 @@ class BedrockStructuredEvaluatorTest(unittest.TestCase):
             self.evaluator(client).evaluate(
                 resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
             )
+
+    def test_accepts_json_object_wrapped_in_a_markdown_code_fence(self) -> None:
+        # Nova models frequently wrap the JSON object in a ```json ... ``` fence.
+        body = {
+            "status": "PASS",
+            "score": 100,
+            "rationale": "Public access block is enabled.",
+            "evidence_references": ["aws:s3:GetPublicAccessBlock"],
+        }
+        fenced = "```json\n" + json.dumps(body) + "\n```"
+        client = Client({"output": {"message": {"content": [{"text": fenced}]}}})
+
+        result = self.evaluator(client).evaluate(
+            resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+
+        self.assertEqual(result.status, EvaluationStatus.PASS)
+        self.assertEqual(result.score, 100)

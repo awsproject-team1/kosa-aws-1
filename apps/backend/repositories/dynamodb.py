@@ -9,6 +9,7 @@ from apps.backend.assessment import Assessment
 from apps.backend.jobs.lifecycle import InvalidJobTransition, StaleJobRevision, transition_job
 from apps.backend.jobs.models import Job
 from apps.backend.jobs.outbox import OutboxStatus, WorkflowOutboxEntry
+from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.ports import (
     DuplicateJobError,
     InvalidJobMutationError,
@@ -499,7 +500,7 @@ def _transactional_put(table_name: str, item: dict[str, object]) -> dict[str, ob
     return {
         "Put": {
             "TableName": table_name,
-            "Item": item,
+            "Item": marshal_item(item),
             "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
         }
     }
