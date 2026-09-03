@@ -47,6 +47,7 @@ from agent.runtime.github_write_tool import (
     GitHubWriteScopeError,
     GitHubWriteTool,
     GitHubWriteToolError,
+    OpenedPullRequest,
     ProposedPullRequest,
     derive_head_branch,
     require_patch_scope,
@@ -61,6 +62,7 @@ from agent.runtime.live_deployment_ports import (
     LiveWorkflowRunReader,
     PlanRunOutputs,
 )
+from agent.runtime.live_github_write_tool import LiveGitHubWriteTool
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
 from agent.runtime.mock_deployment_ports import (
     DeploymentPortError,
@@ -126,12 +128,14 @@ __all__ = [
     "MockAwsResourceTool",
     "MockDemoRunMetricsSource",
     "MockGitHubTool",
+    "LiveGitHubWriteTool",
     "MockGitHubWriteTool",
     "MockPlanRequestPort",
     "MockWorkflowRunReader",
     "ObservabilitySourceError",
     "ObservabilitySourceScopeError",
     "PlanRequestPort",
+    "OpenedPullRequest",
     "ProposedPullRequest",
     "RDS_INSTANCE_RESOURCE_TYPE",
     "ResourceTypeRoutingAwsResourceTool",

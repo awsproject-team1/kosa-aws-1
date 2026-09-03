@@ -21,7 +21,7 @@
 | `POST` | `/assessments` | Assessment Job 생성 |
 | `GET` | `/jobs/{jobId}` | Job 상태와 결과 조회 |
 | `GET` | `/assessments/{assessmentId}` | Assessment 및 Coverage 조회 |
-| `POST` | `/findings/{findingId}/remediations` | B policy 판정 후 Remediation 시작 또는 non-action decision 보고 |
+| `POST` | `/findings/{findingId}/remediations` | B policy 판정 후 Remediation 시작 또는 non-action decision 보고. `TERRAFORM_PATCH`면 Worker가 patch를 생성·저장한 뒤 승인 repository에 branch/commit/PR을 연다(`DEPLOYMENT_RUNTIME_JSON` 필요) |
 | `POST` | `/remediation-exceptions` | Admin이 만료 필수 고객 예외를 승인·등록 |
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |

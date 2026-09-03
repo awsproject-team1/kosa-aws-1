@@ -558,6 +558,27 @@ Queue에는 `job_id`, `expected_revision`, `command`만 들어간다. `RUN_DEPLO
 Worker 명령이며 C가 소비하지 않는다. D live GitHub/Terraform adapter와 customer runtime 배선은
 이 mockable Contract의 구현 범위 밖이다.
 
+### Patch content and pull request write (2026-09-03)
+
+`RemediationPatch`는 patch의 **identity**(finding, base commit, `content_sha256`, changed paths)만
+담는다. 변경된 파일의 **내용**은 `apps/backend/remediation/patch_content.py`가 정한 canonical JSON
+(`{"base_commit_sha", "changes": {path: full contents}, "finding_id"}`, key 정렬·ASCII escape)이며,
+`content_sha256`은 정확히 그 바이트의 SHA-256이다. 생성기(`BedrockPatchGenerator`)는 이 바이트를
+`PatchContentStore`에 digest로 저장하고, PR writer는 같은 digest로 읽어 무결성을 검증한 뒤에만 올린다.
+상한은 300KB이며 초과는 fail-closed다. 저장소는 DynamoDB(`REMEDIATION_PATCH#{content_sha256}`)다 —
+Worker runtime identity가 tenant-scoped가 될 때까지 Artifact bucket을 열지 않는다(ADR-0014).
+
+PR write는 D의 `LiveGitHubWriteTool.open_pull_request(patch, changes)`이며 write 표면은 branch ref
+생성·contents 갱신·pull request 생성 셋뿐이다(ADR-0019 §6). branch 이름은 `derive_head_branch(patch)`로
+결정적이라 재전달이 두 번째 branch·PR을 만들지 않는다(있는 ref 재사용, 같은 blob은 재commit 없음,
+열린 PR 재사용). 결과 `OpenedPullRequest`(number, url, head/base branch, head commit)는
+`REMEDIATION#{id}` item의 `pull_request` 속성에 한 번 기록된다. Deployment 생성은 이 값을 읽지 않고
+branch 이름으로 merge commit을 다시 찾는다(ADR-0019 §3·§4).
+
+Worker 순서는 `generate → put_result_if_absent → open → put_pull_request_if_absent`이며, PR port가
+구성되지 않았으면(`DEPLOYMENT_RUNTIME_JSON` 없음) TERRAFORM_PATCH task는 patch를 생성하기 **전에**
+`RemediationWorkerError`로 실패한다 — Bedrock 비용도, PR 없는 고아 patch도 만들지 않는다.
+
 ### Rule item writer invariant
 
 `RULE#{rule_id}#VERSION#{version}`의 customer-catalog writer는

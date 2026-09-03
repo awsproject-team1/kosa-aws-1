@@ -2,6 +2,28 @@
 
 ## Current
 
+- **폐루프의 마지막 코드 조각 — patch → GitHub PR write — 를 이었다** (#65 handoff §6 B, ADR-0019 §3·§6).
+  - `BedrockPatchGenerator`는 digest만 남기고 변경 내용을 버리고 있었다. 이제 canonical patch 바이트
+    (`apps/backend/remediation/patch_content.py`)를 `content_sha256`으로 저장한다
+    (`DynamoDbPatchContentStore`, `REMEDIATION_PATCH#{digest}`, 300KB 상한). S3가 아닌 이유는 ADR-0014의
+    tenant-scoped identity 게이트를 건드리지 않기 위해서다.
+  - `LiveGitHubWriteTool.open_pull_request()`가 branch ref·contents·pull request 세 write만 호출한다.
+    branch 이름이 patch에서 결정적이라 재전달은 있는 ref·같은 blob·열린 PR을 재사용한다. 결과는
+    `REMEDIATION#{id}.pull_request`에 한 번 기록되고, Deployment 생성은 여전히 branch 이름으로 merge
+    commit을 찾는다.
+  - `RemediationWorker`는 `generate → put_result → open PR → put_pull_request` 순서이며, PR port가
+    없으면(`DEPLOYMENT_RUNTIME_JSON` 미설정) TERRAFORM_PATCH를 **생성 전에** 거부한다. Remediation Worker
+    Lambda에 `DEPLOYMENT_RUNTIME_JSON`을 추가했다(GitHub token 권한은 `WorkflowRuntimeRole`의 기존
+    조건부 policy가 이미 준다).
+  - **조립 smoke test**(`tests/unit/test_composition_smoke.py`): boto3를 stub으로 바꿔 API Lambda·
+    Remediation Worker·outbox sweeper의 실제 composition root를 만들어 본다. 2026-09-03 검토에서 잡은
+    "route는 있는데 service가 조립되지 않은" 종류의 결함을 앞으로 테스트가 잡는다.
+  - **Golden 실행기**(`scripts/run_assessment_golden.py`): bench가 아니라 Runtime의
+    `BedrockStructuredEvaluator`와 승인 Profile로 Golden case를 반복 실행한다. `--dry-run`으로 배관을
+    검증했고, 실제 실행은 case별 snapshot 파일(`{artifact_id}.json`)과 sandbox Bedrock이 필요하다 —
+    R2(v3 Profile 재검증)의 실행 수단이다.
+  - 검증: `ruff check .`/`format` 통과, unit 1174 / contract 237 / integration 21 / security 102 통과.
+
 - **구현 검토(2026-09-03) 후속: Finding 이후 경로 중 A/C/D 조각 세 곳을 이었다.** Remediation 시작
   API 조립과 Terraform patch/PR 생성은 별도 진행 중이라 손대지 않았다.
   - **Post-Deploy Verification Assessment가 실제로 만들어진다** (ADR-0020 §1·§7). 전에는

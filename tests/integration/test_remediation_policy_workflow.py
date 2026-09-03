@@ -3,6 +3,7 @@
 import unittest
 from datetime import UTC, datetime
 
+from agent.runtime.github_write_tool import OpenedPullRequest
 from apps.backend.api.remediations import RemediationApiService
 from apps.backend.auth import Principal, Role
 from apps.backend.jobs import OutboxDispatcher
@@ -127,6 +128,30 @@ class InMemoryRepository:
         if (work.remediation_id, result) not in self.results:
             self.results.append((work.remediation_id, result))
 
+    def put_pull_request_if_absent(self, *, work, pull_request):
+        self.pull_requests = getattr(self, "pull_requests", [])
+        self.pull_requests.append((work.remediation_id, pull_request))
+
+
+class PullRequestAction:
+    """D's write port as the worker sees it: one PR per stored patch."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def open(self, *, context, patch):
+        self.calls += 1
+        return OpenedPullRequest(
+            customer_id=patch.artifact.customer_id,
+            repository_id=patch.artifact.repository_id,
+            finding_id=patch.finding_id,
+            head_branch=f"remediation/{patch.finding_id}",
+            head_commit_sha="c" * 40,
+            base_branch="main",
+            number=1,
+            url="https://github.example/pull/1",
+        )
+
 
 class Dispatcher:
     def __init__(self):
@@ -208,15 +233,21 @@ class RemediationPolicyWorkflowIntegrationTest(unittest.TestCase):
         self.assertIs(response.decision.action, RemediationAction.TERRAFORM_PATCH)
         self.assertEqual(repository.workflow["decision"], response.decision)
         patch = PatchAction()
+        pull_requests = PullRequestAction()
         result = RemediationWorker(
             work_repository=repository,
             patch_action=patch,
             sync_action=SyncAction(),
             result_store=repository,
+            pull_request_action=pull_requests,
         ).handle(dispatcher.tasks[0])
         self.assertEqual(patch.calls, 1)
         self.assertIsInstance(result, RemediationPatch)
         self.assertEqual(repository.results, [("rem-001", result)])
+        # patch가 저장된 뒤 같은 finding의 PR이 한 번 열리고 기록된다 (ADR-0019 §3).
+        self.assertEqual(pull_requests.calls, 1)
+        self.assertEqual(repository.pull_requests[0][0], "rem-001")
+        self.assertEqual(repository.pull_requests[0][1].finding_id, result.finding_id)
 
     def test_active_customer_exception_stops_before_job_and_worker(self):
         exception = RemediationException(

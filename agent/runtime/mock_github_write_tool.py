@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agent.runtime.github_write_tool import (
+    OpenedPullRequest,
     ProposedPullRequest,
     derive_head_branch,
     require_patch_scope,
@@ -25,6 +28,7 @@ class MockGitHubWriteTool:
         _require_non_empty_string(repository_id, "repository_id")
         self._customer_id = customer_id
         self._repository_id = repository_id
+        self.opened: list[tuple[RemediationPatch, dict[str, str]]] = []
 
     def propose_pull_request(self, patch: RemediationPatch) -> ProposedPullRequest:
         """tool scope 안에 있는 patch에 대한 결정적 PR 제안을 반환한다."""
@@ -44,6 +48,25 @@ class MockGitHubWriteTool:
                 f"Changed paths: {', '.join(patch.changed_paths)}"
             ),
             changed_paths=patch.changed_paths,
+        )
+
+    def open_pull_request(
+        self, patch: RemediationPatch, changes: Mapping[str, str]
+    ) -> OpenedPullRequest:
+        """Record the write that a live adapter would perform and return a deterministic PR."""
+        proposal = self.propose_pull_request(patch)
+        if tuple(sorted(changes)) != tuple(sorted(patch.changed_paths)):
+            raise ValueError("changes do not match the patch's changed paths")
+        self.opened.append((patch, dict(changes)))
+        return OpenedPullRequest(
+            customer_id=proposal.customer_id,
+            repository_id=proposal.repository_id,
+            finding_id=proposal.finding_id,
+            head_branch=proposal.head_branch,
+            head_commit_sha=f"{patch.artifact.content_sha256[:40]}",
+            base_branch="main",
+            number=len(self.opened),
+            url=f"https://github.example/{proposal.repository_id}/pull/{len(self.opened)}",
         )
 
     def _require_scope(self, patch: RemediationPatch) -> None:

@@ -3,7 +3,7 @@
 고정하는 불변식:
 - 이 큐는 두 remediation command만 받는다. 다른 큐의 command가 흘러들면 파싱에서 막는다.
 - `ACTUAL_SYNC` 대상은 평가된 snapshot commit이다 — 지금의 default branch head가 아니다.
-- `TERRAFORM_PATCH`는 실제 생성기가 없으므로 fixture로 조용히 대체되지 않고 막힌다.
+- `TERRAFORM_PATCH`는 PR write가 구성되지 않았으면 patch를 생성하기 전에 막힌다.
 - 설정 누락은 이름을 밝히는 runtime 오류로 fail-closed한다.
 """
 
@@ -12,16 +12,21 @@ import os
 import unittest
 from unittest import mock
 
+from apps.backend.remediation.patch_content import InMemoryPatchContentStore
+from apps.backend.remediation.pull_request import PatchPullRequestAction
 from apps.backend.remediation.runtime import (
-    PatchGenerationUnavailableError,
     RemediationRuntimeError,
-    UnavailablePatchAction,
+    _pull_request_action,
     lambda_handler,
     parse_tasks,
     run_tasks,
 )
 from apps.backend.remediation.sync import SnapshotSyncAction, SyncActionError
-from apps.backend.remediation.worker import RemediationWork, RemediationWorker
+from apps.backend.remediation.worker import (
+    RemediationWork,
+    RemediationWorker,
+    RemediationWorkerError,
+)
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
@@ -112,6 +117,14 @@ class ResultStore:
     def put_result_if_absent(self, *, work, result) -> None:
         self.results.append(result)
 
+    def put_pull_request_if_absent(self, *, work, pull_request) -> None:
+        raise AssertionError("no pull request should be recorded in these tests")
+
+
+class NeverCalledPatchAction:
+    def generate(self, *, context, decision):
+        raise AssertionError("the patch generator must not run without a pull request port")
+
 
 def _sqs_event(*tasks: WorkflowTask) -> dict[str, object]:
     return {"Records": [{"body": json.dumps(task.to_dict())} for task in tasks]}
@@ -151,9 +164,10 @@ class RunTasksTest(unittest.TestCase):
         store = ResultStore()
         worker = RemediationWorker(
             work_repository=WorkRepository(_work(action)),
-            patch_action=UnavailablePatchAction(),
+            patch_action=NeverCalledPatchAction(),
             sync_action=SnapshotSyncAction(),
             result_store=store,
+            pull_request_action=None,
         )
         return worker, store
 
@@ -174,9 +188,10 @@ class RunTasksTest(unittest.TestCase):
         self.assertEqual(result.commit_sha, COMMIT)
         self.assertEqual(result.repository_id, REPOSITORY_ID)
 
-    def test_the_patch_path_is_blocked_not_faked(self) -> None:
+    def test_the_patch_path_fails_closed_without_a_pull_request_port(self) -> None:
+        """PR을 올릴 곳이 없으면 Bedrock을 부르기 전에 멈춘다 — 비용도 고아 patch도 없다."""
         worker, store = self._worker(RemediationAction.TERRAFORM_PATCH)
-        with self.assertRaises(PatchGenerationUnavailableError):
+        with self.assertRaisesRegex(RemediationWorkerError, "pull request port"):
             run_tasks(
                 _sqs_event(
                     WorkflowTask(
@@ -219,3 +234,33 @@ class LambdaHandlerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeBoto3:
+    def client(self, service: str, **kwargs):
+        assert service == "secretsmanager"
+        return object()
+
+
+class PullRequestActionWiringTest(unittest.TestCase):
+    def test_unconfigured_runtime_has_no_pull_request_port(self) -> None:
+        """설정이 없으면 port도 없다 — Worker가 TERRAFORM_PATCH를 생성 전에 거부하게 하는 값이다."""
+        self.assertIsNone(_pull_request_action(_FakeBoto3(), InMemoryPatchContentStore(), None))
+        self.assertIsNone(_pull_request_action(_FakeBoto3(), InMemoryPatchContentStore(), "  "))
+
+    def test_configured_runtime_builds_the_writer_for_the_single_target(self) -> None:
+        from tests.unit.test_deployment_runtime import _TARGET
+
+        action = _pull_request_action(
+            _FakeBoto3(), InMemoryPatchContentStore(), json.dumps([_TARGET])
+        )
+        self.assertIsInstance(action, PatchPullRequestAction)
+
+    def test_two_targets_are_refused(self) -> None:
+        from tests.unit.test_deployment_runtime import _TARGET
+
+        second = {**_TARGET, "repository_id": "repo-other"}
+        with self.assertRaisesRegex(RemediationRuntimeError, "exactly one"):
+            _pull_request_action(
+                _FakeBoto3(), InMemoryPatchContentStore(), json.dumps([_TARGET, second])
+            )

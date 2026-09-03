@@ -290,6 +290,15 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
   Deployment `MANUAL_REVIEW`로 남기고, 재시도는 새 plan·새 Deployment·새 승인으로만 한다
   (`docs/DESIGN.md`의 Apply 무재시도 규칙을 상태 값으로 구체화한 것이다).
 
+## Implementation note (2026-09-03, PR write)
+
+§3의 "Patch → branch/commit/PR" 구간이 배선됐다. `agent/runtime/live_github_write_tool.py`의
+`LiveGitHubWriteTool`이 §6이 허용한 세 write 표면(branch ref 생성, contents 갱신, pull request 생성)만
+호출하고, workflow 파일·merge·apply는 건드리지 않는다. branch 이름은 patch에서 결정적으로 유도되므로
+`LiveDeploymentCommitResolver`가 같은 이름으로 merge commit을 찾는 §3·§4의 경로와 맞물린다. patch
+바이트는 `packages/contracts`가 아니라 `apps/backend/remediation/patch_content.py`의 canonical 형식이며
+DynamoDB에 content-addressed로 저장한다 — Artifact bucket은 ADR-0014의 tenant identity 검토 뒤에 연다.
+
 ## 고정돼야 하는 불변식
 
 이 ADR이 참이라면 아래 아홉 개가 테스트로 고정될 수 있어야 한다.

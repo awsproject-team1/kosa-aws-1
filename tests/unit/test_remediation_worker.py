@@ -2,6 +2,7 @@
 
 import unittest
 
+from agent.runtime.github_write_tool import OpenedPullRequest
 from apps.backend.remediation import (
     RemediationSyncTarget,
     RemediationWork,
@@ -132,26 +133,50 @@ class SyncAction:
 class ResultStore:
     def __init__(self):
         self.calls = []
+        self.pull_requests = []
 
     def put_result_if_absent(self, *, work, result):
         self.calls.append((work, result))
+
+    def put_pull_request_if_absent(self, *, work, pull_request):
+        self.pull_requests.append((work, pull_request))
+
+
+class PullRequestAction:
+    def __init__(self):
+        self.calls = []
+
+    def open(self, *, context, patch):
+        self.calls.append((context, patch))
+        return OpenedPullRequest(
+            customer_id=patch.artifact.customer_id,
+            repository_id=patch.artifact.repository_id,
+            finding_id=patch.finding_id,
+            head_branch="remediation/" + patch.finding_id,
+            head_commit_sha="c" * 40,
+            base_branch="main",
+            number=7,
+            url="https://github.example/pull/7",
+        )
 
 
 def task(command: WorkflowCommand) -> WorkflowTask:
     return WorkflowTask(job_id="job-001", expected_revision=2, command=command)
 
 
-def worker(value):
+def worker(value, *, pull_requests: PullRequestAction | None = None):
     repository = WorkRepository(value)
     patch = PatchAction()
     sync = SyncAction()
     results = ResultStore()
+    pull_requests = pull_requests or PullRequestAction()
     return (
         RemediationWorker(
             work_repository=repository,
             patch_action=patch,
             sync_action=sync,
             result_store=results,
+            pull_request_action=pull_requests,
         ),
         repository,
         patch,

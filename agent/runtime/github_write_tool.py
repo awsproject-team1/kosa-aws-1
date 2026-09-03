@@ -89,6 +89,53 @@ class ProposedPullRequest:
         }
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OpenedPullRequest:
+    """The pull request that actually exists on GitHub for one patch.
+
+    `ProposedPullRequest`가 "무엇을 올릴 것인가"라면 이 값은 "무엇이 올라갔는가"다. Deployment 생성은
+    이 값을 읽지 않는다 — apply 대상은 사람이 merge한 뒤 `LiveDeploymentCommitResolver`가 branch
+    이름으로 다시 찾는 merge commit이다. 이 값은 감사와 화면 표시를 위해 REMEDIATION item에 남는다.
+    """
+
+    customer_id: str
+    repository_id: str
+    finding_id: str
+    head_branch: str
+    head_commit_sha: str
+    base_branch: str
+    number: int
+    url: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "customer_id",
+            "repository_id",
+            "finding_id",
+            "head_branch",
+            "head_commit_sha",
+            "base_branch",
+            "url",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        if isinstance(self.number, bool) or not isinstance(self.number, int) or self.number <= 0:
+            raise ValueError("number must be a positive integer")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "customer_id": self.customer_id,
+            "repository_id": self.repository_id,
+            "finding_id": self.finding_id,
+            "head_branch": self.head_branch,
+            "head_commit_sha": self.head_commit_sha,
+            "base_branch": self.base_branch,
+            "number": self.number,
+            "url": self.url,
+        }
+
+
 @runtime_checkable
 class GitHubWriteTool(Protocol):
     """승인된 patch에 대한 GitHub write 제안을 만드는 경계."""

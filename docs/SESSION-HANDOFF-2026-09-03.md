@@ -180,6 +180,10 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   내용을 담고 있으므로, 아래 B(PR write)로 정식 복원하거나 수동 revert.
 
 ### B. patch → S3 저장 + GitHub PR write (폐루프의 "PR 준비물")
+- **2026-09-03 반영됨:** patch 바이트는 DynamoDB `REMEDIATION_PATCH#{digest}`에 content-addressed로
+  저장하고(`DynamoDbPatchContentStore`, S3는 ADR-0014 tenant identity 검토 뒤), `LiveGitHubWriteTool`이
+  branch/commit/PR을 연다. Worker는 `DEPLOYMENT_RUNTIME_JSON`이 있을 때만 TERRAFORM_PATCH를 진행한다.
+  남은 것은 재배포와 라이브 1회 확인(아래 C 선행 조건과 같다).
 - 현재는 patch **생성·바인딩**까지. `BedrockPatchGenerator`가 만든 변경 내용을 실제로 S3 artifact로
   저장하고, `agent/runtime/github_write_tool.py`(존재)로 branch/commit/PR을 만드는 **D write port**
   배선이 남음. `RemediationPatch`는 changed_paths와 content digest만 담고 patch 바이트는 별도 저장 필요.
