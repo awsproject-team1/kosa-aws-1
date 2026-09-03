@@ -301,6 +301,13 @@ Artifact 바이트로만 존재한다. Queue payload와 DynamoDB item이 이 Con
 signature, Parser 지원 형식) 3자를 대조하고, Markdown/Plain text/CSV/XLSX/DOCX Parser가 같은
 `NormalizedPolicyDocument`를 만든다. Parser는 표준 라이브러리만 쓴다 —
 `apps/backend/requirements.txt`가 비어 있는 ZIP Lambda 배포 구조가 형식 목록의 제약이다.
+
+관리자 콘솔의 read/관리 경계(`GET /policy-sources` 문서 목록, `DELETE /policy-sources/{id}/versions/{ver}`
+미승인 문서 삭제, `GET /scope` 연결 repository, `POST/GET /admin/users`·`POST /admin/users/profile`
+사용자 관리)는 새 typed Contract를 만들지 않고 위 수집 Contract와 Cognito 속성 위에서 동작한다.
+목록·scope·사용자 응답은 요약 dict이며 원문·units·정규화 text를 담지 않는다. 삭제는 승인 record가
+있는 Source를 거부하고(Profile evidence 보호), 사용자별 Profile 지정은 Cognito 표준 `profile`
+속성에 저장한다. HTTP 형태는 `docs/API.md`가 정본이다.
 실패는 예외가 아니라 `FAILED` 상태와 failure code로 돌아온다.
 
 Parser 경계는 신뢰할 수 없는 고객 문서를 읽으므로 fail-closed 한도를 함께 강제한다: 업로드
