@@ -1,0 +1,3 @@
+# Replace with a globally unique value in the customer-controlled repository.
+# Do not use customer names, policy text, or production workload identifiers.
+sandbox_bucket_name = "replace-with-an-opaque-unique-sandbox-bucket"

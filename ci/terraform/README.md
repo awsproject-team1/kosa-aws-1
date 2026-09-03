@@ -17,11 +17,20 @@ template이다. Platform(GitHub App)은 이 파일을 만들거나 수정하지 
   `(repository_id, workspace)`로 분리하고 workspace 이름은 `{customer_id}-{repository_id}`다.
 - **OIDC Role (ADR-0007, §6):** plan job은 `TerraformPlanRole`, apply job은
   `TerraformDeploymentRole`을 assume한다. OIDC trust는 exact repository와 exact environment
-  subject로 제한한다.
+  subject로 제한한다. Organization이 custom OIDC subject template을 사용하면 repository 이름
+  대신 immutable organization/repository ID가 포함될 수 있으므로, GitHub가 실제 발급한 `sub` claim을
+  trust policy에 그대로 사용한다.
 - **Protected Environment (§6):** apply job은 required reviewers가 붙은 protected Environment를
-  2차 게이트로 둔다.
+  2차 게이트로 둔다. plan job도 별도 `customer-terraform-plan` Environment를 사용해 OIDC
+  subject와 backend 변수를 고정한다.
 - **Version pin (§1):** workflow는 Terraform version을 고정하고, repository는
   `.terraform.lock.hcl`을 커밋한다. Provider 버전이 흔들리면 같은 commit에서 다른 plan이 나온다.
+- **Environment variables:** `customer-terraform-plan`에는 `AWS_REGION`, `TF_PLAN_ROLE_ARN`,
+  `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_LOCK_TABLE`을, `customer-terraform-apply`에는
+  `AWS_REGION`, `TF_APPLY_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_LOCK_TABLE`을
+  GitHub Environment variables로 설정한다. 두 Environment에는 Terraform input인
+  `SANDBOX_BUCKET_NAME`도 같은 값으로 설정한다. state 설정과 bucket 이름은 workflow input이나
+  repository file에 넣지 않으며, 두 Environment의 backend 값은 완전히 같아야 한다.
 
 ## 경계 규약
 
