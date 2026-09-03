@@ -228,6 +228,7 @@ def _http_handler() -> JobHttpHandler:
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
         orchestrations=_orchestration_components(),
+        users=_user_management_components(),
     )
 
 
@@ -416,6 +417,24 @@ def _remediation_exception_reader() -> DynamoDbRemediationExceptionRepository:
         table_name=table_name,
         transaction_client=boto3.client("dynamodb"),
     )
+
+
+def _user_management_components() -> object | None:
+    """Construct the Admin user-management service. Needs USER_POOL_ID and Cognito access.
+
+    Returns None when the pool id is not configured so the route stays closed rather than
+    exposing an endpoint that always fails.
+    """
+    pool = os.environ.get("USER_POOL_ID")
+    if not pool or not pool.strip():
+        return None
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    from apps.backend.api.users import UserManagementService
+
+    return UserManagementService(client=boto3.client("cognito-idp"), user_pool_id=pool.strip())
 
 
 def _policy_source_components() -> tuple[PolicySourceApiService, object]:

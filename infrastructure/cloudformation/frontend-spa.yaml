@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Frontend SPA hosting for the Cloud Governance console: a private S3 origin fronted by
+  CloudFront with Origin Access Control. The bucket blocks all public access; only the
+  CloudFront distribution for this account may read it. Kept as a separate stack from the
+  M0 foundation so redeploying the console never risks the API/auth/data stack.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: kosa-governance
+    AllowedPattern: "[a-z][a-z0-9-]{2,40}"
+    ConstraintDescription: Lowercase project prefix shared with the foundation stack.
+  Environment:
+    Type: String
+    Default: sandbox
+    AllowedValues: [sandbox, staging, production]
+
+Resources:
+  # Private origin. No public access; no website hosting. CloudFront reads it via OAC only.
+  SpaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Bucket policy: allow only this account's CloudFront distribution to GetObject, over TLS.
+  SpaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SpaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOACReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${SpaBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${SpaDistribution}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt SpaBucket.Arn
+              - !Sub "${SpaBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  SpaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${ProjectName}-${Environment}-spa-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SpaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${ProjectName}-${Environment} governance console"
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: SpaS3Origin
+            DomainName: !GetAtt SpaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SpaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: SpaS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          # AWS managed "CachingOptimized" policy. Avoids the legacy ForwardedValues path.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        # SPA client-side routing: S3 returns 403 for unknown keys, so serve index.html.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  SpaBucketName:
+    Description: S3 bucket that holds the built SPA assets.
+    Value: !Ref SpaBucket
+  DistributionId:
+    Description: CloudFront distribution ID (used for cache invalidation).
+    Value: !Ref SpaDistribution
+  DistributionDomainName:
+    Description: CloudFront domain; the SPA and Cognito callback URL use https://<this>.
+    Value: !GetAtt SpaDistribution.DomainName
+  ConsoleUrl:
+    Description: Full HTTPS URL of the governance console.
+    Value: !Sub "https://${SpaDistribution.DomainName}"

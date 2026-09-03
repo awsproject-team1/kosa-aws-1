@@ -23,18 +23,14 @@ REPO_ROOT = Path(__file__).parents[2]
 FRONTEND = REPO_ROOT / "apps/frontend/src/main.tsx"
 
 #: TypeScript response type in the frontend → (module, class) whose `to_dict()` produces it.
+#: Only API-response types are listed. The redesigned SPA also declares internal view-model types
+#: (Observer/QueueJob/PipelineStep/Session/Turn) that are not API responses and are not checked.
 _RESPONSE_CONTRACTS = {
-    "Deployment": ("apps/backend/api/deployments.py", "DeploymentView"),
-    "Comparison": ("packages/contracts/assessments.py", "AssessmentComparison"),
-    "FindingResolution": ("packages/contracts/assessments.py", "FindingResolutionResult"),
-    "Coverage": ("packages/contracts/assessments.py", "AssessmentCoverage"),
-    "ReadinessScore": ("packages/contracts/assessments.py", "ReadinessScore"),
-    "Finding": ("packages/contracts/assessments.py", "Finding"),
-    "Result": ("packages/contracts/assessments.py", "EvaluationResult"),
-    "RemediationDecision": ("packages/contracts/remediation_policy.py", "RemediationDecision"),
-    "RemediationStart": ("packages/contracts/remediation.py", "RemediationStartResponse"),
+    "OrchestrationDecision": ("packages/contracts/orchestration.py", "OrchestrationDecision"),
     "Report": ("apps/backend/assessment/reporting.py", "AssessmentReport"),
-    "Suppression": ("apps/backend/policy/remediation.py", "FindingSuppression"),
+    "UploadSession": ("apps/backend/api/policy_sources.py", "PolicySourceUploadSession"),
+    "NormalizedDoc": ("packages/contracts/policy_ingestion.py", "NormalizedPolicyDocument"),
+    "CandidatePage": ("apps/backend/api/policy_candidates.py", "PolicyCandidatePage"),
 }
 
 _TS_TYPE = "type {name} = {{"
@@ -112,10 +108,13 @@ class FrontendResponseContractTest(unittest.TestCase):
                 )
 
     def test_the_mapping_covers_every_response_type_the_frontend_declares(self) -> None:
-        """새 응답 type을 추가하고 이 표에 넣지 않으면 검사에서 조용히 빠진다."""
-        declared = set(re.findall(r"^type (\w+) = \{", self.source, flags=re.MULTILINE))
+        """모든 매핑된 API 응답 type이 실제로 SPA에 선언돼 있어야 한다.
 
-        self.assertEqual(declared, set(_RESPONSE_CONTRACTS))
+        재설계된 SPA는 API 응답이 아닌 내부 view-model type(Observer/Session/Turn 등)도 선언한다.
+        그것들은 이 검사 대상이 아니므로, '매핑된 응답 type이 모두 존재하는가'만 확인한다.
+        """
+        declared = set(re.findall(r"^type (\w+) = \{", self.source, flags=re.MULTILINE))
+        self.assertLessEqual(set(_RESPONSE_CONTRACTS), declared)
 
     def test_a_field_no_contract_emits_is_detected(self) -> None:
         """이 검사가 실제로 무언가를 잡는지 확인한다 (통과만 하는 검사가 아니다)."""
@@ -123,25 +122,15 @@ class FrontendResponseContractTest(unittest.TestCase):
             declared = _ts_type_fields(
                 "type Fake = { resource_id: string; not_a_contract_field: string };", "Fake"
             )
-            emitted = _to_dict_keys(*_RESPONSE_CONTRACTS["FindingResolution"])
+            emitted = _to_dict_keys(*_RESPONSE_CONTRACTS["Report"])
             self.assertLessEqual(
                 declared, emitted, f"Fake reads {sorted(declared - emitted)} which never emits"
             )
 
-    def test_login_round_trip_restores_the_requested_screen(self) -> None:
-        self.assertIn(
-            "sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`)",
-            self.source,
-        )
-        self.assertIn('history.replaceState({}, "", destination)', self.source)
-        self.assertIn("setRoute(routeFromLocation());", self.source)
-
-    def test_starting_an_assessment_keeps_the_in_memory_access_token(self) -> None:
-        self.assertIn("onStarted(result.assessment_id);", self.source)
-        self.assertIn('history.pushState({}, "",', self.source)
-        self.assertNotIn(
-            "window.location.assign(`${window.location.pathname}?assessment_id=", self.source
-        )
+    def test_assessment_confirmation_keeps_the_in_memory_access_token(self) -> None:
+        """챗봇에서 Assessment를 시작해도 in-memory 토큰만 쓰고 페이지를 리로드하지 않는다."""
+        self.assertIn("onAssessment(r.assessment_id)", self.source)
+        self.assertNotIn("window.location.assign(`${window.location.pathname}?", self.source)
 
 
 if __name__ == "__main__":

@@ -1,355 +1,426 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-type Result = { resource_id: string; rule_id: string; perspective: string; status: string; score: number; severity: string; rationale: string; evidence_references: string[] };
-type Finding = { finding_id: string; resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; assessed_commit_sha: string | null; evaluated_at: string | null };
-type ReadinessScore = { score: number; evaluated_evaluations: number };
-type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string; ticket_reference: string | null };
-type Report = { assessment_id: string; results: Result[]; findings: Finding[]; readiness_score: ReadinessScore | null; next_cursor: string | null; findings_next_cursor: string | null; coverage: { planned_evaluations: number; completed_evaluations: number; percentage: number }; suppressions: Suppression[] };
-type RemediationDecision = { finding_id: string; resource_id: string; rule_id: string; rule_version: string; perspective: string; action: string; manual_review_code: string | null; exception_id: string | null };
-type RemediationStart = { decision: RemediationDecision; job: { job_id: string; status: string } | null };
-type Deployment = { deployment_id: string; status: string; commit_sha: string; remediation_id: string; source_assessment_id: string; plan_hash: string | null; verification_assessment_id: string | null };
-type Coverage = { planned_evaluations: number; completed_evaluations: number; percentage: number };
-type FindingResolution = { resource_id: string; rule_id: string; rule_version: string; perspective: string; resolution: string };
-type Comparison = { source_assessment_id: string; verification_assessment_id: string; deployment_id: string; comparable: boolean; ineligibility_reasons: string[]; source_coverage: Coverage; verification_coverage: Coverage; source_readiness_score: ReadinessScore | null; verification_readiness_score: ReadinessScore | null; readiness_score_delta: number | null; finding_resolutions: FindingResolution[] };
+/* =========================================================================
+ * Config
+ * =======================================================================*/
+const API = import.meta.env.VITE_API_BASE_URL ?? "";
+const COGNITO_DOMAIN = import.meta.env.VITE_COGNITO_DOMAIN as string;
+const COGNITO_CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID as string;
+const REDIRECT_URI = (import.meta.env.VITE_COGNITO_REDIRECT_URI as string) ?? window.location.origin;
+const enc = encodeURIComponent;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-//: Enumerated reject reasons; the API rejects free text (ADR-0019 §8), so the UI offers the
-//: exact enum rather than a text box.
-const rejectionReasons = ["NOT_APPROVED_BY_POLICY", "PLAN_OUTDATED", "RISK_TOO_HIGH", "SUPERSEDED", "OTHER"] as const;
+/* =========================================================================
+ * Types (API wire shapes)
+ * =======================================================================*/
+type OrchestrationDecision = { intent: string; rationale: string; answer: string | null; selector: (Record<string, unknown> & { repository_id?: string; policy_profile_id?: string }) | null; requires_confirmation: boolean };
+type NormalizedDoc = { source_id: string; source_version: string; status: string; source_format: string | null; byte_size: number; units: { locator: string }[]; warnings: string[]; failure_code: string | null };
+type UploadSession = { source_id: string; source_version: string; upload_url: string };
+type Candidate = { rule_id: string; rule_version: string; classification: string; requirement_summary: string; mapping_reason: string; control_key: string; evaluation_type: string; proposed_severity: string; resource_types: string[] };
+type CandidatePage = { status: string; counts: Record<string, number> | null; candidates: Candidate[]; unsupported: { requirement_summary?: string; requirement?: string }[]; rejected: unknown[]; cursor: string | null };
+type Report = { assessment_id: string; results: { resource_id: string; rule_id: string; perspective: string; status: string; score: number }[]; findings: { finding_id: string; resource_id: string; rule_id: string; status: string; severity: string; score: number; rationale: string }[]; readiness_score: { score: number } | null; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number } };
 
-//: Statuses at which an Admin may still act. `WAITING_APPROVAL` is the only one that accepts an
-//: approval; the derived status is presentation-only and the API re-checks facts either way
-//: (ADR-0019 §8), so this only decides which controls to render.
-const approvableStatuses = new Set(["WAITING_APPROVAL"]);
-const rejectableStatuses = new Set(["PLAN_COMPLETED", "READINESS_EVALUATED", "WAITING_APPROVAL", "BLOCKED", "MANUAL_REVIEW"]);
+/* =========================================================================
+ * Observability store — the whole point: show what's happening inside.
+ * =======================================================================*/
+type LightState = "pending" | "active" | "done" | "failed";
+type GraphNodeId = "parent" | "policy_qa" | "assessment" | "remediation" | "deployment" | "authoring";
+type QueueJob = { id: string; label: string; queue: string; state: LightState; meta?: string };
+type PipelineStep = { key: string; label: string; state: LightState };
+type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null };
+const OBS_DEFAULT: Observer = { nodeStates: {}, jobs: [], pipeline: null };
 
-const verifierKey = "governance.oauth.pkce.verifier";
-const stateKey = "governance.oauth.state";
-const returnToKey = "governance.oauth.return-to";
-const cognitoDomain = import.meta.env.VITE_COGNITO_DOMAIN;
-const cognitoClientId = import.meta.env.VITE_COGNITO_CLIENT_ID;
-const redirectUri = import.meta.env.VITE_COGNITO_REDIRECT_URI ?? window.location.origin;
-
-function base64Url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+function useObserver() {
+  const [obs, setObs] = useState<Observer>(OBS_DEFAULT);
+  const api = useMemo(() => ({
+    lightNode(node: GraphNodeId, state: LightState) { setObs(o => ({ ...o, nodeStates: { ...o.nodeStates, [node]: state } })); },
+    upsertJob(job: QueueJob) { setObs(o => ({ ...o, jobs: [job, ...o.jobs.filter(j => j.id !== job.id)].slice(0, 8) })); },
+    setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
+    patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
+  }), []);
+  return { obs, ...api };
 }
+type ObserverApi = ReturnType<typeof useObserver>;
 
-async function sha256(value: string) {
-  return base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))));
-}
-
+/* =========================================================================
+ * Auth — Cognito Hosted UI PKCE; role from cognito:groups in the ID token.
+ * =======================================================================*/
+const verifierKey = "gov.pkce.verifier";
+const stateKey = "gov.pkce.state";
+function b64url(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
+async function sha256(v: string) { return b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))); }
 async function startLogin() {
-  if (!cognitoDomain || !cognitoClientId) throw new Error("Cognito frontend configuration is missing.");
-  const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const state = base64Url(crypto.getRandomValues(new Uint8Array(16)));
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   sessionStorage.setItem(verifierKey, verifier);
   sessionStorage.setItem(stateKey, state);
-  const returnTo = new URL(window.location.href);
-  returnTo.searchParams.delete("code");
-  returnTo.searchParams.delete("state");
-  sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`);
-  const query = new URLSearchParams({ client_id: cognitoClientId, response_type: "code", scope: "openid email", redirect_uri: redirectUri, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
-  window.location.assign(`https://${cognitoDomain}/oauth2/authorize?${query}`);
+  const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, response_type: "code", scope: "openid email", redirect_uri: REDIRECT_URI, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
+  window.location.assign(`https://${COGNITO_DOMAIN}/oauth2/authorize?${q}`);
 }
-
-async function exchangeCallback() {
-  const query = new URLSearchParams(window.location.search);
-  const code = query.get("code");
-  if (!code) return null;
-  if (!cognitoDomain || !cognitoClientId) throw new Error("Cognito frontend configuration is missing.");
-  if (query.get("state") !== sessionStorage.getItem(stateKey)) throw new Error("Cognito login state did not match.");
-  const verifier = sessionStorage.getItem(verifierKey);
-  if (!verifier) throw new Error("Cognito login verifier is missing.");
-  const body = new URLSearchParams({ grant_type: "authorization_code", client_id: cognitoClientId, code, redirect_uri: redirectUri, code_verifier: verifier });
-  const response = await fetch(`https://${cognitoDomain}/oauth2/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
-  if (!response.ok) throw new Error("Cognito access token exchange failed.");
-  const token = await response.json() as { access_token?: unknown };
-  if (typeof token.access_token !== "string" || !token.access_token) throw new Error("Cognito did not return an access token.");
-  sessionStorage.removeItem(verifierKey);
-  sessionStorage.removeItem(stateKey);
-  const returnTo = sessionStorage.getItem(returnToKey);
-  sessionStorage.removeItem(returnToKey);
-  const destination = returnTo?.startsWith("/") && !returnTo.startsWith("//")
-    ? returnTo
-    : window.location.pathname;
-  history.replaceState({}, "", destination);
-  return token.access_token;
+type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null };
+function decodeJwt(token: string): Record<string, unknown> {
+  const json = atob(token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"));
+  return JSON.parse(decodeURIComponent(escape(json)));
 }
-
-function StartAssessment({ accessToken, onStarted }: { accessToken: string; onStarted: (assessmentId: string) => void }) {
-  const [repositoryId, setRepositoryId] = useState("");
-  const [policyProfileId, setPolicyProfileId] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const result = await api<{ assessment_id?: unknown }>("/assessments", accessToken, {
-      method: "POST",
-      body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: policyProfileId }),
-    });
-    if (typeof result.assessment_id !== "string" || !result.assessment_id) throw new Error("Assessment ID를 받지 못했습니다.");
-    onStarted(result.assessment_id);
-  }
-  return <main><h1>Initial Assessment</h1><form onSubmit={event => void submit(event).catch((reason: Error) => setError(reason.message))}><label>Repository ID <input required value={repositoryId} onChange={event => setRepositoryId(event.target.value)} /></label><label>Policy Profile ID <input required value={policyProfileId} onChange={event => setPolicyProfileId(event.target.value)} /></label><button type="submit">Assessment 시작</button>{error && <p role="alert">{error}</p>}</form></main>;
-}
-
-//: Statuses a person has to settle rather than remediate. MANUAL_REVIEW means no tool observes
-//: the control; INSUFFICIENT_EVIDENCE means the read-only Actual read did not carry what the rule
-//: needs. Neither is a violation, so they are listed apart from FAIL and never labelled as one.
-const reviewStatuses = new Set(["MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
-
-//: Resource-state evidence namespaces (docs/CONTRACTS.md "Evidence reference boundary"). Anything
-//: else is a policy locator `{source_id}@{source_version}#{locator}`.
-const resourceEvidencePrefixes = ["aws:", "terraform:", "s3://"];
-const isResourceEvidence = (reference: string) => resourceEvidencePrefixes.some(prefix => reference.startsWith(prefix));
-
-function AssessmentReport({ assessmentId, accessToken }: { assessmentId: string; accessToken: string }) {
-  const [report, setReport] = useState<Report | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    // Without an assessment_id there is nothing to read yet; the start form owns that step.
-    if (!assessmentId) return;
-    const params = new URLSearchParams({ limit: "25" });
-    if (cursor) params.set("cursor", cursor);
-    if (findingsCursor) params.set("findings_cursor", findingsCursor);
-    api<Report>(`/assessments/${encodeURIComponent(assessmentId)}?${params}`, accessToken)
-      .then(next => setReport(previous => previous && (cursor || findingsCursor) ? { ...next, results: uniqueResults([...previous.results, ...next.results]), findings: uniqueFindings([...previous.findings, ...next.findings]), suppressions: uniqueSuppressions([...previous.suppressions, ...next.suppressions]) } : next))
-      .catch((reason: Error) => setError(reason.message));
-  }, [accessToken, assessmentId, cursor, findingsCursor]);
-  if (error) return <p role="alert">{error}</p>;
-  if (!report) return <p>Assessment 결과를 불러오는 중…</p>;
-  const suppressionByFinding = new Map(report.suppressions.map(note => [note.finding_id, note]));
-  const violations = report.findings.filter(finding => !reviewStatuses.has(finding.status));
-  const reviews = report.findings.filter(finding => reviewStatuses.has(finding.status));
-  return <main>
-    <h1>Initial Assessment</h1>
-    <section>
-      <strong>평가 실행률 {report.coverage.percentage}%</strong>
-      <span>{report.coverage.completed_evaluations} / {report.coverage.planned_evaluations} applicable evaluations</span>
-      <strong>Readiness Score {report.readiness_score ? report.readiness_score.score : "계산 대기"}</strong>
-      <span>severity 가중 평균이며 인증 판정이 아닙니다. Drift와 사람 검토 항목은 평균에서 제외됩니다.</span>
-    </section>
-    <h2>위반 Finding ({violations.length})</h2>
-    {violations.length === 0 && <p>FAIL로 판정된 항목이 없습니다.</p>}
-    {violations.map(finding => <FindingCard key={finding.finding_id} finding={finding} suppression={suppressionByFinding.get(finding.finding_id)} accessToken={accessToken} />)}
-    <h2>사람 검토 필요 ({reviews.length})</h2>
-    {reviews.length === 0 && <p>도구가 판단하지 못한 항목이 없습니다.</p>}
-    {reviews.map(finding => <FindingCard key={finding.finding_id} finding={finding} suppression={suppressionByFinding.get(finding.finding_id)} accessToken={accessToken} />)}
-    {report.findings_next_cursor && <button onClick={() => setFindingsCursor(report.findings_next_cursor)}>Findings 더 보기</button>}
-    <h2>Evaluation results</h2>
-    <table><thead><tr><th>Resource</th><th>Rule</th><th>Perspective</th><th>Status</th><th>Score</th><th>근거</th></tr></thead><tbody>{report.results.map(result => <tr key={`${result.resource_id}-${result.rule_id}-${result.perspective}`}><td>{result.resource_id}</td><td>{result.rule_id}</td><td>{result.perspective}</td><td>{result.status}</td><td>{result.score}</td><td><details><summary>{result.evidence_references.length}건</summary><EvidenceList references={result.evidence_references} /><p>{result.rationale}</p></details></td></tr>)}</tbody></table>
-    {report.next_cursor && <button onClick={() => setCursor(report.next_cursor)}>Load more</button>}
-  </main>;
-}
-
-/** Policy locators and resource-state evidence are listed apart so a reviewer can trace both. */
-function EvidenceList({ references }: { references: string[] }) {
-  const policy = references.filter(reference => !isResourceEvidence(reference));
-  const resource = references.filter(isResourceEvidence);
-  return <dl>
-    <dt>정책 근거</dt><dd>{policy.length ? <ul>{policy.map(reference => <li key={reference}><code>{reference}</code></li>)}</ul> : "없음"}</dd>
-    <dt>리소스 상태 근거</dt><dd>{resource.length ? <ul>{resource.map(reference => <li key={reference}><code>{reference}</code></li>)}</ul> : "없음"}</dd>
-  </dl>;
-}
-
-/**
- * One Finding with the explanation a reviewer needs before deciding anything.
- *
- * The rationale and evidence are the point of the row (docs/PRD.md: evidence traceability), not the
- * score. A suppression note is display-only — the Finding itself is unchanged and the exception
- * expires (ADR-0020 §6). Review statuses get no remediation button: there is nothing to patch until a
- * person settles what the tool could not observe.
- */
-function FindingCard({ finding, suppression, accessToken }: { finding: Finding; suppression: Suppression | undefined; accessToken: string }) {
-  const isReview = reviewStatuses.has(finding.status);
-  return <article>
-    <header>
-      <strong>{finding.severity}</strong> · {finding.status} · {finding.resource_id} · {finding.rule_id}@{finding.rule_version} · {finding.perspective} · score {finding.score}
-      {!isReview && <> · <RemediateFinding finding={finding} accessToken={accessToken} /></>}
-    </header>
-    {suppression && <p role="note">예외로 억제됨 ({suppression.reason}, {suppression.expires_at}까지{suppression.ticket_reference ? `, ${suppression.ticket_reference}` : ""}). 위반 사실은 그대로이며 조치 판정에서만 제외됩니다.</p>}
-    <details open={isReview}>
-      <summary>판단 이유와 근거</summary>
-      <p>{finding.rationale}</p>
-      <EvidenceList references={finding.evidence_references} />
-      {finding.assessed_commit_sha && <p>평가 commit {finding.assessed_commit_sha.slice(0, 12)} · {finding.evaluated_at}</p>}
-    </details>
-  </article>;
-}
-
-/**
- * Owns the customer session and picks the screen.
- *
- * The access token lives here rather than in each screen so the deployment approval screen and
- * the Assessment screen cannot end up authenticated differently.
- */
-function routeFromLocation() {
+async function exchangeCallback(): Promise<Session | null> {
   const params = new URLSearchParams(window.location.search);
-  return {
-    assessmentId: params.get("assessment_id") ?? "",
-    deploymentId: params.get("deployment_id") ?? "",
-  };
+  const code = params.get("code");
+  if (!code) return null;
+  if (params.get("state") !== sessionStorage.getItem(stateKey)) throw new Error("로그인 state 불일치");
+  const verifier = sessionStorage.getItem(verifierKey);
+  if (!verifier) throw new Error("로그인 verifier 없음");
+  const body = new URLSearchParams({ grant_type: "authorization_code", client_id: COGNITO_CLIENT_ID, code, redirect_uri: REDIRECT_URI, code_verifier: verifier });
+  const res = await fetch(`https://${COGNITO_DOMAIN}/oauth2/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+  if (!res.ok) throw new Error("토큰 교환 실패");
+  const tok = await res.json() as { access_token?: string; id_token?: string };
+  if (!tok.access_token || !tok.id_token) throw new Error("토큰 없음");
+  sessionStorage.removeItem(verifierKey); sessionStorage.removeItem(stateKey);
+  history.replaceState({}, "", window.location.pathname);
+  const claims = decodeJwt(tok.id_token);
+  const groups = Array.isArray(claims["cognito:groups"]) ? (claims["cognito:groups"] as string[]) : [];
+  return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null };
 }
 
-function App() {
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [route, setRoute] = useState(routeFromLocation);
-  useEffect(() => {
-    exchangeCallback()
-      .then(token => {
-        if (token) setAccessToken(token);
-        setRoute(routeFromLocation());
-      })
-      .catch((reason: Error) => setError(reason.message));
-    const onPopState = () => setRoute(routeFromLocation());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
-  if (!accessToken) {
-    return <main>
-      <h1>Cloud Governance</h1>
-      <p>고객 Cognito 계정으로 로그인해 Assessment 결과와 배포 승인을 확인하세요.</p>
-      <button onClick={() => void startLogin().catch((reason: Error) => setError(reason.message))}>Cognito로 로그인</button>
-      {error && <p role="alert">{error}</p>}
-    </main>;
-  }
-  if (route.deploymentId) return <DeploymentPanel deploymentId={route.deploymentId} accessToken={accessToken} />;
-  if (!route.assessmentId) return <StartAssessment accessToken={accessToken} onStarted={assessmentId => {
-    const params = new URLSearchParams(window.location.search);
-    params.delete("deployment_id");
-    params.set("assessment_id", assessmentId);
-    history.pushState({}, "", `${window.location.pathname}?${params}${window.location.hash}`);
-    setRoute(routeFromLocation());
-  }} />;
-  return <AssessmentReport assessmentId={route.assessmentId} accessToken={accessToken} />;
+/* =========================================================================
+ * API helpers
+ * =======================================================================*/
+async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API}${path}`, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), Authorization: `Bearer ${token}`, ...init?.headers } });
+  if (!res.ok) { const d = await res.json().catch(() => null) as { code?: string } | null; throw new Error(d?.code ? `${res.status} ${d.code}` : `요청 실패 (${res.status})`); }
+  return res.json() as Promise<T>;
+}
+async function putPresigned(url: string, file: File, contentType: string) {
+  const res = await fetch(url, { method: "PUT", headers: { "content-type": contentType }, body: file });
+  if (!res.ok) throw new Error(`원본 업로드 실패 (${res.status})`);
 }
 
-function uniqueResults(values: Result[]) { return [...new Map(values.map(value => [`${value.resource_id}:${value.rule_id}:${value.perspective}`, value])).values()]; }
-function uniqueFindings(values: Finding[]) { return [...new Map(values.map(value => [value.finding_id, value])).values()]; }
-function uniqueSuppressions(values: Suppression[]) { return [...new Map(values.map(value => [`${value.finding_id}:${value.exception_id}`, value])).values()]; }
+/* per-user profile assignment + known profiles (client-side for the demo) */
+const assignKey = "gov.userProfiles";
+const profKey = "gov.knownProfiles";
+function loadAssignments(): Record<string, string> { try { return JSON.parse(localStorage.getItem(assignKey) ?? "{}"); } catch { return {}; } }
+function saveAssignment(email: string, pid: string) { const a = loadAssignments(); a[email] = pid; localStorage.setItem(assignKey, JSON.stringify(a)); }
+function loadProfiles(): string[] { try { return JSON.parse(localStorage.getItem(profKey) ?? "[]"); } catch { return []; } }
+function addProfile(id: string) { const p = new Set(loadProfiles()); p.add(id); localStorage.setItem(profKey, JSON.stringify([...p])); }
 
-/** Call the governance API with the customer's access token, surfacing the API error body. */
-async function api<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: { ...(init?.body ? { "content-type": "application/json" } : {}), Authorization: `Bearer ${accessToken}`, ...init?.headers },
-  });
-  if (!response.ok) {
-    // The API returns an enumerated error code, never policy text or resource internals.
-    const detail = await response.json().catch(() => null) as { code?: unknown } | null;
-    throw new Error(typeof detail?.code === "string" ? `${response.status} ${detail.code}` : `요청이 실패했습니다 (${response.status}).`);
-  }
-  return response.json() as Promise<T>;
+/* =========================================================================
+ * Left observability panel
+ * =======================================================================*/
+const GRAPH: { id: GraphNodeId; name: string; sub?: boolean; note?: string }[] = [
+  { id: "parent", name: "Parent Orchestrator", note: "자연어 라우팅" },
+  { id: "policy_qa", name: "Policy Q&A", sub: true },
+  { id: "assessment", name: "Assessment", sub: true, note: "IAC·ACTUAL·DRIFT" },
+  { id: "remediation", name: "Remediation", sub: true, note: "patch·sync" },
+  { id: "deployment", name: "Deployment", sub: true, note: "plan·apply·verify" },
+  { id: "authoring", name: "Policy Authoring", sub: true, note: "rule 후보" },
+];
+function ObserverPanel({ obs }: { obs: Observer }) {
+  return <aside className="observer">
+    <div className="obs-title">LangGraph</div>
+    <div className="graph">
+      {GRAPH.map(n => {
+        const st = obs.nodeStates[n.id] ?? "";
+        return <div key={n.id} className={["node", n.sub ? "sub" : "parent", st].join(" ")}>
+          {n.sub && <span className="edge" />}<span className="dot" /><span className="n-name">{n.name}</span>{n.note && <span className="n-sub">{n.note}</span>}
+        </div>;
+      })}
+    </div>
+    {obs.pipeline && <>
+      <div className="obs-title">문서 파이프라인</div>
+      <div className="stepper">{obs.pipeline.map(s => <div key={s.key} className={`step ${s.state}`}><span className={`light ${s.state}`} />{s.label}</div>)}</div>
+    </>}
+    <div className="obs-title">Queue / Jobs</div>
+    {obs.jobs.length === 0 && <div className="obs-empty">진행 중인 작업이 없습니다.</div>}
+    {obs.jobs.map(j => <div key={j.id} className="queue-item"><span className={`light ${j.state}`} /><span className="q-label">{j.label}</span><span className="q-meta">{j.meta ?? j.queue}</span></div>)}
+  </aside>;
 }
 
-/**
- * Start remediation for one Finding.
- *
- * The response is a policy decision, not a promise of change: a non-actionable decision is a
- * normal 200 with no Job, so the UI reports the decision and its `manual_review_code` instead
- * of implying that something is being fixed.
- */
-function RemediateFinding({ finding, accessToken }: { finding: Finding; accessToken: string }) {
-  const [start, setStart] = useState<RemediationStart | null>(null);
-  const [error, setError] = useState<string | null>(null);
+/* =========================================================================
+ * Login (role split)
+ * =======================================================================*/
+function Login({ error }: { error: string | null }) {
+  return <div className="login-wrap"><div className="login-card">
+    <h1>Cloud Governance Console</h1>
+    <p>역할을 선택해 로그인하세요. 실제 권한은 로그인 후 토큰의 그룹으로 결정됩니다.</p>
+    <div className="role-btns">
+      <button className="role-btn" onClick={() => void startLogin()}><span className="r-title">관리자로 로그인</span><span className="r-desc">문서 업로드 · Profile 생성 · 사용자별 Profile 지정 · 평가/조치/배포</span></button>
+      <button className="role-btn" onClick={() => void startLogin()}><span className="r-title">일반 사용자로 로그인</span><span className="r-desc">챗봇으로 평가 요청 · 지정된 Profile 확인 · Finding 검토</span></button>
+    </div>
+    {error && <p className="alert" style={{ marginTop: 16 }}>{error}</p>}
+  </div></div>;
+}
+
+/* =========================================================================
+ * Chat (Parent Orchestrator)
+ * =======================================================================*/
+type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision };
+function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; onAssessment: (id: string) => void }) {
+  const [turns, setTurns] = useState<Turn[]>([{ role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\" 또는 정책 관련 질문." }]);
+  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  if (start) {
-    const { decision, job } = start;
-    return <span>{decision.action}{decision.manual_review_code ? ` (${decision.manual_review_code})` : ""}{job ? ` · job ${job.job_id}` : ""}</span>;
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [turns]);
+
+  async function send() {
+    const text = msg.trim();
+    if (!text || busy) return;
+    setMsg(""); setBusy(true);
+    setTurns(t => [...t, { role: "user", text }]);
+    obs.lightNode("parent", "active");
+    try {
+      const d = await api<OrchestrationDecision>("/orchestrate", session.accessToken, { method: "POST", body: JSON.stringify({ message: text }) });
+      obs.lightNode("parent", "done");
+      const sub: Record<string, GraphNodeId> = { POLICY_QA: "policy_qa", ASSESSMENT: "assessment", REMEDIATION: "remediation", DEPLOYMENT: "deployment" };
+      const node = sub[d.intent];
+      if (node) obs.lightNode(node, d.intent === "POLICY_QA" ? "done" : "pending");
+      setTurns(t => [...t, { role: "bot", text: d.answer ?? d.rationale, decision: d }]);
+    } catch (e) { obs.lightNode("parent", "failed"); setTurns(t => [...t, { role: "bot", text: `오류: ${(e as Error).message}` }]); }
+    finally { setBusy(false); }
   }
-  return <>
-    <button disabled={busy} onClick={() => {
-      setBusy(true);
-      api<RemediationStart>(`/findings/${encodeURIComponent(finding.finding_id)}/remediations`, accessToken, { method: "POST" })
-        .then(setStart).catch((reason: Error) => setError(reason.message)).finally(() => setBusy(false));
-    }}>조치 요청</button>
-    {error && <span role="alert">{error}</span>}
-  </>;
+  async function confirmAssessment(sel: Record<string, unknown> & { repository_id?: string }) {
+    obs.lightNode("assessment", "active");
+    obs.upsertJob({ id: "assess-" + Date.now(), label: "Assessment 시작", queue: "assessment", state: "active" });
+    try {
+      const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: sel.repository_id, policy_profile_id: profileId ?? sel.policy_profile_id }) });
+      if (!r.assessment_id) throw new Error("assessment_id 없음");
+      obs.lightNode("assessment", "done");
+      onAssessment(r.assessment_id);
+    } catch (e) { obs.lightNode("assessment", "failed"); setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]); }
+  }
+  return <div className="chat">
+    <div className="chat-log" ref={logRef}>
+      {turns.map((t, i) => <div key={i} className={`msg ${t.role === "user" ? "user" : ""}`}>
+        <div className={`avatar ${t.role === "user" ? "me" : "bot"}`}>{t.role === "user" ? "나" : "AI"}</div>
+        <div className="bubble">
+          {t.decision && <span className="intent-tag">{t.decision.intent}</span>}
+          <div>{t.text}</div>
+          {t.decision?.intent === "ASSESSMENT" && t.decision.selector && <div className="confirm">
+            <div>제안 범위: repository <code>{t.decision.selector.repository_id ?? "?"}</code> · profile <code>{profileId ?? t.decision.selector.policy_profile_id ?? "미지정"}</code></div>
+            <button style={{ marginTop: 8 }} onClick={() => void confirmAssessment(t.decision!.selector!)}>이 Assessment 시작</button>
+          </div>}
+          {t.decision?.requires_confirmation && t.decision.intent !== "ASSESSMENT" && <div className="confirm"><em>{t.decision.intent} 제안은 해당 화면에서 확인 후 실행합니다.</em></div>}
+        </div>
+      </div>)}
+    </div>
+    <div className="chat-input">
+      <input value={msg} onChange={e => setMsg(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="메시지를 입력하세요…" />
+      <button disabled={busy} onClick={() => void send()}>{busy ? "…" : "보내기"}</button>
+    </div>
+  </div>;
 }
 
-/**
- * Admin deployment screen: derived status, human approval gate, reject, and verification.
- *
- * Approval echoes the exact `commit_sha`/`plan_hash` the status read returned. That is
- * deliberate — the API refuses an approval whose pair does not match the stored plan
- * (ADR-0019 §4), so an operator approving a plan that was replaced meanwhile is rejected
- * rather than silently approving the newer one.
- */
-function DeploymentPanel({ deploymentId, accessToken }: { deploymentId: string; accessToken: string }) {
-  const [deployment, setDeployment] = useState<Deployment | null>(null);
-  const [comparison, setComparison] = useState<Comparison | null>(null);
-  const [reason, setReason] = useState<string>(rejectionReasons[0]);
+/* =========================================================================
+ * Admin: upload with AUTOMATIC pipeline (normalize→extract→poll), select only.
+ * =======================================================================*/
+const FORMATS = [
+  { label: "Markdown", mt: "text/markdown" },
+  { label: "Plain text", mt: "text/plain" },
+  { label: "CSV", mt: "text/csv" },
+  { label: "XLSX", mt: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  { label: "DOCX", mt: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+];
+function UploadPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [mt, setMt] = useState(FORMATS[0].mt);
+  const [sess, setSess] = useState<UploadSession | null>(null);
+  const [page, setPage] = useState<CandidatePage | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [profileId, setProfileId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reload, setReload] = useState(0);
+  const [running, setRunning] = useState(false);
+  const lastFile = useRef<string>("");
+  const key = (c: Candidate) => `${c.rule_id}@${c.rule_version}`;
 
-  useEffect(() => {
-    api<Deployment>(`/deployments/${encodeURIComponent(deploymentId)}`, accessToken)
-      .then(setDeployment).catch((reason: Error) => setError(reason.message));
-  }, [deploymentId, accessToken, reload]);
+  async function runPipeline() {
+    if (!file) { setError("파일을 선택하세요."); return; }
+    setError(null); setNotice(null); setPage(null); setSelected(new Set()); setRunning(true);
+    obs.setPipeline([
+      { key: "upload", label: "1. 원본 업로드", state: "pending" },
+      { key: "normalize", label: "2. 정규화", state: "pending" },
+      { key: "extract", label: "3. 후보 추출 요청", state: "pending" },
+      { key: "poll", label: "4. 후보 조회", state: "pending" },
+    ]);
+    obs.lightNode("authoring", "pending");
+    if (lastFile.current === `${file.name}:${file.size}`) setNotice("동일한 파일입니다. 새 업로드 세션(새 source version)으로 다시 처리합니다.");
+    lastFile.current = `${file.name}:${file.size}`;
+    try {
+      obs.patchPipeline("upload", "active");
+      const s = await api<UploadSession>("/policy-sources/uploads", session.accessToken, { method: "POST", body: JSON.stringify({ filename: file.name, declared_media_type: mt, byte_size: file.size }) });
+      await putPresigned(s.upload_url, file, mt);
+      setSess(s); obs.patchPipeline("upload", "done");
+      obs.upsertJob({ id: "up-" + s.source_id, label: `업로드 ${file.name}`, queue: "s3", state: "done", meta: s.source_version.slice(0, 12) });
 
-  useEffect(() => {
-    // The verification Assessment exists only after apply completes, so this read is
-    // attempted only when the deployment says it has one.
-    if (!deployment?.verification_assessment_id) return;
-    api<Comparison>(`/deployments/${encodeURIComponent(deploymentId)}/verification`, accessToken)
-      .then(setComparison).catch((reason: Error) => setError(reason.message));
-  }, [deployment?.verification_assessment_id, deploymentId, accessToken]);
+      obs.patchPipeline("normalize", "active");
+      const doc = await api<NormalizedDoc>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/process`, session.accessToken, { method: "POST" });
+      if (doc.status === "FAILED") { obs.patchPipeline("normalize", "failed"); throw new Error(`정규화 실패: ${doc.failure_code}`); }
+      obs.patchPipeline("normalize", "done");
+      setNotice(`정규화 완료 · 형식 ${doc.source_format} · 단위 ${doc.units.length}개`);
 
-  if (error) return <main><h1>Deployment</h1><p role="alert">{error}</p></main>;
-  if (!deployment) return <main><h1>Deployment</h1><p>배포 상태를 불러오는 중…</p></main>;
+      obs.patchPipeline("extract", "active");
+      obs.lightNode("authoring", "active");
+      obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active" });
+      await api(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
+      obs.patchPipeline("extract", "done");
 
-  const canApprove = approvableStatuses.has(deployment.status) && deployment.plan_hash !== null;
-  const canReject = rejectableStatuses.has(deployment.status);
-
-  function act(path: string, body: object, done: string) {
-    setNotice(null);
-    setError(null);
-    api<unknown>(path, accessToken, { method: "POST", body: JSON.stringify(body) })
-      .then(() => { setNotice(done); setReload(value => value + 1); })
-      .catch((reason: Error) => setError(reason.message));
+      obs.patchPipeline("poll", "active");
+      // A안: 서버가 브라우저로 push하지 않으므로, DynamoDB에 남는 실행 상태(QUEUED/RUNNING/READY)를
+      // 조회해 왼쪽 패널에 그대로 비춘다. manifest가 아직 없으면 API가 일시적으로 실패(503)하는데,
+      // 이는 "아직 시작 전"이라는 정상 상태이므로 실패로 처리하지 않고 계속 기다린다.
+      let result: CandidatePage | null = null;
+      const maxTries = 40; // 40 × 3s = 최대 2분
+      for (let i = 0; i < maxTries; i++) {
+        await sleep(3000);
+        let p: CandidatePage;
+        try {
+          p = await api<CandidatePage>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates?limit=50`, session.accessToken);
+        } catch {
+          obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active", meta: `대기 중… (${i + 1}/${maxTries})` });
+          continue; // manifest 미생성 — 계속 대기
+        }
+        obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active", meta: `${p.status} (${i + 1}/${maxTries})` });
+        if (p.candidates.length > 0 || (p.status !== "QUEUED" && p.status !== "RUNNING")) { result = p; break; }
+      }
+      if (!result) throw new Error("후보 추출이 2분 내에 완료되지 않았습니다. 문서가 크면 더 걸릴 수 있으니 잠시 후 다시 업로드하세요.");
+      setPage(result); obs.patchPipeline("poll", "done"); obs.lightNode("authoring", "done");
+      obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "done", meta: `${result.candidates.length} 후보` });
+      setNotice(`후보 ${result.candidates.length}개 · 미지원 ${result.unsupported.length} · 검토 후 승인하세요.`);
+    } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
+    finally { setRunning(false); }
   }
-
-  return <main>
-    <h1>Deployment</h1>
-    <section>
-      <strong>{deployment.status}</strong>
-      <span>commit {deployment.commit_sha.slice(0, 12)}</span>
-      <span>plan {deployment.plan_hash ? `${deployment.plan_hash.slice(0, 12)}…` : "미생성"}</span>
-    </section>
-    <p>Remediation {deployment.remediation_id} · 원 Assessment {deployment.source_assessment_id}</p>
-    {notice && <p role="status">{notice}</p>}
-    {!canApprove && !canReject && <p>이 상태에서는 사람이 승인하거나 거절할 수 없습니다.</p>}
-    {canApprove && <button onClick={() => act(
-      `/deployments/${encodeURIComponent(deploymentId)}/approve`,
-      { commit_sha: deployment.commit_sha, plan_hash: deployment.plan_hash },
-      "승인했습니다. apply는 Deployment Worker가 재검증 후 실행합니다.",
-    )}>이 plan을 승인</button>}
-    {canReject && <>
-      <label>거절 사유 <select value={reason} onChange={event => setReason(event.target.value)}>
-        {rejectionReasons.map(value => <option key={value} value={value}>{value}</option>)}
-      </select></label>
-      <button onClick={() => act(`/deployments/${encodeURIComponent(deploymentId)}/reject`, { reason }, "거절했습니다.")}>거절</button>
-    </>}
-    {comparison && <>
-      <h2>Post-Deploy Verification</h2>
-      {comparison.comparable
-        ? <section>
-            <strong>Readiness {comparison.source_readiness_score?.score} → {comparison.verification_readiness_score?.score}</strong>
-            <span>변화 {comparison.readiness_score_delta}</span>
-          </section>
-        : <p role="alert">비교할 수 없습니다: {comparison.ineligibility_reasons.join(", ")}</p>}
-      <table><thead><tr><th>Resource</th><th>Rule</th><th>Rule version</th><th>Perspective</th><th>Resolution</th></tr></thead><tbody>
-        {comparison.finding_resolutions.map(value => <tr key={`${value.resource_id}:${value.rule_id}:${value.perspective}`}>
-          <td>{value.resource_id}</td><td>{value.rule_id}</td><td>{value.rule_version}</td><td>{value.perspective}</td><td>{value.resolution}</td>
-        </tr>)}
-      </tbody></table>
-    </>}
-  </main>;
+  function toggle(c: Candidate) { setSelected(p => { const n = new Set(p); const k = key(c); n.has(k) ? n.delete(k) : n.add(k); return n; }); }
+  async function approveAndPublish() {
+    if (!sess || !page) return;
+    if (selected.size === 0) { setError("승인할 후보를 선택하세요."); return; }
+    if (!profileId.trim()) { setError("Profile ID를 입력하세요."); return; }
+    setError(null);
+    try {
+      const approved = page.candidates.filter(c => selected.has(key(c))).map(c => ({ rule_id: c.rule_id, version: c.rule_version }));
+      await api(`/policy-sources/${enc(sess.source_id)}/versions/${enc(sess.source_version)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ approved_rules: approved }) });
+      await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify({ source_id: sess.source_id, source_version: sess.source_version, policy_profile_id: profileId.trim(), version: "v1" }) });
+      addProfile(profileId.trim());
+      setNotice(`Profile 게시 완료: ${profileId.trim()} — 고객(kosa-sandbox) Catalog에 저장. 'Profile·사용자 관리'에서 사용자에게 지정하세요.`);
+    } catch (e) { setError((e as Error).message); }
+  }
+  return <div className="panel">
+    <div className="card">
+      <h2>정책 문서 업로드</h2>
+      <p className="hint">업로드하면 정규화 → 후보 추출 → 조회까지 자동 진행됩니다. 왼쪽 패널에서 각 단계 불빛을 볼 수 있습니다. 사람은 후보 선택과 게시만 합니다.</p>
+      <div className="row">
+        <label style={{ flex: 1 }}>형식<select value={mt} onChange={e => setMt(e.target.value)}>{FORMATS.map(f => <option key={f.mt} value={f.mt}>{f.label}</option>)}</select></label>
+        <label style={{ flex: 2 }}>파일<input type="file" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+      </div>
+      <button disabled={running || !file} onClick={() => void runPipeline()}>{running ? "처리 중…" : "업로드 & 자동 처리"}</button>
+    </div>
+    {page && <div className="card">
+      <h2>후보 검토 · 승인</h2>
+      <p className="hint">심각도(severity)는 Catalog가 정한 읽기 전용 값입니다. 승인할 항목만 선택하세요.</p>
+      {page.candidates.length === 0 && <p className="obs-empty">표시할 후보가 없습니다 (상태 {page.status}).</p>}
+      {page.candidates.map(c => <div key={key(c)} className="candidate">
+        <label><input type="checkbox" checked={selected.has(key(c))} onChange={() => toggle(c)} />
+          <span><strong>{c.rule_id}@{c.rule_version}</strong><span className="badge">{c.proposed_severity}</span><span className="badge">{c.control_key}</span><br />{c.requirement_summary}<br /><span className="hint">{c.mapping_reason}</span></span></label>
+      </div>)}
+      <div className="row" style={{ marginTop: 12 }}>
+        <label style={{ flex: 1 }}>Policy Profile ID<input value={profileId} onChange={e => setProfileId(e.target.value)} placeholder="profile-internal-baseline" /></label>
+        <button disabled={selected.size === 0} onClick={() => void approveAndPublish()}>선택 {selected.size}개 승인 &amp; Profile 게시</button>
+      </div>
+    </div>}
+    {notice && <p className="status">{notice}</p>}
+    {error && <p className="alert">{error}</p>}
+  </div>;
 }
 
+/* =========================================================================
+ * Admin: profiles + per-user profile assignment
+ * =======================================================================*/
+function ProfilesPanel() {
+  const [profiles, setProfiles] = useState<string[]>(loadProfiles());
+  const [assignments, setAssignments] = useState<Record<string, string>>(loadAssignments());
+  const [email, setEmail] = useState("");
+  const [pid, setPid] = useState("");
+  const [newP, setNewP] = useState("");
+  function assign() { if (!email.trim() || !pid) return; saveAssignment(email.trim(), pid); setAssignments(loadAssignments()); }
+  function register() { if (!newP.trim()) return; addProfile(newP.trim()); setProfiles(loadProfiles()); setNewP(""); }
+  return <div className="panel">
+    <div className="card">
+      <h2>Policy Profile 목록</h2>
+      <p className="hint">게시된 Profile은 고객(kosa-sandbox) Catalog에 저장됩니다. Assessment는 생성 시 이 중 하나의 버전을 고정합니다.</p>
+      {profiles.length === 0 ? <p className="obs-empty">아직 게시된 Profile이 없습니다. '문서 업로드'에서 만드세요.</p> : <ul>{profiles.map(p => <li key={p}><code>{p}</code></li>)}</ul>}
+      <div className="row"><label style={{ flex: 1 }}>Profile ID 직접 등록<input value={newP} onChange={e => setNewP(e.target.value)} /></label><button className="ghost" onClick={register}>목록에 추가</button></div>
+    </div>
+    <div className="card">
+      <h2>사용자별 Profile 지정</h2>
+      <p className="hint">관리자가 사용자마다 기본 Profile을 지정합니다. 해당 사용자가 로그인하면 챗봇의 Assessment 제안에 이 Profile이 적용됩니다.</p>
+      <div className="row">
+        <label style={{ flex: 1 }}>사용자 이메일<input value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" /></label>
+        <label style={{ flex: 1 }}>Profile<select value={pid} onChange={e => setPid(e.target.value)}><option value="">선택</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+        <button onClick={assign}>지정</button>
+      </div>
+      <table><thead><tr><th>사용자</th><th>지정된 Profile</th></tr></thead>
+        <tbody>{Object.entries(assignments).map(([e, p]) => <tr key={e}><td>{e}</td><td><code>{p}</code></td></tr>)}
+          {Object.keys(assignments).length === 0 && <tr><td colSpan={2} className="obs-empty">지정된 사용자가 없습니다.</td></tr>}</tbody></table>
+    </div>
+  </div>;
+}
+
+/* =========================================================================
+ * Assessment report
+ * =======================================================================*/
+function ReportPanel({ session, assessmentId }: { session: Session; assessmentId: string }) {
+  const [rep, setRep] = useState<Report | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { api<Report>(`/assessments/${enc(assessmentId)}?limit=50`, session.accessToken).then(setRep).catch(e => setErr((e as Error).message)); }, [assessmentId, session.accessToken]);
+  if (err) return <div className="panel"><div className="card"><p className="alert">{err}</p></div></div>;
+  if (!rep) return <div className="panel"><div className="card"><p className="obs-empty">Assessment 결과를 불러오는 중…</p></div></div>;
+  return <div className="panel">
+    <div className="card"><h2>Assessment 결과</h2>
+      <div className="row"><span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations})</span><span>Readiness <strong>{rep.readiness_score?.score ?? "계산 대기"}</strong></span></div>
+    </div>
+    <div className="card"><h2>Findings ({rep.findings.length})</h2>
+      {rep.findings.map(f => <div key={f.finding_id} className="candidate"><strong>{f.severity}</strong> · {f.status} · {f.resource_id} · {f.rule_id} · score {f.score}<br /><span className="hint">{f.rationale}</span></div>)}
+      {rep.findings.length === 0 && <p className="obs-empty">Finding이 없습니다.</p>}
+    </div>
+  </div>;
+}
+
+/* =========================================================================
+ * App
+ * =======================================================================*/
+type View = "chat" | "upload" | "profiles" | "report";
+function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("chat");
+  const [assessmentId, setAssessmentId] = useState<string | null>(null);
+  const observer = useObserver();
+  useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
+  if (!session) return <Login error={error} />;
+  const isAdmin = session.groups.includes("Admin");
+  const myProfile = loadAssignments()[session.email] ?? null;
+  const nav: { id: View; label: string; admin?: boolean }[] = [
+    { id: "chat", label: "챗봇" },
+    { id: "upload", label: "문서 업로드", admin: true },
+    { id: "profiles", label: "Profile · 사용자 관리", admin: true },
+  ];
+  return <div className="shell">
+    <ObserverPanel obs={observer.obs} />
+    <div className="workspace">
+      <div className="topbar">
+        <span className="brand">Cloud Governance</span>
+        <span className={`role-chip ${isAdmin ? "admin" : ""}`}>{isAdmin ? "관리자" : "사용자"}</span>
+        <nav>
+          {nav.filter(n => !n.admin || isAdmin).map(n => <button key={n.id} className={view === n.id ? "active" : ""} onClick={() => setView(n.id)}>{n.label}</button>)}
+          {assessmentId && <button className={view === "report" ? "active" : ""} onClick={() => setView("report")}>Assessment 결과</button>}
+        </nav>
+        <span className="spacer" />
+        <span className="who">{session.email}{myProfile && !isAdmin ? ` · profile: ${myProfile}` : ""}</span>
+      </div>
+      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
+      {view === "upload" && isAdmin && <UploadPanel session={session} obs={observer} />}
+      {view === "profiles" && isAdmin && <ProfilesPanel />}
+      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} />}
+    </div>
+  </div>;
+}
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

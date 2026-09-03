@@ -915,6 +915,18 @@ Resources:
     Properties:
       Name: !Sub "${ProjectName}-${Environment}-api"
       ProtocolType: HTTP
+      # Browser calls come from the SPA origin, which is cross-origin to this API. Without CORS the
+      # browser blocks every request at the preflight (OPTIONS) with no response. Origins are the
+      # exact SPA callback URL and localhost for local development; credentials are not used because
+      # the SPA sends a Bearer token, not cookies.
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendCallbackUrl
+          - http://localhost:5173
+        AllowMethods: [GET, POST, PUT, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        AllowCredentials: false
+        MaxAge: 300
   HttpApiAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
     Properties:

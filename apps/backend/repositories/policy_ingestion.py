@@ -1,6 +1,7 @@
 """A-owned tenant-scoped Policy Source upload-session persistence."""
 
 from collections.abc import Mapping
+from decimal import Decimal
 from hashlib import sha256
 from typing import Protocol
 
@@ -113,11 +114,18 @@ class DynamoDbPolicySourceUploadRepository:
         declared_media_type = item.get("declared_media_type")
         declared_size = item.get("byte_size")
         artifact_id = item.get("artifact_id")
+        # DynamoDB returns Number attributes as Decimal through the resource API, so byte_size is a
+        # Decimal here, not an int (and Decimal is numbers.Number, not numbers.Integral). Accept a
+        # non-bool int or Decimal, require an integral value, and normalize to int; a fractional
+        # Decimal (never written by this code) is rejected rather than silently truncated.
+        if isinstance(declared_size, bool) or not isinstance(declared_size, (int, Decimal)):
+            raise RuntimeError("policy upload metadata is invalid")
+        if int(declared_size) != declared_size:
+            raise RuntimeError("policy upload metadata is invalid")
+        declared_size = int(declared_size)
         if (
             not isinstance(filename, str)
             or not isinstance(declared_media_type, str)
-            or isinstance(declared_size, bool)
-            or not isinstance(declared_size, int)
             or not isinstance(artifact_id, str)
         ):
             raise RuntimeError("policy upload metadata is invalid")
@@ -249,6 +257,41 @@ class DynamoDbPolicySourceUploadRepository:
         item = self._get_item(customer_id, source_id, source_version)
         return document_from_item(item)
 
+    def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]:
+        """Return a summary of every policy source version the caller's customer owns.
+
+        Tenant-scoped by construction: the query key is the caller's own partition, and the
+        caller never chooses it (docs/POLICY_INGESTION.md security boundary). Only summary
+        metadata is returned — never units, normalized text, or the original bytes.
+        """
+        items: list[dict[str, object]] = []
+        kwargs: dict[str, object] = {
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk)",
+            "ExpressionAttributeValues": {
+                ":pk": f"CUSTOMER#{customer_id}",
+                ":sk": "POLICY_INGESTION#",
+            },
+        }
+        while True:
+            page = self._table.query(**kwargs)
+            for item in page.get("Items", []):
+                size = item.get("byte_size")
+                units = item.get("units")
+                items.append({
+                    "source_id": item.get("source_id"),
+                    "source_version": item.get("source_version"),
+                    "filename": item.get("filename"),
+                    "status": item.get("status"),
+                    "source_format": item.get("source_format"),
+                    "byte_size": int(size) if isinstance(size, (int, Decimal)) and not isinstance(size, bool) else None,
+                    "unit_count": len(units) if isinstance(units, list) else 0,
+                })
+            token = page.get("LastEvaluatedKey")
+            if not token:
+                break
+            kwargs["ExclusiveStartKey"] = token
+        return tuple(items)
+
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str
     ) -> Mapping[str, object]:
@@ -323,9 +366,14 @@ def _optional_string(item: Mapping[str, object], name: str) -> str | None:
 
 def _integer(item: Mapping[str, object], name: str) -> int:
     value = item.get(name)
-    if isinstance(value, bool) or not isinstance(value, int):
+    # DynamoDB Number attributes come back as Decimal through the resource API, so an int stored
+    # here is read as Decimal. Accept a non-bool int or Decimal with an integral value and
+    # normalize to int; a fractional value (never written by this code) is rejected.
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
         raise ValueError(f"{name} is invalid")
-    return value
+    if int(value) != value:
+        raise ValueError(f"{name} is invalid")
+    return int(value)
 
 
 def _strings(item: Mapping[str, object], name: str) -> tuple[str, ...]:

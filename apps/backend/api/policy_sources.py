@@ -60,6 +60,8 @@ class PolicySourceUploadRepository(Protocol):
         self, *, customer_id: str, source_id: str, source_version: str
     ) -> NormalizedPolicyDocument: ...
 
+    def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]: ...
+
 
 class PolicySourceApiService:
     """Issue one backend-owned upload session; client cannot select tenant storage identity."""
@@ -143,6 +145,13 @@ class PolicySourceApiService:
             source_id=source_id,
             source_version=source_version,
         )
+
+    def list_sources(self, principal: Principal) -> tuple[dict[str, object], ...]:
+        """List the caller customer's uploaded policy sources (summary only)."""
+        if not isinstance(principal, Principal):
+            raise TypeError("principal must be a Principal")
+        authorize(principal, Action.MANAGE_POLICY_SOURCES)
+        return self._repository.list_sources(customer_id=principal.customer_id)
 
     @staticmethod
     def _new(factory: Callable[[], str], name: str) -> str:

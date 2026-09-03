@@ -80,6 +80,7 @@ class AuthBoundaryTest(unittest.TestCase):
                 "PUBLISH_POLICY_PROFILE",
                 "READ_OBSERVABILITY",
                 "READ_AUDIT_EVENTS",
+                "MANAGE_USERS",
                 "ORCHESTRATE",
             },
         )

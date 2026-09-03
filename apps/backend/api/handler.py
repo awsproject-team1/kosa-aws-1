@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 
 from apps.backend.api.assessments import AssessmentReportApiService
@@ -54,6 +55,7 @@ class JobHttpHandler:
         observability: DemoRunObservabilityService | None = None,
         policy_reader: object | None = None,
         orchestrations: object | None = None,
+        users: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
@@ -99,6 +101,8 @@ class JobHttpHandler:
         # Duck-typed to avoid importing the LangGraph-backed service (and its Layer-only
         # dependency) into the handler module; only .orchestrate(principal, request) is used.
         self._orchestrations = orchestrations
+        # Duck-typed user-management service: create_user/list_users/assign_profile.
+        self._users = users
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -130,6 +134,40 @@ class JobHttpHandler:
                 except (TypeError, ValueError, json.JSONDecodeError) as error:
                     raise RequestValidationError("policy source upload body is invalid") from error
                 return _response(201, response.to_dict())
+            if method == "GET" and path == "/policy-sources":
+                if self._policy_sources is None:
+                    raise JobNotFoundError("policy source route not found")
+                sources = self._policy_sources.list_sources(principal)
+                return _response(200, {"sources": list(sources)})
+            if path == "/admin/users":
+                if self._users is None:
+                    raise JobNotFoundError("user management route not found")
+                if method == "GET":
+                    return _response(200, {"users": list(self._users.list_users(principal))})
+                if method == "POST":
+                    try:
+                        body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
+                        from apps.backend.api.users import CreateUserRequest
+                        req = CreateUserRequest(
+                            email=_non_empty_string(body.get("email"), "email"),
+                            role=_non_empty_string(body.get("role"), "role"),
+                            temporary_password=_non_empty_string(
+                                body.get("temporary_password"), "temporary_password"
+                            ),
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError) as error:
+                        raise RequestValidationError("user create body is invalid") from error
+                    return _response(201, self._users.create_user(principal, req))
+            if method == "POST" and path == "/admin/users/profile":
+                if self._users is None:
+                    raise JobNotFoundError("user management route not found")
+                try:
+                    body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
+                    email = _non_empty_string(body.get("email"), "email")
+                    pid = _non_empty_string(body.get("policy_profile_id"), "policy_profile_id")
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("profile assign body is invalid") from error
+                return _response(200, self._users.assign_profile(principal, email=email, policy_profile_id=pid))
             policy_path = _policy_source_path(path)
             if policy_path is not None and self._policy_sources is not None:
                 source_id, source_version, action = policy_path
@@ -582,4 +620,11 @@ def _response(status_code: int, body: dict[str, object]) -> dict[str, object]:
 
 def _public_error(error: BaseException) -> dict[str, object]:
     failure = sanitize_public_failure(error)
+    # Server faults (5xx) are unmapped and would otherwise vanish: the public body carries only a
+    # code. Log the exception type and message (never request bodies or policy text) so a 500 is
+    # diagnosable. 4xx are expected client outcomes and are not logged as errors.
+    if failure.status_code >= 500:
+        logging.getLogger("governance.api").exception(
+            "unhandled API failure: %s: %s", type(error).__name__, error
+        )
     return _response(failure.status_code, ApiErrorResponse(error=failure.error).to_dict())

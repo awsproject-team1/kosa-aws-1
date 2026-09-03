@@ -139,6 +139,82 @@ class PolicySourceUploadRepositoryTest(unittest.TestCase):
         with self.assertRaises(LookupError):
             repository.get_document(customer_id="cust-b", source_id="source-1", source_version="v1")
 
+    def test_finalizes_when_byte_size_is_decimal_as_dynamodb_returns(self) -> None:
+        # The DynamoDB resource API deserializes Number attributes to Decimal, so the stored
+        # byte_size is a Decimal at finalize time, not an int. finalize_upload must accept it;
+        # otherwise every real upload fails metadata validation with a 500 (regression).
+        from decimal import Decimal
+
+        table, s3 = Table(), S3()
+        repository = DynamoDbPolicySourceUploadRepository(
+            table=table, bucket="artifacts", presigner=s3
+        )
+        repository.create_upload_session(
+            customer_id="cust-a",
+            request=PolicySourceUploadRequest(
+                filename="policy.md", declared_media_type="text/markdown", byte_size=38
+            ),
+            source_id="source-1",
+            source_version="v1",
+        )
+        # Emulate the resource-API round trip: the persisted Number comes back as Decimal.
+        assert table.item is not None
+        table.item["byte_size"] = Decimal(table.item["byte_size"])
+
+        original_key = "customers/cust-a/policy-sources/source-1/versions/v1/original"
+        payload = b"# Access\n\nPublic access is forbidden.\n"
+        assert len(payload) == 38
+        s3.objects[original_key] = {
+            "Body": BytesIO(payload),
+            "VersionId": "s3-v1",
+            "ContentType": "text/markdown",
+        }
+
+        original, actual = repository.finalize_upload(
+            customer_id="cust-a", source_id="source-1", source_version="v1", reader=s3
+        )
+        self.assertEqual(original.byte_size, 38)
+
+    def test_document_from_item_reads_decimal_numbers(self) -> None:
+        # The authoring worker and get_document restore a NormalizedPolicyDocument from a DynamoDB
+        # item whose Number attributes (byte_size, unit text_length) are Decimal. document_from_item
+        # must accept them; otherwise candidate extraction and status reads fail (regression).
+        from decimal import Decimal
+
+        from apps.backend.repositories.policy_ingestion import document_from_item
+
+        item = {
+            "source_id": "source-1",
+            "source_version": "v1",
+            "artifact_id": "art-1",
+            "s3_version_id": "s3-v1",
+            "content_sha256": "d" * 64,
+            "filename": "policy.md",
+            "declared_media_type": "text/markdown",
+            "byte_size": Decimal(38),
+            "status": "READY",
+            "detected_media_type": "text/markdown",
+            "source_format": "MARKDOWN",
+            "parser_id": "markdown",
+            "parser_version": "1",
+            "normalized_artifact_id": "norm-1",
+            "normalized_sha256": "e" * 64,
+            "units": [
+                {
+                    "locator": "heading/access-control",
+                    "kind": "SECTION",
+                    "text_sha256": "f" * 64,
+                    "text_length": Decimal(18),
+                    "origin": "line/1",
+                }
+            ],
+            "warnings": [],
+            "failure_code": None,
+        }
+        document = document_from_item(item)
+        self.assertEqual(document.byte_size, 38)
+        self.assertEqual(document.units[0].text_length, 18)
+
     def test_policy_source_api_allows_only_admin_scope(self) -> None:
         table, s3 = Table(), S3()
         service = PolicySourceApiService(
