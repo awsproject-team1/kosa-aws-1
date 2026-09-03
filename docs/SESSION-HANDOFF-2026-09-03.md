@@ -142,7 +142,32 @@ Layer 빌드+업로드는 prepare-artifact 잡에서 자동.
 
 ---
 
-## 5. 다음에 이어서 할 작업 (선행 조건 포함)
+## 5. 관리자 end-to-end 여정: 지금 어디까지 직접 테스트되나
+
+관리자가 "온보딩 → Profile → 정책 질문 → 평가 → finding/리포트 → 개선 → 승인 → 실제 변경"을
+직접 실행할 수 있는지 라이브(API `8cimz0a9n9`, 토큰 USER_PASSWORD_AUTH)로 점검한 결과다.
+**결론: 전 구간을 끝까지 직접 테스트할 수는 아직 없다. 세 개의 공백이 있다(아래 §6 B·C·G).**
+
+| 단계 | 라우트 | 라이브 상태 |
+| --- | --- | --- |
+| 1. 관리자 로그인/온보딩 | Cognito (USER_PASSWORD_AUTH / HostedUI) | ✅ 동작. access token에 `custom:customer_id=kosa-sandbox`, Admin 그룹 주입 확인 |
+| 2. 정책 문서 **업로드** | `POST /policy-sources/uploads` → `/process` → status | ⚠️ 라우트 배선·업로드/정규화 동작. **그러나 AI 후보 추출 실행자(`record_candidate_extraction` 호출자)가 미배선**이라 Rule 후보가 안 생김 → 승인 시 `EMPTY_PROFILE` 거부. 즉 업로드로 새 Rule을 만드는 경로는 **미완**(§6 G) |
+| 3. Profile **생성/게시** | `/approve` → `POST /policy-profiles` | ⚠️ 라우트 배선됨, 위와 같은 이유로 후보 없어 게시 불가(§6 G) |
+| 3'. Profile **선택** | `POST /assessments`의 `policy_profile_id` | ✅ 기존 fixture Profile `profile-mvp-baseline`은 선택·평가 가능(업로드 없이) |
+| 4. **정책 질문 / 자연어**(PolicyQA·라우팅) | `POST /orchestrate` | ❌ **현재 404**. 코드·라우트 커밋 완료(`af57307`)이나 마지막 배포가 그 이전(`d6ff2da`) 기준이라 스택에 라우트 없음. **재배포하면 열림**(§6 D) |
+| 5. **평가** | `POST /assessments` | ✅ 동작. 라이브 검증(§4): coverage 18/18, findings 12 |
+| 6. **finding / 리포트** | `GET /assessments/{assessmentId}` | ✅ 동작. coverage·readiness·findings·evidence 조회 |
+| 7. **개선(remediation) 선택·생성** | `POST /findings/{findingId}/remediations` | ✅ decision(TERRAFORM_PATCH/ACTUAL_SYNC/MANUAL_REVIEW/SUPPRESSED) + worker가 실제 Bedrock patch **생성**까지 라이브 동작(§4) |
+| 7'. patch → **PR / 실제 파일 변경 제안** | D write port(GitHub branch/commit/PR) | ❌ **미배선**. `RemediationPatch`는 changed_paths+digest만 담고, patch 바이트 S3 저장과 PR 생성이 없음(§6 B) |
+| 8. **승인** | `POST /deployments/{deploymentId}/approve` | ⚠️ 라우트 있으나 7'·8' 공백으로 실제 도달 불가 |
+| 8'. **실제 변경(apply)** | Deployment Worker(OIDC Terraform apply) | ❌ `DEPLOYMENT_RUNTIME_JSON` 빈값 → TERRAFORM_PATCH commit 해석 fail-closed. ACTUAL_SYNC는 GitHub 없이 가능하나 미검증(§6 C) |
+| 감사 이력 | `GET /audit-events` | ✅ 동작(Admin) |
+
+즉 **지금 직접 끝까지 되는 경로는**: fixture Profile 선택 → 평가 → finding/리포트 → remediation
+patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (4) 자연어 질문(재배포 필요),
+(7'/8') patch를 실제 PR·apply로 반영. UI(React SPA)는 이 저장소 범위 밖이며 별도 배포다.
+
+## 6. 다음에 이어서 할 작업 (선행 조건 포함)
 
 ### A. 정리 (권장 — 실제 리소스가 insecure 상태로 남음)
 - 실제 버킷 `tfsbx-20260903-7f3a-a91c`의 public access block이 **현재 4개 다 false(insecure)**.
@@ -169,10 +194,30 @@ Layer 빌드+업로드는 prepare-artifact 잡에서 자동.
   (템플릿 Rule DeploymentCommitResolutionAllOrNone: 둘 다 있거나 둘 다 없어야 함). ACTUAL_SYNC는 GitHub 없이 동작.
 - 고객 repo `test`에 terraform-plan/apply workflow + OIDC role 준비됨. deploy Environment 승인자 필요.
 
-### D. Parent Orchestrator 라이브 검증 (미실행)
-- `POST /orchestrate` `{"message": "..."}`는 배포됐으나 라이브 호출 미검증. Bedrock PARENT 모델
-  프로파일(`fixtures/m1/parent_model_profile.json`, model amazon.nova-lite-v1:0)로 실제 라우팅 확인 필요.
-- 자연어→PolicyQA/ASSESSMENT/REMEDIATION/DEPLOYMENT decision 반환. Parent는 워크플로 시작 안 함.
+### D. Parent Orchestrator 라우트 배포 + 라이브 검증 (선행: 재배포)
+- **현재 `POST /orchestrate`는 라이브 404다.** 라우트 리소스 `PostOrchestrateRoute`는 커밋
+  `af57307`에 있으나 마지막 배포(run 33734365438)가 그 이전 커밋 `d6ff2da` 기준이라 스택에
+  아직 없다. **`af57307` 이후 커밋으로 `Deploy M0 Foundation` workflow를 재실행하면 열린다**(§4 배포법).
+- 열린 뒤 `POST /orchestrate {"message":"..."}`로 자연어→PolicyQA/ASSESSMENT/REMEDIATION/DEPLOYMENT
+  decision 반환을 검증. Bedrock PARENT 프로파일(`fixtures/m1/parent_model_profile.json`,
+  amazon.nova-lite-v1:0). Parent는 워크플로를 시작하지 않는다(제안·답변만).
+- 이 재배포는 §5의 "정책 질문(PolicyQA)" 단계를 직접 테스트 가능하게 만드는 최소 작업이다.
+
+### G. 정책 문서 업로드 완결 경로 — AI 후보 추출 미배선 (관리자 UX의 큰 공백)
+- **증상:** `POST /policy-sources/uploads`(body: `filename`, `declared_media_type`, `byte_size`,
+  optional `title`) → `/process` → status 조회까지는 배선·동작한다. 그러나 `/approve` 또는
+  `POST /policy-profiles`로 가면 후보가 없어 `EMPTY_PROFILE`로 거부된다.
+- **원인:** 승인 read(`load_review`/`load_publication`)는 `#CANDIDATES` item에서 후보를 읽는데,
+  그 후보를 저장하는 `record_candidate_extraction` 호출자(= C의 **AI 후보 추출 실행자**)가
+  아직 배선되지 않았다(API.md, `docs/POLICY_INGESTION.md`). 업로드한 정책 원문에서 Control/Rule
+  후보를 뽑아 저장하는 실행 경로가 없다.
+- **해야 할 일:** 정규화된 Policy Document → Bedrock으로 Control/Rule 후보 추출 →
+  `record_candidate_extraction`으로 `#CANDIDATES`에 저장하는 실행자를 구현·배선. 그 뒤 `/approve`가
+  후보 부분집합을 승인하고 `POST /policy-profiles`가 승인된 Rule로 versioned Profile을 게시한다.
+- **선행/제약:** `docs/POLICY_INGESTION.md`의 지원 문서 형식 allow-list만 처리(목록 밖 형식 코드 추가
+  금지). 후보는 사람 승인 없이는 Profile에 못 들어간다(ADR-0015). 형식 추가 시 문서+Contract 동시 갱신.
+- **현재 우회:** 업로드 없이 fixture Profile `profile-mvp-baseline`을 assessment에 선택하면 평가/finding/
+  remediation은 그대로 테스트된다. "관리자가 자기 정책 문서를 올려 Profile을 만드는" 경로만 미완이다.
 
 ### E. 단계4 — Subgraph 래핑 (선택적, 낮은 가치)
 - 기존 결정적 Assessment/Remediation worker를 LangGraph StateGraph node로 감싸는 형식 작업.
@@ -186,7 +231,7 @@ Layer 빌드+업로드는 prepare-artifact 잡에서 자동.
 
 ---
 
-## 6. 검증 명령
+## 7. 검증 명령
 ```bash
 # 오프라인 전체
 python3 -m unittest discover -s tests/unit -p 'test_*.py'
@@ -201,7 +246,7 @@ bash scripts/package-m0-lambda.sh /tmp/m0-lambda.zip
 ```
 langgraph 테스트는 `requirements-dev.txt`의 `langgraph==1.2.11` 설치 필요.
 
-## 7. 로컬 보존 파일 (Git 제외, 보관자 A/taemin에게 요청)
+## 8. 로컬 보존 파일 (Git 제외, 보관자 A/taemin에게 요청)
 - `./awsproject-team1-kosa-reader.2026-09-02.private-key.pem` — GitHub App private key
 - `.ai/e2e-secrets/` — M1 설정 사본(extid, m1_runtime.json 등), 이미 AWS/GitHub에 반영됨
 - `.ai/HANDOFF.md` — 개인 로컬 상세 진행
