@@ -70,11 +70,14 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
     raw_configuration = os.environ.get("DEPLOYMENT_RUNTIME_JSON")
     if not raw_configuration:
         raise DeploymentRuntimeError("deployment worker runtime is not configured")
+    # 설정 검증을 AWS client 생성보다 먼저 끝낸다. boto3 resource/client 생성은 region 등
+    # 자체 환경을 요구하므로, 순서가 뒤집히면 "설정 누락"이 boto3의 다른 오류로 가려진다.
+    table_name = _required_env("METADATA_TABLE_NAME")
     worker = _live_worker(
         raw_configuration,
         plan_outputs_fetcher=_live_plan_outputs_fetcher(),
-        table=_metadata_table(),
-        table_name=_required_env("METADATA_TABLE_NAME"),
+        table=_metadata_table(table_name),
+        table_name=table_name,
         transaction_client=_boto3_client("dynamodb"),
         secret_reader=_live_secret_reader(),
         sts_client=_boto3_client("sts"),
@@ -249,8 +252,8 @@ def _live_s3_client_factory() -> Callable[[Mapping[str, str]], object]:
     return factory
 
 
-def _metadata_table() -> object:
-    return _boto3().resource("dynamodb").Table(_required_env("METADATA_TABLE_NAME"))
+def _metadata_table(table_name: str) -> object:
+    return _boto3().resource("dynamodb").Table(table_name)
 
 
 def _boto3_client(service: str) -> object:
@@ -266,7 +269,11 @@ def _boto3() -> object:
 
 
 def _required_env(name: str) -> str:
-    return _string(os.environ.get(name))
+    """필수 runtime 환경 변수를 읽는다. 누락은 설정 실패이므로 fail-closed한다."""
+    value = os.environ.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise DeploymentRuntimeError(f"deployment worker runtime requires {name}")
+    return value
 
 
 def _string(value: object) -> str:
