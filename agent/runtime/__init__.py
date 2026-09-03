@@ -36,7 +36,9 @@ from agent.runtime.live_deployment_ports import (
     LiveActualRereadPort,
     LiveApplyDispatchPort,
     LiveDeploymentPortError,
+    LivePlanRequestPort,
     LiveWorkflowRunReader,
+    PlanRunOutputs,
 )
 from agent.runtime.mock_aws_resource_tool import MockAwsResourceTool
 from agent.runtime.mock_deployment_ports import (
@@ -87,7 +89,9 @@ __all__ = [
     "LiveActualRereadPort",
     "LiveApplyDispatchPort",
     "LiveDeploymentPortError",
+    "LivePlanRequestPort",
     "LiveWorkflowRunReader",
+    "PlanRunOutputs",
     "MockActualRereadPort",
     "MockApplyDispatchPort",
     "MockAwsResourceTool",

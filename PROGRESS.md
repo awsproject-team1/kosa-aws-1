@@ -16,6 +16,23 @@
   실제 구현과 HTTP 라우트 배선은 D 배포 통합·M3 A audit-events의 dev 병합 뒤 이어지며, 실제 데모
   실행값 기록은 Shared/D/C 공동에 sandbox 실행(Blocked)에 의존한다. 문서(CONTRACTS/DESIGN) 동기화.
   후속 리뷰 대기
+- M3 D customer runtime 배선을 구현했다(`feature/m3-d-deployment-runtime-wiring`). A의 Deployment
+  endpoint가 `dev`에 병합돼 차단이 풀린 뒤, Deployment Worker를 구동하는 조각들을 기능별 커밋으로
+  추가했다: (1) approval read(`DeploymentApprovalRepository.get_approval`), (2) plan/run/verification
+  store 3종(`DEPLOYMENT#` item에 plan facts+`plan_run` conditional update, `#DISPATCH` item,
+  `#EVENT#{run_id}` 예약 item을 `VERIFIED`로 확정), (3) record+job+approval+예약 EVENT를 합성하는
+  `DynamoDbDeploymentWorkRepository.get_work`, (4) fail-closed `DeploymentRuntimeConfiguration`, (5)
+  composition root(`apps/backend/deployment/runtime.py`)의 SQS `parse_tasks`/`run_tasks`/`lambda_handler`.
+  **apply 완료 Event 경계를 A/D 공유 계약으로 확정**했다(ADR-0019 §7, DATABASE.md "완료 Event 경계"):
+  A/EventBridge가 `#EVENT#{run_id}`를 `PENDING_VERIFICATION`으로 예약 write → D Worker가 그 좌표로
+  run을 재조회·대조 후 `VERIFIED`로 확정. D는 이 read/verify 경로를 모두 구현했고, 예약 write는 A 몫이다.
+  이어서 `LivePlanRequestPort`(plan run → `PlanExecutionResult` 조립, GitHub I/O는 콜백 seam)와
+  `_live_worker`(승인 단일 target으로 D port 4종·store 3종·work repo 조립, I/O seam 주입)를 구현했다.
+  fixture 경로(Mock)와 조립 로직은 seam 주입으로 검증된다. 검증: ruff 273 files clean,
+  Unit 662 / Contract 135 / Integration 9 / Security 74 OK. **코드로 남은 것은 없다.** 유일하게 실제
+  검증이 남은 건 `_live_plan_outputs_fetcher`의 GitHub plan run I/O(dispatch·폴링·artifact 파싱)로,
+  이는 실제 sandbox 자격 증명·네트워크가 있어야 동작·검증되며 그전까지 호출 시 명시적으로 막는다.
+  A가 공유 계약대로 `#EVENT` 예약 write를 붙이고 sandbox 자격 증명이 준비되면 live E2E가 열린다.
 - M4 B/C release-readiness 구현: Demo Policy Coverage manifest/validator가 승인 Profile의 6 Rule,
   5 Control, 12 version-pinned policy locator와 Initial/Post-Deploy 36 Golden 좌표를 교차 검증한다.
   M4 C live gate는 customer-sandbox Post-Deploy 18 Case를 5회 반복한 60 Bedrock IAC/Actual 결과와
@@ -669,9 +686,15 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   `PlanRequestPort`/`PlanRequestOutcome`, `TERRAFORM_PLAN_BINARY`, 세 command를 injected port로
   분기하는 `DeploymentWorker`, 세 live 어댑터(`agent/runtime/live_deployment_ports.py`)와 고객용
   `ci/terraform/` plan/apply workflow template·canonical `plan_hash` 스크립트 — ADR-0019
-  §1·§2·§5·§6·§7. **남은 조각(A/보호된 자격 증명 의존):** customer runtime 배선(composition root의
-  live 어댑터 주입)과 실제 sandbox E2E 실행. 이는 A의 Deployment 생성·상태 endpoint(kosa-m3-a)와
-  protected Environment/OIDC Role 설정 뒤에 이어진다)*
+  §1·§2·§5·§6·§7. customer runtime 배선도 대부분 완료: approval read, plan/run/verification store 3종
+  (`#EVENT#{run_id}` 예약→`VERIFIED` 확정 포함), `DynamoDbDeploymentWorkRepository`(예약 EVENT에서
+  `run_reference` 채움), fail-closed `DeploymentRuntimeConfiguration`, Deployment Worker composition
+  root. apply 완료 Event 경계는 A/D 공유 계약으로 확정(ADR-0019 §7, DATABASE.md "완료 Event 경계") —
+  A/EventBridge가 예약 write, D가 재조회·확정. `LivePlanRequestPort`와 `_live_worker`(D port 4종·
+  store 3종·work repo 조립, I/O seam 주입)까지 구현해 **D의 코드 조각은 모두 완료**. 유일하게 실제
+  검증이 남은 건 `_live_plan_outputs_fetcher`의 GitHub plan run I/O로, 실제 sandbox 자격 증명·
+  네트워크가 있어야 동작·검증된다(그전까지 호출 시 명시적으로 막음). A의 `#EVENT` 예약 write와
+  protected Environment/OIDC Role/자격 증명이 준비되면 live E2E가 열린다)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
 **Dependencies:** Apply는 D의 OIDC 경로만 사용하며, A의 승인 상태와 C의 평가 결과를 우회할 수 없다.
@@ -700,9 +723,13 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   고객 sandbox repository — ADR-0021 §1. **문서 몫 완료:** `docs/M4-DEMO-IAC-REFERENCE.md`(별도
   데모 저장소 식별자·전제조건·6개 S3 Rule 1:1 위반 토글 매핑·세 관점 재현), `docs/M4-DEMO-RUNBOOK.md`
   (Initial→Remediation/PR→plan→승인→apply→Post-Deploy Verification 폐루프, 재조회 시점 규칙,
-  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). **남은 조각:**
-  실제 데모 저장소 생성·sandbox 폐루프 실행·관측/비용 값 채우기는 protected Environment·OIDC Role·
-  자격 증명 대기(A endpoint·runtime 배선 뒤))*
+  ADR-0021 §3 관측·비용 기록 표), `fixtures/terraform/README.md`(비어 있음 이유·참조). ADR-0022 §4의
+  **D producer 결합 로직도 구현**: `apps/backend/deployment/release_binding.py`의
+  `derive_release_binding()`가 demo commit/deployment ID/artifact set을 세 SHA-256(bundle의
+  `repository_commit_sha256`/`deployment_id_sha256`/`artifact_set_sha256`)으로 결정적 결합하며, C
+  parser의 `_digest` 관문과 정합함을 회귀 테스트로 고정했다. **남은 조각:** 실제 데모 저장소 생성·
+  sandbox 폐루프 실행·관측/비용 값 채우기(실제 commit/ID/artifact 주입)는 protected Environment·
+  OIDC Role·자격 증명 대기)*
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.

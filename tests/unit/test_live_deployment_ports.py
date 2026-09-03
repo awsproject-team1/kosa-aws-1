@@ -23,7 +23,9 @@ from agent.runtime import (
     LiveActualRereadPort,
     LiveApplyDispatchPort,
     LiveDeploymentPortError,
+    LivePlanRequestPort,
     LiveWorkflowRunReader,
+    PlanRunOutputs,
     WorkflowRunReader,
 )
 from agent.runtime.aws_resource_tool import AwsResourceTool
@@ -33,6 +35,7 @@ from packages.contracts import (
     ArtifactType,
     AwsResourceQuery,
     DeploymentApproval,
+    PlanExecutionResult,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowConclusion,
@@ -368,6 +371,97 @@ class ActualRereadTest(unittest.TestCase):
                 customer_id="cust-other",
                 deployment_id=DEPLOYMENT_ID,
                 sync_target=self._sync_target(),
+            )
+
+
+class LivePlanRequestPortTest(unittest.TestCase):
+    def _outputs(self, deployment_id: str, commit_sha: str) -> PlanRunOutputs:
+        return PlanRunOutputs(
+            run_id=PLAN_RUN_ID,
+            plan_hash=PLAN_HASH,
+            binary_sha256="b" * 64,
+            state_lineage=LINEAGE,
+            state_serial=7,
+        )
+
+    def _port(self, fetch=None) -> LivePlanRequestPort:
+        return LivePlanRequestPort(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            repository_full_name=REPO_FULL,
+            fetch_outputs=fetch or self._outputs,
+        )
+
+    def test_assembles_a_plan_execution_result(self) -> None:
+        result = self._port().request_plan(
+            customer_id=CUSTOMER_ID,
+            deployment_id=DEPLOYMENT_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT,
+        )
+        self.assertIsInstance(result, PlanExecutionResult)
+        self.assertEqual(result.plan.deployment_id, DEPLOYMENT_ID)
+        self.assertEqual(result.plan.commit_sha, COMMIT)
+        self.assertEqual(result.plan.plan_hash, PLAN_HASH)
+        # plan artifact digest는 plan_hash와 같아야 한다(TerraformPlan.__post_init__).
+        self.assertEqual(result.plan.artifact.content_sha256, PLAN_HASH)
+        self.assertEqual(result.binary_artifact.artifact_type, ArtifactType.TERRAFORM_PLAN_BINARY)
+        self.assertEqual(result.state_version.lineage, LINEAGE)
+        self.assertEqual(result.state_version.serial, 7)
+        # plan_run은 이 plan run 좌표이고 apply가 이 run의 artifact를 내려받는다.
+        self.assertEqual(result.plan_run.run_id, PLAN_RUN_ID)
+        self.assertEqual(result.plan_run.deployment_id, DEPLOYMENT_ID)
+        self.assertEqual(result.plan_run.repository_id, REPOSITORY_ID)
+
+    def test_rejects_a_request_outside_the_tool_scope(self) -> None:
+        with self.assertRaises(LiveDeploymentPortError):
+            self._port().request_plan(
+                customer_id="cust-other",
+                deployment_id=DEPLOYMENT_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT,
+            )
+        with self.assertRaises(LiveDeploymentPortError):
+            self._port().request_plan(
+                customer_id=CUSTOMER_ID,
+                deployment_id=DEPLOYMENT_ID,
+                repository_id="repo-other",
+                commit_sha=COMMIT,
+            )
+
+    def test_rejects_a_non_outputs_return(self) -> None:
+        port = self._port(fetch=lambda deployment_id, commit_sha: object())
+        with self.assertRaises(LiveDeploymentPortError):
+            port.request_plan(
+                customer_id=CUSTOMER_ID,
+                deployment_id=DEPLOYMENT_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT,
+            )
+
+    def test_satisfies_the_plan_request_port_protocol(self) -> None:
+        from apps.backend.deployment.ports import PlanRequestPort
+
+        self.assertIsInstance(self._port(), PlanRequestPort)
+
+
+class PlanRunOutputsTest(unittest.TestCase):
+    def test_rejects_empty_or_non_integer_fields(self) -> None:
+        with self.assertRaises(ValueError):
+            PlanRunOutputs(
+                run_id="",
+                plan_hash=PLAN_HASH,
+                binary_sha256="b" * 64,
+                state_lineage=LINEAGE,
+                state_serial=1,
+            )
+        with self.assertRaises(TypeError):
+            PlanRunOutputs(
+                run_id=PLAN_RUN_ID,
+                plan_hash=PLAN_HASH,
+                binary_sha256="b" * 64,
+                state_lineage=LINEAGE,
+                state_serial="1",
             )
 
 
