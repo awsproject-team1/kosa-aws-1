@@ -275,6 +275,19 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   - 같은 exact ARN을 `DEPLOYMENT_RUNTIME_JSON`/`DEPLOYMENT_GITHUB_SECRET_ARNS`에도 쓰면 wildcard가 필요 없다.
   워크플로 입력이 코드 변경으로 조용히 무효화됐지만 CloudFormation 호출 전에 fail-closed로 잡혔다. 그것이 이 검증
   단계의 목적이다.
+- **두 번째 dispatch(run 33766208595)는 검증을 통과하고 CloudFormation에서 멈췄다:** `PolicyAuthoringDlqAlarm`
+  CREATE_FAILED, 실행 role `kosa-governance-sandbox-foundation-cfn`이 `cloudwatch:PutMetricAlarm` 권한 없음
+  (`no identity-based policy allows`). 이 알람은 foundation 템플릿의 **첫** `AWS::CloudWatch::Alarm`이고, bootstrap
+  실행 role 정책에는 `cloudwatch` 서비스가 없었다. 스택은 `d6ff2da` 상태로 롤백됐다(`/orchestrate` 여전히 404, API 정상).
+  고침: 두 bootstrap 템플릿의 `FoundationExecutionRole`에 `ProvisionFoundationAlarms`
+  (`cloudwatch:PutMetricAlarm/DeleteAlarms/DescribeAlarms`) 추가, 회귀는
+  `tests/security/test_bootstrap_execution_role_covers_foundation.py`(foundation 리소스 유형 ↔ 실행 role 서비스 대조).
+  **재배포 전에 bootstrap 스택을 먼저 갱신해야 한다** — 실행 role은 GitHub deploy role이 바꿀 수 없고 고객 관리자가
+  Console(CloudFormation → `kosa-governance-sandbox-bootstrap-roles` → 업데이트 → 현재 템플릿 교체 →
+  `infrastructure/cloudformation/m1-customer-bootstrap-roles.yaml` 업로드, 파라미터 그대로) 또는 MFA 세션의
+  `aws cloudformation deploy --stack-name kosa-governance-sandbox-bootstrap-roles --template-file
+  infrastructure/cloudformation/m1-customer-bootstrap-roles.yaml --capabilities CAPABILITY_NAMED_IAM
+  --profile mfa --region us-east-1`로 적용한다. 그 뒤 위 `gh workflow run`을 다시 dispatch한다(Secret은 이미 새 형식).
 - 재배포 뒤 확인 순서: `POST /orchestrate` 200 → `GET /deployments/{id}`에 `verification_assessment_id` →
   remediation 후 `awsproject-team1/test`에 PR. 시연 순서는 `docs/M4-DEMO-RUNBOOK.md` §4.
 - **시연 직전 1시간 안에** GitHub App installation token을 재발급해 `kosa-governance-sandbox/m1/github-token`에

@@ -143,6 +143,17 @@ Resources:
                   - logs:*
                   - sqs:*
                 Resource: "*"
+              # The foundation raises CloudWatch alarms on its dead-letter queues. Without these
+              # three actions the first alarm resource fails the whole stack update with
+              # AccessDenied (observed 2026-09-03, PolicyAuthoringDlqAlarm), and CloudFormation
+              # rolls back everything else in the same change set.
+              - Sid: ProvisionFoundationAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                Resource: "*"
               - Sid: ProvisionFoundationStorageAndAudit
                 Effect: Allow
                 Action:
