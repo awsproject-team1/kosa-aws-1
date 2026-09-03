@@ -18,6 +18,7 @@ class Action(StrEnum):
     MANAGE_POLICY_SOURCES = "MANAGE_POLICY_SOURCES"
     PUBLISH_POLICY_PROFILE = "PUBLISH_POLICY_PROFILE"
     READ_OBSERVABILITY = "READ_OBSERVABILITY"
+    READ_AUDIT_EVENTS = "READ_AUDIT_EVENTS"
 
 
 class AuthorizationDenied(PermissionError):
@@ -43,6 +44,7 @@ _ROLE_ACTIONS = {
             Action.MANAGE_POLICY_SOURCES,
             Action.PUBLISH_POLICY_PROFILE,
             Action.READ_OBSERVABILITY,
+            Action.READ_AUDIT_EVENTS,
         }
     ),
 }

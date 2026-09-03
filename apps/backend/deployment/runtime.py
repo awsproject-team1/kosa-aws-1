@@ -16,17 +16,23 @@ port 4종(`LivePlanRequestPort`/`LiveApplyDispatchPort`/`LiveWorkflowRunReader`/
 store 3종·`DynamoDbDeploymentWorkRepository`를 조립한다. 조립 로직은 I/O seam(`plan_outputs_fetcher`,
 boto3 client, secret_reader)을 주입받아 테스트하고, `lambda_handler`가 실제 I/O를 주입한다.
 
-유일하게 실제 검증이 남은 부분은 `_live_plan_outputs_fetcher`의 GitHub plan run I/O(dispatch·run
-매칭·완료 폴링·artifact 다운로드/파싱)다. 실제 sandbox 자격 증명·네트워크가 있어야 동작·검증되므로,
-그 fetcher는 호출 시 명시적으로 막아 검증되지 않은 I/O가 조용히 실행되지 않게 한다. 나머지 조립·
-구동·파싱은 seam 주입으로 이미 검증된다.
+`_live_plan_outputs_fetcher`는 customer-installed plan workflow를 dispatch한 뒤 GitHub API에서 exact
+commit/display-title run을 재조회·폴링하고, GitHub API artifact ZIP에서 canonical plan/state/binary를
+검증해 회수한다. 실제 protected sandbox 실행은 customer approval와 credential이 필요한 외부 단계다.
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
+import time
+import zipfile
 from collections.abc import Callable, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
 from agent.runtime.live_deployment_ports import (
@@ -55,7 +61,7 @@ class DeploymentRuntimeError(RuntimeError):
 
 
 class LivePlanUnavailableError(DeploymentRuntimeError):
-    """live plan I/O가 주입되지 않아 live 구동을 완결할 수 없다."""
+    """Retained for callers that need to distinguish an unavailable plan runner."""
 
 
 # `LivePlanRequestPort.fetch_outputs`가 요구하는 실제 GitHub plan run I/O의 타입.
@@ -70,13 +76,17 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
     raw_configuration = os.environ.get("DEPLOYMENT_RUNTIME_JSON")
     if not raw_configuration:
         raise DeploymentRuntimeError("deployment worker runtime is not configured")
+    # 설정 검증을 AWS client 생성보다 먼저 끝낸다. boto3 resource/client 생성은 region 등
+    # 자체 환경을 요구하므로, 순서가 뒤집히면 "설정 누락"이 boto3의 다른 오류로 가려진다.
+    table_name = _required_env("METADATA_TABLE_NAME")
+    secret_reader = _live_secret_reader()
     worker = _live_worker(
         raw_configuration,
-        plan_outputs_fetcher=_live_plan_outputs_fetcher(),
-        table=_metadata_table(),
-        table_name=_required_env("METADATA_TABLE_NAME"),
+        plan_outputs_fetcher=_live_plan_outputs_fetcher(secret_reader),
+        table=_metadata_table(table_name),
+        table_name=table_name,
         transaction_client=_boto3_client("dynamodb"),
-        secret_reader=_live_secret_reader(),
+        secret_reader=secret_reader,
         sts_client=_boto3_client("sts"),
         s3_client_factory=_live_s3_client_factory(),
     )
@@ -202,22 +212,203 @@ def _live_worker(
     )
 
 
-def _live_plan_outputs_fetcher() -> PlanOutputsFetcher:
-    """실제 GitHub plan run I/O를 수행하는 fetcher(sandbox 자격 증명·네트워크 필요).
+def _live_plan_outputs_fetcher(
+    secret_reader: Callable[[str], str],
+    *,
+    opener: Callable[..., object] = urlopen,
+    sleeper: Callable[[float], None] = time.sleep,
+    max_polls: int = 60,
+) -> PlanOutputsFetcher:
+    """Dispatch, re-read, and retrieve an approved repository's Terraform plan.
 
-    plan `workflow_dispatch` 트리거 → run name(`deployment=<id> commit=<sha>`)으로 run 매칭 →
-    완료 폴링 → artifact(`plan.canonical.json`/`plan.state.json`) 다운로드·파싱을 담당한다. 이
-    경로는 실제 GitHub API·자격 증명이 있어야 동작·검증되므로, 조립 로직(`_live_worker`)과 분리해
-    여기에 둔다. 실제 sandbox 배선(protected Environment·OIDC Role) 전까지는 호출 시 명시적으로
-    막아, 검증되지 않은 I/O가 조용히 실행되지 않게 한다.
+    The only GitHub write is the customer-installed `terraform-plan.yml`
+    ``workflow_dispatch``.  The runner is identified again from GitHub by its exact
+    commit and deterministic display title; EventBridge values are deliberately not
+    used.  Its artifact archive is accepted only from GitHub's API origin and is
+    reduced to the three files required by the execution contract.
     """
+    if not callable(secret_reader) or not callable(opener) or not callable(sleeper):
+        raise TypeError("plan runner dependencies must be callable")
+    if isinstance(max_polls, bool) or not isinstance(max_polls, int) or max_polls < 1:
+        raise ValueError("max_polls must be a positive integer")
 
     def fetch(target: DeploymentTarget, deployment_id: str, commit_sha: str) -> PlanRunOutputs:
-        raise LivePlanUnavailableError(
-            "live GitHub plan run I/O requires sandbox credentials and is not exercised yet"
+        if not isinstance(target, DeploymentTarget):
+            raise TypeError("target must be a DeploymentTarget")
+        if not isinstance(deployment_id, str) or not deployment_id.strip():
+            raise ValueError("deployment_id must be a non-empty string")
+        if not isinstance(commit_sha, str) or len(commit_sha) != 40:
+            raise ValueError("commit_sha must be a 40-character SHA")
+        token = secret_reader(target.github_token_secret_id)
+        headers = _github_headers(token)
+        repository = quote(target.repository_full_name, safe="/")
+        workflow = "terraform-plan.yml"
+        base = f"https://api.github.com/repos/{repository}/actions"
+        _github_json(
+            f"{base}/workflows/{workflow}/dispatches",
+            method="POST",
+            headers=headers,
+            body=json.dumps(
+                {
+                    "ref": commit_sha,
+                    "inputs": {"deployment_id": deployment_id, "commit_sha": commit_sha},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+            opener=opener,
+            accepted_statuses=frozenset({204}),
         )
+        expected_title = f"terraform-plan deployment={deployment_id} commit={commit_sha}"
+        run: Mapping[str, object] | None = None
+        for attempt in range(max_polls):
+            payload = _github_json(
+                f"{base}/workflows/{workflow}/runs?event=workflow_dispatch&branch={quote(commit_sha)}&per_page=100",
+                method="GET",
+                headers=headers,
+                opener=opener,
+                accepted_statuses=frozenset({200}),
+            )
+            runs = payload.get("workflow_runs")
+            if isinstance(runs, list):
+                run = next(
+                    (
+                        candidate
+                        for candidate in runs
+                        if isinstance(candidate, Mapping)
+                        and candidate.get("head_sha") == commit_sha
+                        and candidate.get("display_title") == expected_title
+                    ),
+                    None,
+                )
+            if run is not None and run.get("status") == "completed":
+                break
+            run = None
+            if attempt + 1 < max_polls:
+                sleeper(5)
+        if run is None or run.get("conclusion") != "success":
+            raise DeploymentRuntimeError("approved Terraform plan run did not succeed")
+        run_id = run.get("id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+            raise DeploymentRuntimeError("Terraform plan run id is invalid")
+        artifacts = _github_json(
+            f"{base}/runs/{run_id}/artifacts",
+            method="GET",
+            headers=headers,
+            opener=opener,
+            accepted_statuses=frozenset({200}),
+        ).get("artifacts")
+        if not isinstance(artifacts, list):
+            raise DeploymentRuntimeError("Terraform plan artifacts response is invalid")
+        expected_artifact = f"terraform-plan-{deployment_id}"
+        artifact = next(
+            (
+                candidate
+                for candidate in artifacts
+                if isinstance(candidate, Mapping)
+                and candidate.get("name") == expected_artifact
+                and candidate.get("expired") is False
+            ),
+            None,
+        )
+        if artifact is None:
+            raise DeploymentRuntimeError("Terraform plan artifact is missing or expired")
+        archive_url = artifact.get("archive_download_url")
+        if not isinstance(archive_url, str) or not archive_url.startswith(
+            "https://api.github.com/"
+        ):
+            raise DeploymentRuntimeError("Terraform plan artifact URL is invalid")
+        archive = _github_bytes(archive_url, headers=headers, opener=opener)
+        return _plan_outputs_from_archive(archive, run_id=str(run_id))
 
     return fetch
+
+
+def _github_headers(token: str) -> dict[str, str]:
+    if not isinstance(token, str) or not token.strip():
+        raise DeploymentRuntimeError("GitHub token is invalid")
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _github_json(
+    url: str,
+    *,
+    method: str,
+    headers: Mapping[str, str],
+    opener: Callable[..., object],
+    accepted_statuses: frozenset[int],
+    body: bytes | None = None,
+) -> Mapping[str, object]:
+    request = Request(url, data=body, headers=dict(headers), method=method)
+    try:
+        with opener(request, timeout=10) as response:
+            status = getattr(response, "status", response.getcode())
+            raw = response.read()
+    except (HTTPError, URLError, TimeoutError) as error:
+        raise DeploymentRuntimeError("GitHub plan request failed") from error
+    if status not in accepted_statuses:
+        raise DeploymentRuntimeError("GitHub plan request returned an unexpected status")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DeploymentRuntimeError("GitHub plan response is invalid") from error
+    if not isinstance(payload, Mapping):
+        raise DeploymentRuntimeError("GitHub plan response is invalid")
+    return payload
+
+
+def _github_bytes(url: str, *, headers: Mapping[str, str], opener: Callable[..., object]) -> bytes:
+    request = Request(url, headers=dict(headers), method="GET")
+    try:
+        with opener(request, timeout=10) as response:
+            status = getattr(response, "status", response.getcode())
+            content = response.read()
+    except (HTTPError, URLError, TimeoutError) as error:
+        raise DeploymentRuntimeError("GitHub plan artifact download failed") from error
+    if status != 200 or not isinstance(content, bytes):
+        raise DeploymentRuntimeError("GitHub plan artifact download failed")
+    return content
+
+
+def _plan_outputs_from_archive(archive: bytes, *, run_id: str) -> PlanRunOutputs:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            names = set(bundle.namelist())
+            required = {"tfplan.binary", "plan.canonical.json", "plan.state.json"}
+            if not required.issubset(names):
+                raise DeploymentRuntimeError("Terraform plan artifact files are incomplete")
+            binary = bundle.read("tfplan.binary")
+            canonical = bundle.read("plan.canonical.json")
+            state = json.loads(bundle.read("plan.state.json").decode("utf-8"))
+            changes = json.loads(canonical.decode("utf-8"))
+    except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DeploymentRuntimeError("Terraform plan artifact is invalid") from error
+    if not isinstance(state, Mapping) or set(state) != {"lineage", "serial"}:
+        raise DeploymentRuntimeError("Terraform plan state artifact is invalid")
+    lineage, serial = state.get("lineage"), state.get("serial")
+    if (
+        not isinstance(lineage, str)
+        or not lineage
+        or isinstance(serial, bool)
+        or not isinstance(serial, int)
+    ):
+        raise DeploymentRuntimeError("Terraform plan state artifact is invalid")
+    if not isinstance(changes, list) or not all(isinstance(change, Mapping) for change in changes):
+        raise DeploymentRuntimeError("Terraform canonical plan artifact is invalid")
+    return PlanRunOutputs(
+        run_id=run_id,
+        plan_hash=hashlib.sha256(canonical).hexdigest(),
+        binary_sha256=hashlib.sha256(binary).hexdigest(),
+        state_lineage=lineage,
+        state_serial=serial,
+        canonical_changes=changes,
+        refreshed=True,
+    )
 
 
 def _live_secret_reader() -> Callable[[str], str]:
@@ -249,8 +440,8 @@ def _live_s3_client_factory() -> Callable[[Mapping[str, str]], object]:
     return factory
 
 
-def _metadata_table() -> object:
-    return _boto3().resource("dynamodb").Table(_required_env("METADATA_TABLE_NAME"))
+def _metadata_table(table_name: str) -> object:
+    return _boto3().resource("dynamodb").Table(table_name)
 
 
 def _boto3_client(service: str) -> object:
@@ -266,7 +457,11 @@ def _boto3() -> object:
 
 
 def _required_env(name: str) -> str:
-    return _string(os.environ.get(name))
+    """필수 runtime 환경 변수를 읽는다. 누락은 설정 실패이므로 fail-closed한다."""
+    value = os.environ.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise DeploymentRuntimeError(f"deployment worker runtime requires {name}")
+    return value
 
 
 def _string(value: object) -> str:

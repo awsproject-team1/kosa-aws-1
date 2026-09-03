@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 from apps.backend.api.assessments import AssessmentReportApiService
+from apps.backend.api.audit_events import AuditEventApiService
 from apps.backend.api.deployments import (
     DeploymentApiService,
     DeploymentApprovalRequest,
@@ -15,6 +16,7 @@ from apps.backend.api.jobs import (
     AssessmentRequest,
     JobApiService,
 )
+from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import (
@@ -45,6 +47,8 @@ class JobHttpHandler:
         deployments: DeploymentApiService | None = None,
         policy_sources: PolicySourceApiService | None = None,
         policy_approvals: PolicyApprovalApiService | None = None,
+        audit_events: AuditEventApiService | None = None,
+        observability: DemoRunObservabilityService | None = None,
         policy_reader: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
@@ -74,8 +78,14 @@ class JobHttpHandler:
             policy_approvals, PolicyApprovalApiService
         ):
             raise TypeError("policy_approvals must be a PolicyApprovalApiService or None")
+        if audit_events is not None and not isinstance(audit_events, AuditEventApiService):
+            raise TypeError("audit_events must be an AuditEventApiService or None")
+        if observability is not None and not isinstance(observability, DemoRunObservabilityService):
+            raise TypeError("observability must be a DemoRunObservabilityService or None")
+        self._observability = observability
         self._policy_sources = policy_sources
         self._policy_approvals = policy_approvals
+        self._audit_events = audit_events
         self._policy_reader = policy_reader
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
@@ -216,6 +226,16 @@ class JobHttpHandler:
                 return _response(
                     200, self._deployments.get_verification(principal, deployment_id).to_dict()
                 )
+            if (
+                method == "GET"
+                and path.startswith("/deployments/")
+                and path.endswith("/observability")
+            ):
+                deployment_id = path.removeprefix("/deployments/").removesuffix("/observability")
+                if not deployment_id or "/" in deployment_id or self._observability is None:
+                    raise JobNotFoundError("deployment observability not found")
+                record = self._observability.assemble(principal, deployment_id=deployment_id)
+                return _response(200, record.to_dict())
             if method == "GET" and path.startswith("/deployments/"):
                 deployment_id = path.removeprefix("/deployments/")
                 if not deployment_id or "/" in deployment_id or self._deployments is None:
@@ -223,6 +243,14 @@ class JobHttpHandler:
                 return _response(
                     200, self._deployments.get_deployment(principal, deployment_id).to_dict()
                 )
+            if method == "GET" and path == "/audit-events":
+                if self._audit_events is None:
+                    raise JobNotFoundError("audit events route not found")
+                limit, cursor, event_type = _audit_event_query(event.get("queryStringParameters"))
+                page = self._audit_events.list_events(
+                    principal, limit=limit, cursor=cursor, event_type=event_type
+                )
+                return _response(200, page.to_dict())
             if method == "GET" and path.startswith("/jobs/"):
                 job_id = path.removeprefix("/jobs/")
                 if not job_id or "/" in job_id:
@@ -251,6 +279,21 @@ class JobHttpHandler:
             return _public_error(error)
         except Exception as error:
             return _public_error(error)
+
+
+def _audit_event_query(
+    parameters: object,
+) -> tuple[object | None, object | None, object | None]:
+    """Read the audit page query without interpreting it.
+
+    Validation belongs to `AuditEventApiService`, which owns the bounds and the known
+    event-type vocabulary. Parsing here would put the same rules in two places.
+    """
+    if parameters is None:
+        return None, None, None
+    if not isinstance(parameters, Mapping):
+        raise RequestValidationError("audit event query is invalid")
+    return parameters.get("limit"), parameters.get("cursor"), parameters.get("event_type")
 
 
 def _request_parts(event: Mapping[str, object]) -> tuple[str, str, Mapping[str, object]]:

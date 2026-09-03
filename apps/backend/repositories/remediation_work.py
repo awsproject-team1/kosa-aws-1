@@ -77,7 +77,7 @@ class DynamoDbRemediationWorkRepository:
                 remediation_id=remediation_id,
                 job_id=job_id,
                 revision=expected_revision,
-                context=_context(_mapping(remediation.get("context"))),
+                context=remediation_context_from_item(_mapping(remediation.get("context"))),
                 decision=_decision(_mapping(remediation.get("decision"))),
             )
         except StoredDataError:
@@ -88,7 +88,13 @@ class DynamoDbRemediationWorkRepository:
             raise RepositoryError("remediation work read failed") from None
 
 
-def _context(value: Mapping[str, object]) -> RemediationContext:
+def remediation_context_from_item(value: Mapping[str, object]) -> RemediationContext:
+    """Rebuild the stored C context (Finding + snapshot + evidence).
+
+    Shared with the deployment approval path: readiness is judged against the same
+    context the Worker used, so both must read it the same way. A second parser would
+    let the two drift and judge a plan against a Finding it was not generated from.
+    """
     finding_value = _mapping(value.get("finding"))
     snapshot_value = _mapping(value.get("snapshot"))
     artifact_value = _mapping(snapshot_value.get("artifact"))

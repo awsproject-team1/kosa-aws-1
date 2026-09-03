@@ -79,6 +79,43 @@ ADR-0007은 "Apply는 Human Approval 뒤 GitHub Actions OIDC로만 실행하고 
 - 고객 repository는 `.terraform.lock.hcl`을 커밋해야 하고 workflow는 Terraform version을
   고정한다. Provider 버전이 흔들리면 같은 commit에서 다른 plan이 나와 재현성이 깨진다.
 
+#### 1-a. Plan 요약(`PlanSummary`)과 resource id 투영 — 2026-09-03 보완
+
+`plan_hash`는 "이 plan이 무엇인가"를 고정하지만 C의 readiness 판정이 묻는 세 가지를 담지 않는다:
+refresh 여부, 파괴적 변경 여부, **그 plan이 건드리는 AWS 리소스**. `PlanReadinessInput`은 D를
+producer로 지목했지만 그 값의 산출 규칙도 저장 경로도 정해져 있지 않아, 승인 경로가 열리지 못하고
+있었다. 여기서 셋 다 확정한다.
+
+- **`PlanSummary`(`refreshed`, `has_destructive_changes`, `mapped_resource_ids`)를
+  `PlanExecutionResult`에 싣고 plan facts와 함께 `DEPLOYMENT#{deployment_id}` item에 저장한다.**
+  승인은 plan보다 나중 invocation에서 일어나므로 이 값들은 durable해야 한다. plan facts와 마찬가지로
+  all-present-or-all-absent다.
+- **`mapped_resource_ids`는 hash된 바로 그 canonical 투영에서 파생한다.** Terraform address와
+  Finding의 `resource_id`는 서로 다른 어휘이므로 둘을 잇는 규칙이 필요하다. 규칙은 **resource type별
+  identity 속성의 허용 목록**이며, 투영 자체와 같은 이유로 허용 목록이다 — provider가 identity처럼
+  보이는 필드를 하나 늘렸다고 해서 "이 plan이 어느 리소스를 건드리는가"의 답이 조용히 바뀌면 안 된다.
+  S3 범위에서는 모든 항목이 `bucket`이다(bucket 리소스는 이름을 `bucket` 인자로 받고, 하위 리소스는
+  같은 속성으로 부모를 참조한다). 이 값이 곧 `AwsResourceQuery(resource_type="AWS::S3::Bucket")`의
+  `resource_id`이자 `Finding.resource_id`다.
+- `after`를 먼저 읽고 `before`를 그다음에 읽는다. 삭제되는 리소스도 자기 id를 밝혀야 하기 때문이다.
+  값이 없거나 계산값(`after_unknown`)이면 건너뛴다 — 알 수 없는 id는 "plan이 그 Finding을 건드린다"는
+  근거가 아니다.
+- **허용 목록 밖의 resource type은 아무것도 기여하지 않는다.** 그 결과 finding 리소스가 매핑되지
+  않아 readiness가 `BLOCKED`가 되며, 이는 fail-closed 방향이다. 관련성을 확인하지 못한 plan을
+  승인 가능으로 표시하지 않는다. resource type 추가는 그것을 필요로 하는 Rule과 같은 변경에서 한다.
+- **`refreshed`는 D가 어느 workflow를 실행했는지에서 나온다.** 승인 대상 plan은 `ci/terraform/
+  terraform-plan.yml`(refreshed saved plan을 만드는 승인 template)이 만든 것이며, apply 직전
+  재검증이 run의 workflow path를 대조한다. terraform 플래그를 사후에 관측할 방법은 없으므로 근거는
+  "어느 workflow가 돌았는가"다.
+- **어댑터는 회수한 canonical 바이트로 `plan_hash`를 다시 계산해 대조한 뒤에만 요약을 만든다.**
+  승인 게이트는 hash를 재검증하지 요약을 재검증하지 않으므로, 요약이 다른 plan을 설명하면 그 뒤로는
+  아무도 잡을 수 없다.
+- 투영 함수(`mapped_resource_ids`)는 `packages/contracts/terraform_plan.py`에 두고 A/C/D가 같은
+  함수를 호출한다. `plan_hash`·destructive 판정과 같은 원칙이다.
+- **readiness 판정 자체는 저장하지 않는다.** 저장된 사본은 입력이 바뀌면 조용히 낡고, 낡은
+  `READY_FOR_APPROVAL`은 C가 막았을 plan을 승인 가능으로 보여준다. 승인 조회와 상태 조회는 같은
+  reader가 같은 입력으로 판정한다.
+
 ### 2. Terraform state backend와 lock
 
 - 고객 관리자가 실행하는 bootstrap stack이 state 저장소를 만든다: versioned·encrypted·

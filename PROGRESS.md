@@ -2,6 +2,141 @@
 
 ## Current
 
+- PR #58–#62를 최신 `dev`에서 하나의 M4 통합 브랜치로 합쳤다. runtime/IaC API Gateway·SQS Worker
+  배선, Admin audit read, Deployment plan/approval/read/completion 경계가 함께 존재한다. Deployment
+  live plan runner는 승인 target의 `terraform-plan.yml` dispatch → exact GitHub run 재조회/폴링 →
+  GitHub API artifact ZIP 검증으로 plan/state/binary를 회수한다. protected customer sandbox의
+  secret, OIDC, demo repository 승인과 실제 실행 증적은 외부 승인 단계이며 fixture 성공을 release
+  evidence로 표기하지 않는다.
+
+- **세 Worker 큐 중 둘에 소비자가 없었다.** `docs/DESIGN.md`는 Assessment/Remediation/Deployment
+  세 Worker Lambda를 아키텍처로 기술하지만 CloudFormation에는 Assessment 하나만 있었다. Deployment
+  Worker는 composition root(`apps/backend/deployment/runtime.py`)까지 다 만들어 두고도 그것을
+  실행할 Lambda와 event source가 없었고, Remediation Worker는 composition root조차 없었다. 큐에
+  task가 쌓여도 소비자가 없으면 재시도만 반복하다 DLQ로 간다.
+  - `apps/backend/remediation/runtime.py`를 Deployment Worker runtime과 같은 구조로 추가했다
+    (`parse_tasks`/`run_tasks`/`lambda_handler`). 이 큐는 두 remediation command만 받는다 — 다른
+    큐의 command가 흘러들면 Worker가 "지원하지 않는 command"로 실패하기 전에 파싱에서 막는다.
+    큐를 잘못 지목한 것은 재시도로 나아지지 않는다.
+  - `SnapshotSyncAction`으로 **`ACTUAL_SYNC` 경로를 완결 배선**했다. 대상은 평가된 snapshot
+    commit이고 GitHub를 읽지 않는다 — 지금의 default branch head를 읽으면 평가 이후 merge된 다른
+    변경까지 apply 대상에 들어오는데, 그건 아무도 이 Finding의 조치로 승인한 적 없는 코드다.
+    `RemediationWorker._require_sync_result`가 요구하는 불변식도 정확히 이것이다.
+  - **`TERRAFORM_PATCH`는 막았다.** 그 port는 승인된 snapshot에 바인딩된 Terraform 변경을 실제로
+    생성해야 하는데 저장소에 있는 것은 변경 계획을 주입받는 fixture generator뿐이다. 고객 실행
+    경로에서 그것을 쓰면 사람이 검토한 적 없는 patch가 고객 repository에 제안된다.
+  - CloudFormation에 `RemediationWorkerFunction`/`DeploymentWorkerFunction`과 두 event source
+    mapping을 추가하고, **모든 workflow 큐에 소비자가 있음**을 security 회귀로 고정했다. Deployment
+    Worker의 live GitHub token 읽기 정책도 설정됐을 때만 만들어지도록 조건부로 붙였다.
+
+- **`POST /deployments/{id}/approve`를 열었다** — M3 폐루프의 사람 승인 게이트다. 막고 있던 건
+  결정 하나였고, ADR-0019에 §1-a 보완으로 확정했다: `plan_hash`는 "이 plan이 무엇인가"를 고정하지만
+  C readiness가 묻는 세 가지(refresh 여부, 파괴적 변경, **그 plan이 건드리는 AWS 리소스**)를 담지
+  않는다. `PlanReadinessInput`은 D를 producer로 지목했지만 산출 규칙도 저장 경로도 없었다.
+  - `PlanSummary`(`refreshed`/`has_destructive_changes`/`mapped_resource_ids`)를
+    `PlanExecutionResult`에 싣고 plan facts와 함께 저장한다. 승인은 plan보다 나중 invocation이라
+    durable해야 한다.
+  - **`mapped_resource_ids`는 resource type별 identity 속성의 허용 목록으로 투영한다.** Terraform
+    address와 Finding의 `resource_id`는 다른 어휘라 잇는 규칙이 필요했다. 허용 목록인 이유는 plan
+    투영과 같다 — provider가 identity처럼 보이는 필드를 늘렸다고 "이 plan이 어느 리소스를 건드리는가"의
+    답이 조용히 바뀌면 안 된다. S3 범위에서는 모두 `bucket`이고, 그 값이 곧 `Finding.resource_id`다.
+    허용 목록 밖 type은 아무것도 기여하지 않아 readiness가 `BLOCKED`가 된다(fail-closed — 관련성을
+    확인하지 못한 plan을 승인 가능으로 표시하지 않는다). `after` → `before` 순으로 읽어 삭제되는
+    리소스도 자기 id를 밝히고, 계산값은 추측하지 않고 건너뛴다.
+  - **어댑터는 회수한 canonical 바이트로 `plan_hash`를 다시 계산해 대조한 뒤에만 요약을 만든다.**
+    승인 게이트는 hash를 재검증하지 요약을 재검증하지 않으므로, 요약이 다른 plan을 설명하면 그 뒤로는
+    아무도 잡지 못한다.
+  - `DynamoDbDeploymentPlanReader`가 저장된 plan + 요약 + Worker context로 readiness를 read 시
+    파생한다. **판정은 저장하지 않는다** — 낡은 `READY_FOR_APPROVAL`은 C가 막았을 plan을 승인
+    가능으로 보여준다. 상태 조회의 readiness도 같은 reader의 같은 판정을 써서 "승인 대기" 표시와
+    실제 승인 가능 여부가 어긋나지 않는다.
+  - `refreshed`의 근거는 "어느 workflow가 돌았는가"다. terraform 플래그를 사후에 관측할 방법은
+    없고, 승인 대상 plan은 refreshed saved plan을 만드는 승인 template이 만든 것이며 apply 직전
+    재검증이 run의 workflow path를 대조한다.
+  **이로써 Deployment API 다섯 route가 모두 durable 배선을 갖췄다**(생성·조회·검증조회·승인·거절).
+- M4 A 관측·비용 조회를 HTTP 경계에 붙였다(`GET /deployments/{id}/observability`, Admin 전용).
+  `DemoRunObservabilityService`는 정의만 있고 route가 없었다. live CloudWatch/CloudTrail/Cost
+  Explorer adapter는 아직 없으므로 composition root는 source를 `None`으로 두고 route는 404로
+  남는다 — 주입할 source가 없는 것을 항상 실패하는 endpoint(500)로 보여주지 않는다. 남은 조각은
+  live metric source 하나이고, 그건 실제 AWS 자격 증명이 있어야 동작·검증된다.
+- **A/D 공유 계약의 A 몫(apply 완료 Event 예약 write)을 구현했다**(ADR-0019 §7, DATABASE.md
+  "완료 Event 경계"). D는 예약 item에서 `run_reference`를 읽어 검증·확정하는 경로를 이미 갖고
+  있었지만 예약을 쓰는 쪽이 없어 live `APPLY_COMPLETED`가 영원히 fail-closed였다.
+  `ApplyCompletionService` + `DynamoDbDeploymentCompletionStore` + `apply_completion_handler`
+  (EventBridge 진입점)로 닫았다. Event에서 읽는 값은 `deployment_id`/`run_id` **두 좌표뿐**이고
+  conclusion·commit·plan digest 같은 주장은 읽지도 저장하지도 않는다 — Event는 신호이지 정본이
+  아니며, 저장하는 순간 검증되지 않은 주장이 `derive_deployment_status()`의 입력이 된다.
+  EVENT 예약 + Job revision bump + `APPLY_COMPLETED` outbox는 하나의 조건부 transaction이다.
+  **소유 고객은 Event가 아니라 저장에서 해석한다** — `DEPLOYMENT#` item에
+  `GSI1PK = DEPLOYMENT#{deployment_id}`를 채우고 Job 해석과 같은 방식으로 id를 푼 뒤 그 customer
+  scope로 record를 다시 읽는다. payload에서 소유자를 받으면 Event를 만들 수 있는 누구든 남의 Job을
+  재개시킬 수 있다. 이미 terminal인 Job은 되살리지 않는다(사람이 끝낸 결정을 Event가 뒤집지 않는다).
+  CloudFormation에 `ApplyCompletionFunction`과 EventBridge rule/permission을 추가하고, 이 Lambda가
+  유일한 DynamoDB write 경로임을 security 회귀로 고정했다.
+- M3 A 조회·검증 reader를 붙여 `GET /deployments/{id}`와 `GET /deployments/{id}/verification`이
+  실제로 답하게 했다(같은 브랜치). `DynamoDbDeploymentFactsReader`는 `DEPLOYMENT#{id}` SK prefix
+  query 한 번으로 승인·거절·dispatch·EVENT item을 모두 읽고 Job과 합쳐 `DeploymentFacts`를 만든다.
+  apply 결론은 D가 재조회로 확정한 `VERIFIED` EVENT item에서만 온다 — dispatch 영수증과 예약된
+  `PENDING_VERIFICATION` item은 "실행 중"일 뿐 결론이 아니다(ADR-0019 §5·§7).
+  `DynamoDbComparisonInputReader`는 두 Assessment를 complete `ComparisonAssessment`로 만든다.
+  **`model_profile_id`/`rubric_version`은 결과에서 파생한다** — Initial Assessment는 그 pin을 item에
+  저장하지 않는 것이 규칙이고(pin은 검증 전용, ADR-0020 §3), 원본 쪽은 파생 말고 근거가 없으며,
+  양쪽을 같은 방법으로 읽어야 비교 축이 한 종류가 된다. 결과의 값은 "이 값으로 평가했다"는 사실이고
+  비교가 필요로 하는 건 그쪽이다. 한 Assessment가 Profile/rubric을 섞고 있으면 비교 전에
+  fail-closed한다. 상태 화면의 검증 판정은 검증 조회와 **같은** reader를 써서 둘이 어긋나지 않게 했다.
+- **`POST /deployments/{id}/approve`는 의도적으로 fail-closed로 남겼다.** 승인 plan reader는 plan과
+  함께 C의 readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan 요약(`refreshed`,
+  `mapped_resource_ids`, destructive 여부)을 `PlanExecutionResult`가 영속화하지 않는다.
+  `PlanReadinessInput`은 D를 producer로 지목하지만 저장 경로가 없다. 같은 이유로 상태 파생의
+  readiness도 `None`이다 — 근거 없이 `READY_FOR_APPROVAL`을 넣으면 C가 막았을 plan(예: destructive
+  변경)이 "승인 대기"로 보인다. **다음 작업은 D가 `PlanExecutionResult`에 plan 요약을 실어 plan
+  facts와 함께 저장하는 것**이고, 그게 되면 plan reader와 approve가 같이 열린다.
+- M3 A Deployment 생성 경로를 실제로 살렸다(`feature/m3-a-deployment-readers`, base=dev). 문서는
+  생성이 "durable 배선 완결"이라고 적었지만, composition root가 `DeploymentApiService(sources=...)`
+  를 넘기지 않아 `POST /remediations/{id}/deployments`는 프로덕션에서 항상
+  `deployment creation dependencies are not configured`로 죽고 있었다. 원인은 그 아래에 하나 더
+  있었다 — **C Remediation Worker 결과를 저장하는 DynamoDB 구현이 아예 없었다**
+  (`RemediationResultStore`의 실구현이 테스트 fake뿐). 결과가 저장되지 않으니 생성이 확인해야 할
+  전제조건("worker 결과가 존재") 자체를 만들 수 없었다. 세 조각을 넣어 경로를 닫았다:
+  (1) `DynamoDbRemediationResultStore` — `REMEDIATION#{id}` item에 `result`를 conditional
+  update로 한 번만 채운다. plan facts와 같은 관례(멱등 흡수, 덮어쓰기 불가)이고, 별도 `#RESULT`
+  item으로 나누지 않은 이유는 생성이 decision과 결과를 **함께** 봐야 하기 때문이다 — 한 item이면
+  단일 strongly-consistent get이고, 두 item이면 decision만 보이는 중간 상태를 읽는다.
+  (2) `DynamoDbDeploymentSourceReader` — decision·worker 결과·source Assessment를 한 번에 읽고
+  대상 commit을 정한다. `ACTUAL_SYNC`는 저장된 sync target commit이 곧 대상이라 GitHub read가
+  없고, `TERRAFORM_PATCH`는 ADR-0019 §3대로 **merge된 default branch commit**이 대상이다.
+  merge 전이면 도달 불가로 표시하고 commit을 지어내지 않는다. `source_assessment_id`가 없으면
+  검증을 정확한 before-state에 묶을 수 없으므로 fail-closed한다.
+  (3) `DeploymentCommitResolver` port(D 소유)와 `LiveDeploymentCommitResolver` — default branch
+  이름을 repository에서 읽고(설정을 믿지 않는다), patch에서 결정적으로 유도한 head branch로 PR을
+  찾고, merge commit이 default branch에서 **여전히** 도달 가능한지 compare로 확인한다. `merged_at`만
+  보면 merge 뒤 revert된 commit을 배포하게 된다. 미설정 배포에서는 `TERRAFORM_PATCH`만 fail-closed
+  되고 `ACTUAL_SYNC` 배포는 GitHub 없이 그대로 동작한다.
+  CloudFormation에 `DeploymentRuntimeJson`/`DeploymentGitHubSecretArns` 파라미터와 all-or-none
+  Rule, API Lambda 환경 변수, 조건부 secret 정책(와일드카드 아님)을 추가하고 security 회귀로
+  고정했다. 문서(CONTRACTS/DATABASE) 동기화. **남은 reader 3종**(`DeploymentPlanReader`/
+  `DeploymentFactsReader`/`ComparisonInputReader`)은 approve/get/verification을 여는 후속이다.
+
+- M2 A Admin 감사 이력 조회(`GET /audit-events`)를 구현했다(`feature/m2-a-audit-events`, base=dev).
+  일곱 writer가 이미 `AUDIT#{occurred_at}#{event_id}` 한 SK 규약과 `event_type` 한 필드명을 쓰고
+  있어, 조회는 writer별 분기 없이 고객 partition의 `AUDIT#` prefix를 SK 역순으로 읽는 단일 query다
+  (scan 없음). `AuditEvent`/`AuditEventPage` read projection은 네 identity 필드와 writer별 payload
+  `details`만 담고, `audit_event_details()`가 DynamoDB key·GSI·`entity_type`·`version` 같은 저장
+  bookkeeping을 걷어낸다. 범위는 항상 호출자의 verified `custom:customer_id`이며 조회 대상 고객을
+  query로 지정할 수 없다. cursor도 Client가 되돌려주는 값이므로 customer scope를 검증해 다른
+  고객 이력으로 넘어가는 것을 막는다. 알 수 없는 `event_type`은 빈 페이지가 아니라 400이다.
+  `AuditEventType`에 ADR-0019가 합의한 다섯 값(`APPLY_DISPATCHED`/`APPLY_COMPLETED`/`APPLY_FAILED`/
+  `POST_DEPLOY_VERIFIED`/`MANUAL_RECONCILIATION_REQUIRED`)을 먼저 넣어 어휘를 닫았다 — 조회가 한
+  vocabulary만 보게 하려면 종류 집합이 writer보다 먼저 고정돼야 한다. `GetAuditEventsRoute`를
+  CloudFormation에 JWT authorizer와 함께 선언하고, route 누락을 security 회귀로 고정했다.
+  문서(API/CONTRACTS/DATABASE) 동기화. **M2 A는 이로써 남은 항목이 없다.**
+- D Deployment Worker runtime의 설정 검증 순서를 고쳤다(`fix/deployment-runtime-env-validation-order`).
+  `lambda_handler`가 `_metadata_table()`을 `_required_env("METADATA_TABLE_NAME")`보다 먼저 평가해
+  필수 환경 변수 누락이 fail-closed된 설정 오류 대신 boto3 `NoRegionError`로 새어 나갔고, 그 때문에
+  `dev`에서 unit 테스트 1건이 실패하고 있었다. 검증을 AWS client 생성보다 먼저 끝내고,
+  `_required_env()`가 누락된 이름을 밝히는 `DeploymentRuntimeError`를 올리도록 바꿨다. live mode
+  테스트도 실제 동작에 맞게 다시 썼다 — 기존 테스트는 "설정이 유효해 plan I/O에서 멈춘다"고
+  주장했지만 실제로는 그보다 먼저 멈추고 있었다.
 - M4 A 관측·비용 기록 조립 경계를 구현했다(ADR-0021 §3, `feature/m4-a-observability`, base=dev).
   데모 폐루프 1회 실행의 일곱 항목(Assessment 성공률, Bedrock 호출, Queue 건전성, Job 재개,
   plan/apply, 감사 이력, 비용)을 immutable하게 묶는 `DemoRunObservability` 계약을 두고, 각 항목은
@@ -540,8 +675,6 @@
   `START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED`) 위에 올린다.
   검증 조회는 `compare_post_deploy_assessments()`에 complete `ComparisonAssessment` 두 개를
   fail-closed로 배선한다 (ADR-0019 §4·§8, ADR-0020 §1·§7).
-- **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
-  `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
   16개 정합 `PASS` snapshot과 logging 설정이 남은 Actual/Drift 2개 `FAIL` snapshot이며 원 Assessment와
   같은 rubric을 쓴다. fixture gate는 통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로
@@ -651,10 +784,10 @@
 
 **Exit criteria:** 선택된 Finding에서 최소 Terraform Patch, Branch/Commit/PR, CI 및 Deployment Readiness Validation/plan까지 이어진다.
 
-- [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
+- [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader, Admin `GET /audit-events` 감사 이력 조회까지 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 destructive 판정은 ADR-0019 `Accepted`로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR·Terraform plan SDK adapter와 customer runtime 배선)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트, destructive 판정, `mapped_resource_ids` 투영은 ADR-0019 §1·§1-a로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. `PlanSummary` 영속화로 승인 경로도 열렸다. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR adapter와 Remediation Worker customer runtime 배선)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.

@@ -55,11 +55,11 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
-| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job/result reference |
+| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job 참조, 그리고 C Worker 결과 `result` |
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
-| Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail |
+| Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail. `GET /audit-events`는 이 prefix를 SK 역순으로 읽는다 |
 
 `Assessment result` and `Finding` are co-located with their Assessment so one query can retrieve the full assessment report. If an Assessment can exceed DynamoDB partition or response limits, results and Findings are independently paginated by their `SK` prefixes. 새 plan의 `completed_evaluations`는 Result/Finding immutable write와 같은 transaction에서만 증가하며, 진행 중 Coverage read는 이 counter를 사용한다. large report payloads remain in S3.
 
@@ -74,8 +74,10 @@ counter와 materialized score는 이후 storage migration 전에는 Assessment m
 | Base table | `CUSTOMER#{customer_id}` + `JOB#{job_id}` | Get a customer-scoped Job |
 | Base table | `CUSTOMER#{customer_id}` + `ASSESSMENT#{assessment_id}` prefix | Assessment with results/findings |
 | Base table | `CUSTOMER#{customer_id}` + `DEPLOYMENT#{deployment_id}` prefix | Deployment and approval records |
+| Base table | `CUSTOMER#{customer_id}` + `AUDIT#` prefix (descending) | Admin 감사 이력 페이지 조회. SK가 `occurred_at`으로 시작하므로 최신순이 key 순서 읽기이고 정렬이 필요 없다 |
 | Base table | `CUSTOMER#{customer_id}` + `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}` prefix | 고객의 exact Rule version 예외 조회; resource scope는 조회 후 좁힌다 |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
+| `GSI1` | `GSI1PK = DEPLOYMENT#{deployment_id}`, `GSI1SK = CUSTOMER#{customer_id}` | apply 완료 Event의 deployment id로 소유 고객을 해석한 뒤 그 scope로 record를 다시 읽는다 |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
 | Base table | `CUSTOMER#{customer_id}` + `POLICY_INGESTION#{source_id}#VERSION#{version}` | Processing status of one uploaded Policy Source version |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#INGESTION_STATUS#{status}`, `GSI2SK = updated_at#POLICY_INGESTION#{source_id}#VERSION#{version}` | Customer ingestion list by status and recency |
@@ -104,12 +106,30 @@ audit 두 항목만 쓰고 Job/Outbox는 만들지 않는다. 고객 예외 등�
 `REMEDIATION_EXCEPTION_APPROVED` audit event를 같은 transaction에 쓰며 ID/customer/approver/time은
 Backend가 발급한다.
 
+C Remediation Worker의 결과는 같은 `REMEDIATION#{remediation_id}` item에 `result` 속성으로
+conditional update(`attribute_not_exists(result)`)한다. plan facts를 `DEPLOYMENT#` item에 채우는
+것과 같은 관례이며 이유도 같다 — at-least-once 재시도는 흡수되고, 다른 결과는 이미 기록된 것을
+덮어쓰지 못한다. `result.kind`는 `RemediationAction` 값(`TERRAFORM_PATCH`/`ACTUAL_SYNC`)이고
+payload는 각각 `patch`(`RemediationPatch`)와 `sync_target`(`RemediationSyncTarget`)이다. 별도
+`#RESULT` item으로 나누지 않는 이유는 Deployment 생성 경로에 있다 — 생성은 decision과 결과를 함께
+확인해야 하는데(ADR-0019 §4), 한 item이면 그 확인이 단일 strongly-consistent get이고, 두 item이면
+decision은 보이는데 결과는 아직 안 보이는 중간 상태를 읽을 수 있다.
+
+Deployment 생성의 대상 commit은 action마다 다르다(ADR-0019 §3). `ACTUAL_SYNC`는 저장된
+`sync_target.commit_sha`(이미 `IAC` 관점을 통과한 default branch commit)를 그대로 쓰므로 GitHub
+read가 필요 없다. `TERRAFORM_PATCH`는 사람이 merge한 **default branch의 merge commit**이 대상이며,
+그 값은 저장돼 있지 않고 D 소유 read-only port(`DeploymentCommitResolver`)가 GitHub에서 해석한다.
+merge 전이면 해석 결과가 없고, 생성은 도달 불가로 거절된다. patch의 `base_commit_sha`를 대신 쓰지
+않는다 — base는 patch를 만든 시점의 스냅샷이고, 그걸 apply하면 사람이 승인하지 않은 코드를
+배포하게 된다.
+
 ## M3 planned deployment and verification storage
 
 ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. ADR-0019의 Deployment 상태 기계도
 `Accepted`이며 아래 정의대로 구현한다. A의 Deployment 생성·조회·거절과 D Worker의 plan/apply/verify
 store가 구현됐다. apply 완료 Event 경계는 아래 "완료 Event 경계(A/D 공유 계약)"로 확정한다 —
-A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 어댑터는 아직 구현되지 않았다.
+A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 어댑터는 승인 target의
+customer-installed workflow만 dispatch하고, GitHub run/artifact를 재조회·검증한다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -122,9 +142,12 @@ A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 
   artifact를 내려받는다), `remediation_id`, `source_assessment_id`, 그리고 검증 후의
   `verification_assessment_id`를 보관한다. `serial` 단독으로는 state 재생성을 잡지 못하므로 두 값을
   쌍으로 둔다.
-- plan facts(`plan_hash`·plan/binary artifact·state·`plan_run`)는 D Worker가 `PLAN_COMPLETED`에서
-  `DeploymentPlanStore`로 `DEPLOYMENT#{deployment_id}` item에 conditional update(`attribute_not_exists
-  (plan_hash)`)로 채운다. 같은 revision의 재시도는 흡수되고(멱등), 다른 plan은 덮어쓰지 못한다.
+- plan facts(`plan_hash`·plan/binary artifact·state·`plan_run`·`plan_summary`)는 D Worker가
+  `PLAN_COMPLETED`에서 `DeploymentPlanStore`로 `DEPLOYMENT#{deployment_id}` item에 conditional
+  update(`attribute_not_exists(plan_hash)`)로 채운다. `plan_summary`는 C readiness가 요구하는
+  `refreshed`/`has_destructive_changes`/`mapped_resource_ids` 세 값이며, 승인이 plan보다 나중
+  invocation에서 일어나므로 durable해야 한다(ADR-0019 §1-a). readiness 판정 자체는 저장하지 않고
+  이 요약과 Worker context에서 read 시 파생한다 — `DeploymentStatus`와 같은 원칙이다. 같은 revision의 재시도는 흡수되고(멱등), 다른 plan은 덮어쓰지 못한다.
   D Worker의 authoritative work는 이 item과 `JOB#{job_id}`(revision)·approval item을 합성해 만든다.
 - **`DeploymentStatus`는 이 item에 저장하지 않는다.** 배포 생애주기 위치는 `JobStatus`와
   `JobCurrentStep`에 이미 저장돼 있고, 표현 값은 read 시 `derive_deployment_status()`로 계산한다.
@@ -148,12 +171,19 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
 
 - **Queue payload는 여전히 최소다:** `job_id`, `expected_revision`, `command`만 흐른다. `run_id`는
   큐에 싣지 않는다(payload 불신 원칙, ADR-0019 §7).
-- **A / EventBridge (writer):** GitHub Actions apply run 완료 Event를 받으면, 그 event에서 얻은
-  `run_id`로 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을 `status=PENDING_VERIFICATION`으로
+- **A / EventBridge (writer, 구현됨):** GitHub Actions apply run 완료 Event를 받으면, 그 event에서
+  얻은 `run_id`로 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을 `status=PENDING_VERIFICATION`으로
   write하고(담는 값은 `run_id`뿐, run의 conclusion/facts는 담지 않는다 — 신뢰 대상이 아니므로),
   같은 deployment의 Job을 다음 revision으로 올리며 `APPLY_COMPLETED` task를 Deployment Queue에 넣는다.
   이 예약 item은 "재조회할 run 좌표 포인터"이지 사실 기록이 아니다. GitHub Actions에는 DynamoDB
-  write 권한을 주지 않는다.
+  write 권한을 주지 않는다 — `ApplyCompletionFunction`이 유일한 write 경로다.
+  세 write는 하나의 조건부 transaction이다. Job revision만 올라가고 예약이 없으면 D가
+  `run_reference`를 못 찾아 fail-closed되고, 예약만 되고 task가 없으면 아무도 검증하지 않는다.
+  EVENT item의 `attribute_not_exists(SK)`와 Job의 revision 조건이 함께 at-least-once 재전달을
+  흡수한다. Event가 지목하는 것은 deployment뿐이고 **소유 고객은 Event가 아니라 저장에서 해석한다**
+  — `DEPLOYMENT#` item의 `GSI1PK = DEPLOYMENT#{deployment_id}`로 id를 풀고 그 customer scope로
+  record를 다시 읽는다(Job 해석과 같은 방식). 소유자를 payload에서 받으면 Event를 만들 수 있는
+  누구든 남의 Job을 재개시킬 수 있다. 이미 terminal인 Job(거절·실패·완료)은 재개하지 않는다.
 - **D Worker (reader → verifier):** `APPLY_COMPLETED`를 소비하면 `(job_id, revision)`으로 work를
   다시 읽고, 그 deployment의 `PENDING_VERIFICATION` EVENT item에서 `run_id`를 읽어 `run_reference`를
   만든다. 그 `run_id`로 GitHub Actions run을 재조회(`WorkflowRunReader`)해 승인 사실
@@ -161,8 +191,11 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   `DeploymentVerificationStore`가 같은 `#EVENT#{run_id}` item을 검증된 `WorkflowRunFacts`로
   `status=VERIFIED`로 확정한다. 하나라도 다르면 재시도 없이 차단한다(MANUAL_REVIEW로 파생).
   예약 item이 없으면(`run_reference` 부재) Worker는 `APPLY_COMPLETED`를 fail-closed한다.
-- **미구현 조각:** live plan 어댑터(`PlanRequestPort`)는 아직 없어 live `RUN_DEPLOYMENT`는 명시적
-  오류로 멈춘다. fixture 경로(Mock 어댑터)는 세 command를 모두 구동한다.
+- **live plan 경로:** `PlanRequestPort`는 승인 target의 `terraform-plan.yml`만 dispatch하고,
+  exact commit과 deterministic display title로 GitHub Actions run을 재조회·완료 확인한 뒤 GitHub
+  API artifact ZIP의 canonical plan/state/saved binary를 검증해 저장한다. customer secret과
+  protected Environment가 없으면 configuration 단계에서 fail-closed하며 fixture 경로(Mock
+  어댑터)는 세 command를 모두 구동한다.
 - Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
   `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가
@@ -189,9 +222,16 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   (`RemediationAction` 값)을 다른 뜻으로 함께 쓰므로, 두 개념에 같은 필드명을 쓰면 값이 충돌한다.
   `action`을 종류 필드로 쓰던 세 곳(`DEPLOYMENT_APPROVED`, `POLICY_SOURCE_APPROVED`,
   `POLICY_PROFILE_PUBLISHED`)은 `event_type`으로 개명했고 다섯 writer 모두 같은 필드명을 쓴다.
-  M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`,
-  `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 ADR-0019 합의와 함께
-  추가된다.
+  M3의 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`,
+  `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 합의대로
+  `AuditEventType`에 들어갔다. 앞의 둘은 Deployment 생성·거절 writer가 이미 쓰고, 나머지 다섯은
+  apply/verify 경계가 dev에 배선될 때 같은 어휘로 쓴다 — 조회 경로가 값별 분기 없이 한 vocabulary만
+  보도록 어휘를 먼저 고정한다.
+- Admin 조회(`GET /audit-events`)는 `CUSTOMER#{customer_id}` partition의 `AUDIT#` prefix를 SK
+  역순으로 읽는 단일 query다. scan은 쓰지 않는다. 응답에는 `event_id`/`event_type`/`occurred_at`/
+  `customer_id`와 writer별 payload(`details`)만 담고 DynamoDB key·GSI·`entity_type`·`version` 같은
+  저장 bookkeeping은 제외한다. 종류 필터는 key 조건이 아니라 filter이므로 필터가 걸린 페이지는
+  `limit`보다 짧을 수 있고, 그때도 `next_cursor`가 남으면 이력은 계속된다.
 
 ## Example items
 

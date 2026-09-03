@@ -7,11 +7,13 @@ from unittest import mock
 
 from apps.backend.deployment.runtime import (
     DeploymentRuntimeError,
+    _live_plan_outputs_fetcher,
     _live_worker,
     lambda_handler,
     parse_tasks,
     run_tasks,
 )
+from apps.backend.deployment.runtime_config import DeploymentTarget
 from apps.backend.deployment.worker import DeploymentWorker
 from packages.contracts import WorkflowCommand, WorkflowTask
 from tests.unit.test_deployment_worker import (
@@ -69,26 +71,53 @@ class LambdaHandlerModeTest(unittest.TestCase):
             with self.assertRaises(DeploymentRuntimeError):
                 lambda_handler({"Records": []}, None)
 
-    def test_live_mode_validates_config_then_stops_pending_7b(self) -> None:
-        target = json.dumps(
-            [
-                {
-                    "customer_id": "cust-001",
-                    "repository_id": "repo-001",
-                    "repository_full_name": "customer/iac",
-                    "github_token_secret_id": "github-token",
-                    "aws_account_id": "123456789012",
-                    "aws_read_role_arn": "arn:aws:iam::123456789012:role/Read",
-                    "aws_external_id_secret_id": "external-id",
-                    "resource_types": ["AWS::S3::Bucket"],
-                }
-            ]
-        )
+    def test_missing_metadata_table_fails_closed_before_any_aws_client(self) -> None:
+        """설정 누락은 boto3 오류가 아니라 이름을 밝히는 runtime 오류로 멈춘다.
+
+        `_metadata_table()`이 `_required_env()`보다 먼저 평가되면 누락된 환경 변수가
+        boto3의 `NoRegionError` 같은 다른 실패로 가려진다. 순서를 회귀로 고정한다.
+        """
+        target = json.dumps([_TARGET])
         with mock.patch.dict(os.environ, {"DEPLOYMENT_RUNTIME_JSON": target}, clear=True):
-            # 설정은 유효하므로 config 검증은 통과하고, 실제 GitHub plan I/O가 없어 멈춘다.
-            # (lambda_handler가 주입하는 실제 fetcher는 sandbox 자격 증명 전까지 호출 시 막힌다.)
-            with self.assertRaises(DeploymentRuntimeError):
+            with self.assertRaises(DeploymentRuntimeError) as raised:
                 lambda_handler({"Records": []}, None)
+        self.assertIn("METADATA_TABLE_NAME", str(raised.exception))
+
+    def test_live_plan_outputs_fetcher_rejects_an_unsuccessful_plan_run(self) -> None:
+        """Live runner는 GitHub가 성공으로 확정하지 않은 plan을 받아들이지 않는다."""
+
+        class Response:
+            status = 204
+
+            def getcode(self) -> int:
+                return self.status
+
+            def read(self) -> bytes:
+                return b"" if self.status == 204 else b'{"workflow_runs": []}'
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        calls = 0
+
+        def opener(_request: object, *, timeout: int) -> Response:
+            nonlocal calls
+            calls += 1
+            response = Response()
+            if calls > 1:
+                response.status = 200
+            return response
+
+        fetch = _live_plan_outputs_fetcher(lambda _secret_id: "token", opener=opener, max_polls=1)
+        with self.assertRaises(DeploymentRuntimeError):
+            fetch(
+                DeploymentTarget(**{**_TARGET, "resource_types": ("AWS::S3::Bucket",)}),
+                "dep-001",
+                COMMIT,
+            )
 
 
 _TARGET = {

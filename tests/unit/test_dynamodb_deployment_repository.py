@@ -14,6 +14,7 @@ from packages.contracts import (
     ArtifactReference,
     ArtifactType,
     JobCurrentStep,
+    PlanSummary,
     TerraformStateVersion,
     WorkflowCommand,
     WorkflowTask,
@@ -38,13 +39,21 @@ class Transactions:
 
 
 class ReadTable:
-    def __init__(self, item: dict[str, object] | None) -> None:
+    def __init__(
+        self, item: dict[str, object] | None, rows: list[dict[str, object]] | None = None
+    ) -> None:
         self._item = item
+        self._rows = rows or []
         self.keys: list[object] = []
+        self.queries: list[dict[str, object]] = []
 
     def get_item(self, **kwargs: object) -> dict[str, object]:
         self.keys.append(kwargs.get("Key"))
         return {} if self._item is None else {"Item": self._item}
+
+    def query(self, **kwargs: object) -> dict[str, object]:
+        self.queries.append(kwargs)
+        return {"Items": self._rows}
 
 
 class ConditionalError(Exception):
@@ -77,6 +86,11 @@ def _record(**overrides: object) -> DeploymentRecord:
             repository_id=REPO,
         ),
         "state_version": TerraformStateVersion(lineage="lineage-1", serial=3),
+        "plan_summary": PlanSummary(
+            refreshed=True,
+            has_destructive_changes=False,
+            mapped_resource_ids=("bucket-public-001",),
+        ),
         "source_assessment_id": "asm-001",
     }
     base.update(overrides)
@@ -187,6 +201,56 @@ class DynamoDbDeploymentRepositoryTest(unittest.TestCase):
         )
         with self.assertRaises(StoredDataError):
             repository.get_deployment(customer_id="other", deployment_id=DEPLOYMENT)
+
+
+class DeploymentOwnerResolutionTest(unittest.TestCase):
+    """완료 Event는 deployment만 지목한다. 소유자는 저장에서 해석한다 (ADR-0019 §7)."""
+
+    def _repository(self, rows: list[dict[str, object]]) -> DynamoDbDeploymentRepository:
+        return DynamoDbDeploymentRepository(
+            table=ReadTable(None, rows), table_name="metadata", transaction_client=Transactions()
+        )
+
+    def test_resolves_the_owner_through_gsi1(self) -> None:
+        table = ReadTable(None, [{"deployment_id": DEPLOYMENT, "customer_id": CUSTOMER}])
+        repository = DynamoDbDeploymentRepository(
+            table=table, table_name="metadata", transaction_client=Transactions()
+        )
+        self.assertEqual(repository.resolve_customer_id(deployment_id=DEPLOYMENT), CUSTOMER)
+        query = table.queries[0]
+        self.assertEqual(query["IndexName"], "GSI1")
+        self.assertEqual(
+            query["ExpressionAttributeValues"], {":deployment": f"DEPLOYMENT#{DEPLOYMENT}"}
+        )
+
+    def test_an_unknown_deployment_resolves_to_none(self) -> None:
+        self.assertIsNone(self._repository([]).resolve_customer_id(deployment_id=DEPLOYMENT))
+
+    def test_two_rows_for_one_id_is_unknown_not_a_guess(self) -> None:
+        rows = [
+            {"deployment_id": DEPLOYMENT, "customer_id": CUSTOMER},
+            {"deployment_id": DEPLOYMENT, "customer_id": "cust-002"},
+        ]
+        self.assertIsNone(self._repository(rows).resolve_customer_id(deployment_id=DEPLOYMENT))
+
+    def test_a_row_that_disagrees_with_its_own_key_is_unknown(self) -> None:
+        rows = [{"deployment_id": "dep-999", "customer_id": CUSTOMER}]
+        self.assertIsNone(self._repository(rows).resolve_customer_id(deployment_id=DEPLOYMENT))
+
+    def test_creation_populates_the_owner_index(self) -> None:
+        transactions = Transactions()
+        repository = DynamoDbDeploymentRepository(
+            table=ReadTable(None),
+            table_name="metadata",
+            transaction_client=transactions,
+            now=lambda: datetime(2026, 9, 1, tzinfo=UTC),
+            id_factory=lambda: "001",
+        )
+        job, outbox = _job_and_outbox()
+        repository.create_deployment(_record(), job=job, outbox=outbox)
+        deployment_item = transactions.calls[0]["TransactItems"][0]["Put"]["Item"]
+        self.assertEqual(deployment_item["GSI1PK"], {"S": f"DEPLOYMENT#{DEPLOYMENT}"})
+        self.assertEqual(deployment_item["GSI1SK"], {"S": f"CUSTOMER#{CUSTOMER}"})
 
 
 class DeploymentRecordArtifactScopeTest(unittest.TestCase):

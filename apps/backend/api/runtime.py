@@ -9,15 +9,25 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from apps.backend.api.assessments import AssessmentReportApiService
+from apps.backend.api.audit_events import AuditEventApiService
 from apps.backend.api.deployments import DeploymentApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
+from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
+from apps.backend.deployment.completion import (
+    ApplyCompletionService,
+    parse_completion_event,
+)
+from apps.backend.deployment.runtime_config import (
+    DeploymentRuntimeConfiguration,
+    DeploymentRuntimeConfigurationError,
+)
 from apps.backend.jobs import (
     AssessmentScopeDenied,
     OutboxDispatcher,
@@ -26,11 +36,19 @@ from apps.backend.jobs import (
 )
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
+    DynamoDbAuditEventRepository,
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
     DynamoDbPolicyApprovalRepository,
     DynamoDbRemediationExceptionRepository,
 )
+from apps.backend.repositories.comparison_input import DynamoDbComparisonInputReader
+from apps.backend.repositories.deployment_completion import (
+    DynamoDbDeploymentCompletionStore,
+)
+from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsReader
+from apps.backend.repositories.deployment_plan import DynamoDbDeploymentPlanReader
+from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
 
@@ -78,6 +96,45 @@ def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
     return {"dispatched": dispatched}
 
 
+def apply_completion_handler(event: Mapping[str, object], context: object) -> dict[str, str]:
+    """EventBridge entrypoint reserving one apply run's verification coordinate.
+
+    A는 이 경계에서 좌표만 예약한다. run의 conclusion·commit·plan digest는 읽지도 저장하지도
+    않는다 — D Worker가 `run_id`로 run을 재조회해 승인 사실과 대조한 것만 정본이 된다
+    (ADR-0019 §7, DATABASE.md "완료 Event 경계").
+    """
+    deployment_id, run_id = parse_completion_event(event)
+    _apply_completion_service().record_completion(deployment_id=deployment_id, run_id=run_id)
+    return {"deployment_id": deployment_id, "run_id": run_id}
+
+
+def _apply_completion_service() -> ApplyCompletionService:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    queue_url = _required_string(os.environ.get("DEPLOYMENT_QUEUE_URL"), "DEPLOYMENT_QUEUE_URL")
+    table = _metadata_table()
+    transaction_client = boto3.client("dynamodb")
+    workflow_repository = DynamoDbAssessmentWorkflowRepository(
+        table, table_name=table_name, transaction_client=transaction_client
+    )
+    return ApplyCompletionService(
+        deployments=DynamoDbDeploymentRepository(
+            table=table, table_name=table_name, transaction_client=transaction_client
+        ),
+        jobs=workflow_repository,
+        reservations=DynamoDbDeploymentCompletionStore(
+            table_name=table_name, transaction_client=transaction_client
+        ),
+        outbox_dispatcher=OutboxDispatcher(
+            repository=workflow_repository,
+            dispatcher=SqsDeploymentWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
+        ),
+    )
+
+
 def _http_handler() -> JobHttpHandler:
     repository, dispatcher = _workflow_components()
     service = JobApiService(
@@ -99,9 +156,15 @@ def _http_handler() -> JobHttpHandler:
             exceptions=_remediation_exception_reader(),
             now=lambda: datetime.now(UTC),
         ),
-        deployments=_deployment_components(repository),
+        deployments=_deployment_components(repository, reports),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
+        # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
+        # 관측·비용 조회는 live metric source가 주입된 배포에서만 존재한다. source 없이
+        # route만 노출하면 항상 실패하는 endpoint가 생기고, 그 실패가 "값이 없다"인지
+        # "배선이 없다"인지 호출자가 구분할 수 없다.
+        observability=_observability_components(),
+        audit_events=AuditEventApiService(events=DynamoDbAuditEventRepository(_metadata_table())),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
     )
@@ -109,14 +172,19 @@ def _http_handler() -> JobHttpHandler:
 
 def _deployment_components(
     workflow_repository: DynamoDbAssessmentWorkflowRepository,
+    reports: DynamoDbAssessmentReportStore,
 ) -> DeploymentApiService:
     """Wire the deployment creation and reject paths to their durable stores.
 
-    Only create and reject are wired here: they persist through the deployment
-    record store and the Job store. The approve/get/verification reader
-    assemblers depend on D's live plan and verification data and arrive with the
-    D live adapter integration; until then those routes fail closed. The
-    RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
+    Every deployment route is wired here. Create and reject persist through the
+    deployment record store and the Job store; creation also reads the remediation's
+    stored decision and worker result through the deployment source reader. Read and
+    verification are assembled from the deployment's own item prefix and the two
+    immutable Assessments. Approve reads the stored plan and derives C's readiness
+    verdict from D's persisted plan summary, and the status read uses that same
+    verdict so the two views cannot disagree.
+
+    The RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
     is delivered to the Deployment Worker queue.
     """
     try:
@@ -134,8 +202,25 @@ def _deployment_components(
     approval_repository = DynamoDbDeploymentApprovalRepository(
         table_name=table_name, transaction_client=boto3.client("dynamodb")
     )
+    comparisons = DynamoDbComparisonInputReader(reports)
+    plans = DynamoDbDeploymentPlanReader(_metadata_table(), deployments=deployment_repository)
     return DeploymentApiService(
         approvals=DeploymentApprovalService(approval_repository),
+        plans=plans,
+        sources=DynamoDbDeploymentSourceReader(
+            _metadata_table(), commits=_deployment_commit_resolver()
+        ),
+        facts=DynamoDbDeploymentFactsReader(
+            _metadata_table(),
+            deployments=deployment_repository,
+            jobs=workflow_repository,
+            # 상태 화면의 검증 판정과 검증 조회가 같은 입력을 쓰도록 같은 reader를 넘긴다.
+            comparisons=comparisons,
+            # 상태 파생의 readiness도 승인이 소비하는 것과 같은 판정을 쓴다. 두 화면이
+            # 다른 근거로 계산하면 "승인 대기"와 실제 승인 가능 여부가 어긋난다.
+            readiness=plans,
+        ),
+        comparisons=comparisons,
         deployments=deployment_repository,
         jobs=workflow_repository,
         outbox_dispatcher=OutboxDispatcher(repository=workflow_repository, dispatcher=dispatcher),
@@ -251,6 +336,80 @@ def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWor
         ),
         SqsWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
     )
+
+
+class ConfiguredDeploymentCommitResolver:
+    """Dispatch commit resolution to the adapter for the requested approved target.
+
+    `LiveDeploymentCommitResolver` is bound to one `(customer_id, repository_id)`, the
+    same shape as D's other live adapters. Deployment creation, though, resolves the
+    repository from the stored remediation, so the composition root does the lookup and
+    hands the request to the adapter for that exact scope. A target outside the approved
+    configuration is refused rather than resolved with some other target's token.
+    """
+
+    def __init__(self, configuration: DeploymentRuntimeConfiguration) -> None:
+        self._configuration = configuration
+
+    def resolve_default_branch_commit(
+        self, *, customer_id: str, repository_id: str, patch: object
+    ) -> str | None:
+        from agent.runtime.live_deployment_commit_resolver import LiveDeploymentCommitResolver
+
+        target = self._configuration.resolve(customer_id=customer_id, repository_id=repository_id)
+        resolver = LiveDeploymentCommitResolver(
+            customer_id=target.customer_id,
+            repository_id=target.repository_id,
+            repository_full_name=target.repository_full_name,
+            token_provider=lambda: _secret_value(target.github_token_secret_id),
+        )
+        return resolver.resolve_default_branch_commit(
+            customer_id=customer_id, repository_id=repository_id, patch=patch
+        )
+
+
+class UnconfiguredDeploymentCommitResolver:
+    """Refuse to resolve a merge commit when no approved target is configured.
+
+    A `TERRAFORM_PATCH` deployment must apply the merge commit on the default branch
+    (ADR-0019 §3), and without GitHub configuration that commit cannot be observed.
+    Refusing keeps the missing configuration visible instead of letting the base commit
+    stand in for code no human merged. `ACTUAL_SYNC` never reaches this resolver, so a
+    stack deployed without GitHub configuration still creates sync deployments.
+    """
+
+    def resolve_default_branch_commit(
+        self, *, customer_id: str, repository_id: str, patch: object
+    ) -> str | None:
+        raise DeploymentRuntimeConfigurationError(
+            "deployment commit resolution is not configured for this deployment"
+        )
+
+
+def _observability_components() -> DemoRunObservabilityService | None:
+    """Return the Admin observability service, or `None` when no live source is wired.
+
+    `DemoRunObservabilityService`는 주입된 read-only source가 돌려준 사실만 묶는다. live
+    CloudWatch/CloudTrail/Cost Explorer adapter는 아직 없으므로 이 배포에서는 `None`이고,
+    route는 404로 남는다 — 조회할 source가 없는 것을 500으로 보여주지 않는다.
+    """
+    return None
+
+
+def _deployment_commit_resolver() -> object:
+    raw = os.environ.get("DEPLOYMENT_RUNTIME_JSON")
+    if not raw or not raw.strip():
+        return UnconfiguredDeploymentCommitResolver()
+    return ConfiguredDeploymentCommitResolver(DeploymentRuntimeConfiguration.from_json(raw))
+
+
+def _secret_value(secret_id: str) -> str:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    response = boto3.client("secretsmanager").get_secret_value(SecretId=secret_id)
+    return _required_string(response.get("SecretString"), "SecretString")
 
 
 def _metadata_table() -> object:

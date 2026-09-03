@@ -9,6 +9,7 @@ from apps.backend.deployment.approval import (
 from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
+    DeploymentCommitResolver,
     PlanRequestPort,
     WorkflowRunReader,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "DeploymentApprovalError",
     "DeploymentApprovalRepository",
     "DeploymentApprovalService",
+    "DeploymentCommitResolver",
     "DeploymentConflictError",
     "DeploymentPlanStore",
     "DeploymentRecord",

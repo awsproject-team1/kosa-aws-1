@@ -25,6 +25,7 @@ from packages.contracts import (
     DeploymentApproval,
     JobStatus,
     PlanExecutionResult,
+    PlanSummary,
     TerraformStateVersion,
     WorkflowCommand,
     WorkflowRunFacts,
@@ -48,6 +49,8 @@ def _error_code(error: BaseException) -> str | None:
 
 class DynamoReadTable(Protocol):
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def query(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
 class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
@@ -237,6 +240,11 @@ class DynamoDbDeploymentRepository(DeploymentRecordRepository):
             "entity_type": "DEPLOYMENT",
             "created_at": occurred_at,
             "version": 1,
+            # Apply 완료 Event는 deployment만 지목하고 소유 고객은 말하지 않는다. 소유자를
+            # payload에서 받으면 Event를 만들 수 있는 누구든 남의 Job을 재개시킬 수 있으므로,
+            # Job과 같은 방식으로(GSI1로 id를 풀고 customer scope를 확인) 저장에서 해석한다.
+            "GSI1PK": f"DEPLOYMENT#{record.deployment_id}",
+            "GSI1SK": pk,
             **record.to_dict(),
         }
         audit_item = {
@@ -344,6 +352,34 @@ class DynamoDbDeploymentRepository(DeploymentRecordRepository):
                 raise DuplicateJobError("deployment is already rejected or changed") from None
             raise RepositoryError("deployment reject failed") from None
 
+    def resolve_customer_id(self, *, deployment_id: str) -> str | None:
+        """Return the customer that owns a deployment, or `None` when it is unknown.
+
+        Mirrors the Job resolution pattern: GSI1 turns a global id into exactly one
+        item, and the caller re-reads the record under that customer scope. A query
+        that returns anything other than one row is treated as unknown rather than
+        guessed — two rows for one deployment id means the index is not what it claims.
+        """
+        if not isinstance(deployment_id, str) or not deployment_id.strip():
+            raise ValueError("deployment_id must be a non-empty string")
+        try:
+            response = self._table.query(
+                IndexName="GSI1",
+                KeyConditionExpression="GSI1PK = :deployment",
+                ExpressionAttributeValues={":deployment": f"DEPLOYMENT#{deployment_id}"},
+                Limit=2,
+            )
+        except Exception:
+            raise RepositoryError("deployment owner read failed") from None
+        items = response.get("Items", []) if isinstance(response, Mapping) else None
+        if not isinstance(items, list) or len(items) != 1:
+            return None
+        item = items[0]
+        if not isinstance(item, Mapping) or item.get("deployment_id") != deployment_id:
+            return None
+        customer_id = item.get("customer_id")
+        return customer_id if isinstance(customer_id, str) and customer_id.strip() else None
+
     def get_deployment(self, *, customer_id: str, deployment_id: str) -> DeploymentRecord | None:
         for value, name in ((customer_id, "customer_id"), (deployment_id, "deployment_id")):
             if not isinstance(value, str) or not value.strip():
@@ -428,6 +464,7 @@ class DynamoDbDeploymentPlanStore:
                 ":binary_artifact": result.binary_artifact.to_dict(),
                 ":state_version": result.state_version.to_dict(),
                 ":plan_run": result.plan_run.to_dict(),
+                ":plan_summary": result.summary.to_dict(),
             }
         )
         try:
@@ -445,7 +482,8 @@ class DynamoDbDeploymentPlanStore:
                             "UpdateExpression": (
                                 "SET plan_hash = :plan_hash, plan_artifact = :plan_artifact, "
                                 "binary_artifact = :binary_artifact, "
-                                "state_version = :state_version, plan_run = :plan_run"
+                                "state_version = :state_version, plan_run = :plan_run, "
+                                "plan_summary = :plan_summary"
                             ),
                             # 배포가 존재하고(PK/SK) 아직 plan이 없을 때만 채운다. 재시도가 같은
                             # 값을 다시 쓰려 하면 조건 실패가 나지만, 그건 이미 저장됐다는 뜻이라
@@ -674,6 +712,11 @@ def _record_from_item(item: Mapping[str, object]) -> DeploymentRecord:
             if item.get("state_version") is None
             else _state_version_from(item.get("state_version"))
         )
+        plan_summary = (
+            None
+            if item.get("plan_summary") is None
+            else _plan_summary_from(item.get("plan_summary"))
+        )
         return DeploymentRecord(
             deployment_id=_text(item, "deployment_id"),
             customer_id=_text(item, "customer_id"),
@@ -686,6 +729,7 @@ def _record_from_item(item: Mapping[str, object]) -> DeploymentRecord:
             plan_artifact=plan_artifact,
             binary_artifact=binary_artifact,
             state_version=state_version,
+            plan_summary=plan_summary,
             verification_assessment_id=_optional_text(item, "verification_assessment_id"),
         )
     except (TypeError, ValueError, KeyError):
@@ -704,6 +748,18 @@ def _artifact_from(value: object, expected: ArtifactType) -> ArtifactReference:
     if artifact.artifact_type is not expected:
         raise ValueError("stored artifact type does not match the expected type")
     return artifact
+
+
+def _plan_summary_from(value: object) -> PlanSummary:
+    data = _mapping(value)
+    resource_ids = data.get("mapped_resource_ids")
+    if not isinstance(resource_ids, list):
+        raise StoredDataError("stored plan summary mapped_resource_ids is invalid")
+    return PlanSummary(
+        refreshed=bool(data["refreshed"]),
+        has_destructive_changes=bool(data["has_destructive_changes"]),
+        mapped_resource_ids=tuple(str(resource_id) for resource_id in resource_ids),
+    )
 
 
 def _state_version_from(value: object) -> TerraformStateVersion:

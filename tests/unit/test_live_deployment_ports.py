@@ -41,6 +41,7 @@ from packages.contracts import (
     WorkflowConclusion,
     WorkflowRunFacts,
     WorkflowRunReference,
+    compute_plan_hash,
 )
 from packages.contracts.remediation import RemediationSyncTarget
 
@@ -49,7 +50,26 @@ REPOSITORY_ID = "repo-iac-001"
 REPO_FULL = "acme/iac"
 AWS_ACCOUNT_ID = "111122223333"
 DEPLOYMENT_ID = "dep-abc123"
-PLAN_HASH = "f" * 64
+# plan_hash는 canonical projection의 digest이므로 고정 문자열이 아니라 실제 변경에서 계산한다.
+# 어댑터가 회수한 canonical 바이트로 hash를 다시 계산해 대조하므로, 둘이 같은 출처여야 한다.
+CANONICAL_CHANGES = [
+    {
+        "address": "aws_s3_bucket_public_access_block.demo",
+        "mode": "managed",
+        "type": "aws_s3_bucket_public_access_block",
+        "name": "demo",
+        "index": None,
+        "provider_name": "registry.terraform.io/hashicorp/aws",
+        "change": {
+            "actions": ["update"],
+            "before": {"bucket": "bucket-public-001", "block_public_acls": False},
+            "after": {"bucket": "bucket-public-001", "block_public_acls": True},
+            "after_unknown": {},
+            "replace_paths": [],
+        },
+    }
+]
+PLAN_HASH = compute_plan_hash({"resource_changes": CANONICAL_CHANGES})
 PLAN_RUN_ID = "plan-run-555"
 COMMIT = "a" * 40
 LINEAGE = "11111111-2222-3333-4444-555555555555"
@@ -382,6 +402,8 @@ class LivePlanRequestPortTest(unittest.TestCase):
             binary_sha256="b" * 64,
             state_lineage=LINEAGE,
             state_serial=7,
+            canonical_changes=CANONICAL_CHANGES,
+            refreshed=True,
         )
 
     def _port(self, fetch=None) -> LivePlanRequestPort:
@@ -412,6 +434,67 @@ class LivePlanRequestPortTest(unittest.TestCase):
         self.assertEqual(result.plan_run.run_id, PLAN_RUN_ID)
         self.assertEqual(result.plan_run.deployment_id, DEPLOYMENT_ID)
         self.assertEqual(result.plan_run.repository_id, REPOSITORY_ID)
+        # readiness 요약은 hash된 바로 그 canonical 변경에서 파생된다.
+        self.assertTrue(result.summary.refreshed)
+        self.assertFalse(result.summary.has_destructive_changes)
+        self.assertEqual(result.summary.mapped_resource_ids, ("bucket-public-001",))
+
+    def test_rejects_a_summary_derived_from_a_different_plan(self) -> None:
+        """요약이 승인 대상과 다른 plan을 설명하면 승인 게이트가 잡을 수 없다."""
+
+        def mismatched(deployment_id: str, commit_sha: str) -> PlanRunOutputs:
+            return PlanRunOutputs(
+                run_id=PLAN_RUN_ID,
+                plan_hash="f" * 64,
+                binary_sha256="b" * 64,
+                state_lineage=LINEAGE,
+                state_serial=7,
+                canonical_changes=CANONICAL_CHANGES,
+                refreshed=True,
+            )
+
+        with self.assertRaises(LiveDeploymentPortError):
+            self._port(fetch=mismatched).request_plan(
+                customer_id=CUSTOMER_ID,
+                deployment_id=DEPLOYMENT_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT,
+            )
+
+    def test_reports_a_destructive_plan(self) -> None:
+        destructive = [
+            {
+                **CANONICAL_CHANGES[0],
+                "change": {
+                    "actions": ["delete"],
+                    "before": {"bucket": "bucket-public-001"},
+                    "after": None,
+                    "after_unknown": {},
+                    "replace_paths": [],
+                },
+            }
+        ]
+
+        def fetch(deployment_id: str, commit_sha: str) -> PlanRunOutputs:
+            return PlanRunOutputs(
+                run_id=PLAN_RUN_ID,
+                plan_hash=compute_plan_hash({"resource_changes": destructive}),
+                binary_sha256="b" * 64,
+                state_lineage=LINEAGE,
+                state_serial=7,
+                canonical_changes=destructive,
+                refreshed=True,
+            )
+
+        result = self._port(fetch=fetch).request_plan(
+            customer_id=CUSTOMER_ID,
+            deployment_id=DEPLOYMENT_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT,
+        )
+        self.assertTrue(result.summary.has_destructive_changes)
+        # 삭제되는 리소스도 `before`에서 자기 id를 밝힌다.
+        self.assertEqual(result.summary.mapped_resource_ids, ("bucket-public-001",))
 
     def test_rejects_a_request_outside_the_tool_scope(self) -> None:
         with self.assertRaises(LiveDeploymentPortError):
@@ -454,6 +537,8 @@ class PlanRunOutputsTest(unittest.TestCase):
                 binary_sha256="b" * 64,
                 state_lineage=LINEAGE,
                 state_serial=1,
+                canonical_changes=CANONICAL_CHANGES,
+                refreshed=True,
             )
         with self.assertRaises(TypeError):
             PlanRunOutputs(
@@ -462,6 +547,18 @@ class PlanRunOutputsTest(unittest.TestCase):
                 binary_sha256="b" * 64,
                 state_lineage=LINEAGE,
                 state_serial="1",
+                canonical_changes=CANONICAL_CHANGES,
+                refreshed=True,
+            )
+        with self.assertRaises(TypeError):
+            PlanRunOutputs(
+                run_id=PLAN_RUN_ID,
+                plan_hash=PLAN_HASH,
+                binary_sha256="b" * 64,
+                state_lineage=LINEAGE,
+                state_serial=1,
+                canonical_changes=CANONICAL_CHANGES,
+                refreshed="yes",
             )
 
 

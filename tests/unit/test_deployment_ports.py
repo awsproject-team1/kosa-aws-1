@@ -14,6 +14,7 @@ from packages.contracts import (
     ArtifactType,
     DeploymentApproval,
     PlanExecutionResult,
+    PlanSummary,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowConclusion,
@@ -52,6 +53,11 @@ class FakePlanRequest:
             state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
             plan_run=WorkflowRunReference(
                 deployment_id=deployment_id, repository_id=repository_id, run_id="plan-run-1"
+            ),
+            summary=PlanSummary(
+                refreshed=True,
+                has_destructive_changes=False,
+                mapped_resource_ids=("bucket-public-001",),
             ),
         )
 

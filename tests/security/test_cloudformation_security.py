@@ -230,6 +230,64 @@ class CloudFormationSecurityTest(unittest.TestCase):
         variables = _properties(function)["Environment"]["Variables"]
         self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
 
+    def test_api_runtime_receives_the_deployment_target_configuration(self) -> None:
+        """Deployment 생성이 merge commit을 해석하려면 cold start에 이 값이 있어야 한다."""
+        variables = _properties(self.resources["ApiRuntimeFunction"])["Environment"]["Variables"]
+        self.assertEqual(variables["DEPLOYMENT_RUNTIME_JSON"], "DeploymentRuntimeJson")
+
+    def test_api_runtime_reads_github_tokens_only_when_configured(self) -> None:
+        """미설정 배포에서는 API가 GitHub를 읽지 않으므로 secret 정책 자체가 없어야 한다."""
+        policies = _properties(self.resources["ApiRuntimeRole"])["Policies"]
+        conditional = policies[1]
+        self.assertEqual(conditional[0], "DeploymentCommitResolutionEnabled")
+        self.assertEqual(conditional[1]["PolicyName"], "DeploymentCommitResolutionGitHubToken")
+        statements = conditional[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(statements[0]["Action"], "secretsmanager:GetSecretValue")
+        # 토큰은 명시된 ARN 목록으로만 제한한다. 와일드카드면 API가 계정의 모든 secret을 읽는다.
+        self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
+        self.assertEqual(conditional[2], "AWS::NoValue")
+
+    def test_every_workflow_queue_has_a_consumer(self) -> None:
+        """큐만 있고 소비자가 없으면 task는 재시도만 반복하다 DLQ로 간다."""
+        mappings = {
+            name: _properties(resource)
+            for name, resource in self.resources.items()
+            if resource["Type"] == "AWS::Lambda::EventSourceMapping"
+        }
+        wired = {
+            (mapping["EventSourceArn"], mapping["FunctionName"]) for mapping in mappings.values()
+        }
+        self.assertIn(("AssessmentQueue.Arn", "AssessmentWorkerFunction"), wired)
+        self.assertIn(("RemediationQueue.Arn", "RemediationWorkerFunction"), wired)
+        self.assertIn(("DeploymentQueue.Arn", "DeploymentWorkerFunction"), wired)
+        for mapping in mappings.values():
+            # 부분 실패를 보고해야 성공한 message가 재전달되지 않는다.
+            self.assertEqual(mapping["FunctionResponseTypes"], ["ReportBatchItemFailures"])
+
+    def test_deployment_worker_reads_github_tokens_only_when_configured(self) -> None:
+        policies = _properties(self.resources["WorkflowRuntimeRole"])["Policies"]
+        conditional = policies[2]
+        self.assertEqual(conditional[0], "DeploymentCommitResolutionEnabled")
+        self.assertEqual(conditional[1]["PolicyName"], "DeploymentWorkerGitHubToken")
+        statements = conditional[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
+        self.assertEqual(conditional[2], "AWS::NoValue")
+
+    def test_apply_completion_is_the_only_write_path_for_run_events(self) -> None:
+        """GitHub Actions에는 DynamoDB write 권한이 없다 — Event는 이 Lambda만 소비한다."""
+        rule = _properties(self.resources["ApplyCompletionRule"])
+        self.assertEqual(rule["EventPattern"]["detail-type"], ["terraform-apply-completed"])
+        self.assertEqual(rule["Targets"][0]["Arn"], "ApplyCompletionFunction.Arn")
+        permission = _properties(self.resources["AllowEventBridgeApplyCompletion"])
+        self.assertEqual(permission["Principal"], "events.amazonaws.com")
+        self.assertEqual(permission["SourceArn"], "ApplyCompletionRule.Arn")
+        variables = _properties(self.resources["ApplyCompletionFunction"])["Environment"][
+            "Variables"
+        ]
+        self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
+
     def test_deployment_http_routes_are_explicitly_jwt_protected(self) -> None:
         """Handler branches are unreachable unless API Gateway declares each route."""
         expected = {
@@ -237,6 +295,9 @@ class CloudFormationSecurityTest(unittest.TestCase):
             "GetDeploymentRoute": "GET /deployments/{deploymentId}",
             "GetDeploymentVerificationRoute": "GET /deployments/{deploymentId}/verification",
             "PostDeploymentRejectRoute": "POST /deployments/{deploymentId}/reject",
+            # 감사 이력 조회도 같은 JWT authorizer 뒤에 있어야 한다. handler가 Admin 권한을
+            # 검사하더라도, route가 authorizer 없이 선언되면 인증 없는 호출이 handler까지 닿는다.
+            "GetAuditEventsRoute": "GET /audit-events",
         }
         for name, route_key in expected.items():
             route = _properties(self.resources[name])
@@ -307,7 +368,14 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
         }
         self.assertEqual(
             set(functions),
-            {"ApiRuntimeFunction", "OutboxSweeperFunction", "AssessmentWorkerFunction"},
+            {
+                "ApiRuntimeFunction",
+                "OutboxSweeperFunction",
+                "AssessmentWorkerFunction",
+                "ApplyCompletionFunction",
+                "RemediationWorkerFunction",
+                "DeploymentWorkerFunction",
+            },
         )
         for function in functions.values():
             self.assertEqual(

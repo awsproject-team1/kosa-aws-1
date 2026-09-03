@@ -21,7 +21,12 @@ from packages.contracts.assessments import (
     ReadinessScore,
     ScoringMode,
 )
-from packages.contracts.audit import AuditEventType
+from packages.contracts.audit import (
+    AuditEvent,
+    AuditEventPage,
+    AuditEventType,
+    audit_event_details,
+)
 from packages.contracts.deployments import (
     ApplyDispatchReceipt,
     ApplyOutcome,
@@ -36,6 +41,7 @@ from packages.contracts.deployments import (
     DeploymentStatus,
     IaCSnapshot,
     PlanExecutionResult,
+    PlanSummary,
     RemediationPatch,
     TerraformPlan,
     TerraformStateVersion,
@@ -120,6 +126,7 @@ from packages.contracts.terraform_plan import (
     canonical_plan_bytes,
     compute_plan_hash,
     has_destructive_changes,
+    mapped_resource_ids,
     project_plan_changes,
 )
 
@@ -136,6 +143,8 @@ __all__ = [
     "AssessmentComparison",
     "AssessmentPhase",
     "AssessmentSuccessMetric",
+    "AuditEvent",
+    "AuditEventPage",
     "AuditEventType",
     "AuditTrailMetric",
     "ComparisonIneligibilityReason",
@@ -187,6 +196,7 @@ __all__ = [
     "PlanExecutionResult",
     "PlanProjectionError",
     "PlanReadinessInput",
+    "PlanSummary",
     "PlannedEvaluation",
     "QueueHealthMetric",
     "ReadinessScore",
@@ -218,10 +228,12 @@ __all__ = [
     "WorkflowRunFacts",
     "WorkflowRunReference",
     "WorkflowTask",
+    "audit_event_details",
     "canonical_plan_bytes",
     "compute_plan_hash",
     "derive_deployment_status",
     "has_destructive_changes",
+    "mapped_resource_ids",
     "project_plan_changes",
     "require_non_empty_string",
     "require_offset_aware_timestamp",
