@@ -7,13 +7,13 @@ from unittest import mock
 
 from apps.backend.deployment.runtime import (
     DeploymentRuntimeError,
-    LivePlanUnavailableError,
     _live_plan_outputs_fetcher,
     _live_worker,
     lambda_handler,
     parse_tasks,
     run_tasks,
 )
+from apps.backend.deployment.runtime_config import DeploymentTarget
 from apps.backend.deployment.worker import DeploymentWorker
 from packages.contracts import WorkflowCommand, WorkflowTask
 from tests.unit.test_deployment_worker import (
@@ -83,11 +83,41 @@ class LambdaHandlerModeTest(unittest.TestCase):
                 lambda_handler({"Records": []}, None)
         self.assertIn("METADATA_TABLE_NAME", str(raised.exception))
 
-    def test_live_plan_outputs_fetcher_is_blocked_pending_sandbox(self) -> None:
-        """검증되지 않은 GitHub plan run I/O는 조용히 실행되지 않고 명시적으로 막힌다."""
-        fetch = _live_plan_outputs_fetcher()
-        with self.assertRaises(LivePlanUnavailableError):
-            fetch(object(), "dep-001", COMMIT)
+    def test_live_plan_outputs_fetcher_rejects_an_unsuccessful_plan_run(self) -> None:
+        """Live runner는 GitHub가 성공으로 확정하지 않은 plan을 받아들이지 않는다."""
+
+        class Response:
+            status = 204
+
+            def getcode(self) -> int:
+                return self.status
+
+            def read(self) -> bytes:
+                return b"" if self.status == 204 else b'{"workflow_runs": []}'
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        calls = 0
+
+        def opener(_request: object, *, timeout: int) -> Response:
+            nonlocal calls
+            calls += 1
+            response = Response()
+            if calls > 1:
+                response.status = 200
+            return response
+
+        fetch = _live_plan_outputs_fetcher(lambda _secret_id: "token", opener=opener, max_polls=1)
+        with self.assertRaises(DeploymentRuntimeError):
+            fetch(
+                DeploymentTarget(**{**_TARGET, "resource_types": ("AWS::S3::Bucket",)}),
+                "dep-001",
+                COMMIT,
+            )
 
 
 _TARGET = {

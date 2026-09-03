@@ -128,7 +128,8 @@ merge 전이면 해석 결과가 없고, 생성은 도달 불가로 거절된다
 ADR-0020은 `Accepted`이고 C 비교 Contract는 구현됐다. ADR-0019의 Deployment 상태 기계도
 `Accepted`이며 아래 정의대로 구현한다. A의 Deployment 생성·조회·거절과 D Worker의 plan/apply/verify
 store가 구현됐다. apply 완료 Event 경계는 아래 "완료 Event 경계(A/D 공유 계약)"로 확정한다 —
-A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 어댑터는 아직 구현되지 않았다.
+A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 어댑터는 승인 target의
+customer-installed workflow만 dispatch하고, GitHub run/artifact를 재조회·검증한다.
 
 | Entity | PK | SK | Purpose |
 | --- | --- | --- | --- |
@@ -190,8 +191,11 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   `DeploymentVerificationStore`가 같은 `#EVENT#{run_id}` item을 검증된 `WorkflowRunFacts`로
   `status=VERIFIED`로 확정한다. 하나라도 다르면 재시도 없이 차단한다(MANUAL_REVIEW로 파생).
   예약 item이 없으면(`run_reference` 부재) Worker는 `APPLY_COMPLETED`를 fail-closed한다.
-- **미구현 조각:** live plan 어댑터의 GitHub plan run I/O는 sandbox 자격 증명 전까지 명시적
-  오류로 멈춘다. fixture 경로(Mock 어댑터)는 세 command를 모두 구동한다.
+- **live plan 경로:** `PlanRequestPort`는 승인 target의 `terraform-plan.yml`만 dispatch하고,
+  exact commit과 deterministic display title로 GitHub Actions run을 재조회·완료 확인한 뒤 GitHub
+  API artifact ZIP의 canonical plan/state/saved binary를 검증해 저장한다. customer secret과
+  protected Environment가 없으면 configuration 단계에서 fail-closed하며 fixture 경로(Mock
+  어댑터)는 세 command를 모두 구동한다.
 - Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
   `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
   result SK에 phase가 없으므로 같은 Assessment에 재평가 결과를 append하면 immutable 조건부 write가

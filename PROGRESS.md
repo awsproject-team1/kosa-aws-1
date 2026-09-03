@@ -2,6 +2,13 @@
 
 ## Current
 
+- PR #58–#62를 최신 `dev`에서 하나의 M4 통합 브랜치로 합쳤다. runtime/IaC API Gateway·SQS Worker
+  배선, Admin audit read, Deployment plan/approval/read/completion 경계가 함께 존재한다. Deployment
+  live plan runner는 승인 target의 `terraform-plan.yml` dispatch → exact GitHub run 재조회/폴링 →
+  GitHub API artifact ZIP 검증으로 plan/state/binary를 회수한다. protected customer sandbox의
+  secret, OIDC, demo repository 승인과 실제 실행 증적은 외부 승인 단계이며 fixture 성공을 release
+  evidence로 표기하지 않는다.
+
 - **세 Worker 큐 중 둘에 소비자가 없었다.** `docs/DESIGN.md`는 Assessment/Remediation/Deployment
   세 Worker Lambda를 아키텍처로 기술하지만 CloudFormation에는 Assessment 하나만 있었다. Deployment
   Worker는 composition root(`apps/backend/deployment/runtime.py`)까지 다 만들어 두고도 그것을
