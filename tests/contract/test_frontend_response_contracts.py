@@ -127,6 +127,21 @@ class FrontendResponseContractTest(unittest.TestCase):
                 declared, emitted, f"Fake reads {sorted(declared - emitted)} which never emits"
             )
 
+    def test_login_round_trip_restores_the_requested_screen(self) -> None:
+        self.assertIn(
+            'sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`)',
+            self.source,
+        )
+        self.assertIn('history.replaceState({}, "", destination)', self.source)
+        self.assertIn("setRoute(routeFromLocation());", self.source)
+
+    def test_starting_an_assessment_keeps_the_in_memory_access_token(self) -> None:
+        self.assertIn("onStarted(result.assessment_id);", self.source)
+        self.assertIn('history.pushState({}, "",', self.source)
+        self.assertNotIn(
+            "window.location.assign(`${window.location.pathname}?assessment_id=", self.source
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

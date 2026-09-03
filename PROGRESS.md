@@ -2,6 +2,15 @@
 
 ## Current
 
+- **PR #64 리뷰 후 실행 차단 3건을 보완했다.** 공개 API가 만든 selector 없는 Assessment는 보호된
+  runtime target의 전체 리소스로 확장되고, 모든 resource work가 하나의 immutable evaluation plan을
+  공유한다. verification은 source plan이 지목한 승인 리소스만 재평가하며 plan 저장은 동일 재시도만
+  허용한다. `RDS-ACCESS-001`에는 연결된 VPC security group의 실제 `IpPermissions`를 제공하고 부분
+  응답은 거부한다. Cognito 로그인 왕복은 원래 `assessment_id`/`deployment_id` 경로를 복원하며,
+  Assessment 생성 뒤에는 전체 reload 없이 메모리의 access token을 유지한다.
+  - 검증: frontend production build와 `git diff --check` 통과. 로컬 Python runtime/Ruff가 없어
+    Python suite와 Ruff는 실행하지 못했다.
+
 - **구현돼 있던 endpoint 셋이 API Gateway route 없이 방치돼 있었다.** `POST /findings/{id}/remediations`
   (ADR-0018 조치 흐름의 **진입점**), `POST /deployments/{id}/approve`(M3 사람 승인 게이트),
   `GET /deployments/{id}/observability`. handler branch는 세 개 다 있는데 CloudFormation에 route가
@@ -86,10 +95,11 @@
     유형에 고정된다 — 평가기는 `resource_id`만 받으므로 유형이 고정되지 않으면 근거 문서와 Rule
     집합이 서로 다른 종류의 리소스를 설명할 수 있다.
   - **runtime 설정이 승인된 `(resource_type, resource_id)` 목록을 받는다.** Assessment record가
-    그중 하나를 지목하고, 목록 밖은 거부된다 — Assessment record는 서버가 쓰지만 **승인 경계는 배포
-    설정**이며 두 좌표를 교차 확인하는 곳은 거기 하나다. 여러 개가 승인됐는데 Assessment가 아무것도
-    지목하지 않으면 기본값을 고르지 않고 거부한다. 레거시 단일 `s3_bucket_id` 설정은 그대로 유효하고,
-    두 방식을 동시에 선언하는 target은 거부한다("무엇을 평가할 수 있는가"에 답이 둘이 되므로).
+    그중 하나를 지목하면 해당 Initial resource로 좁히고, 목록 밖은 거부된다 — Assessment record는
+    서버가 쓰지만 **승인 경계는 배포 설정**이며 두 좌표를 교차 확인하는 곳은 거기 하나다. 공개 API가
+    만든 selector 없는 Assessment는 승인 목록 전체로 확장한다. 레거시 단일 `s3_bucket_id` 설정은
+    그대로 유효하고, 두 설정 방식을 동시에 선언하는 target은 거부한다("무엇을 평가할 수 있는가"에
+    답이 둘이 되므로).
   - **Terraform plan resource-id 투영에 4종을 추가**했다(ADR-0019 §1-a 보완). type별 identity 속성은
     그 type의 `AwsResourceQuery.resource_id`와 같은 값을 담는 속성이다: `aws_instance`→`id`,
     `aws_db_instance`→`identifier`(computed인 `arn`이 아니다), `aws_lb`/`aws_lb_listener`→ARN.

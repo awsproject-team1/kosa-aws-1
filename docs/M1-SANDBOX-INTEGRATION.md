@@ -109,13 +109,15 @@ other, never both:
 ```
 
 `resource_type` must be one of those four; a type without an Actual read adapter is
-rejected before deployment. An Assessment record names which approved resource it
-evaluates through `resource_type`/`resource_id`; a resource outside this list is
-refused at read time, and when several resources are approved an Assessment that
-names none is refused rather than defaulted. The cross-account read Role therefore
+rejected before deployment. The public Assessment API accepts only the Repository and
+Policy Profile. Its Worker expands that request over every resource in this protected
+list and stores one complete immutable evaluation plan. An internal or legacy Initial Assessment
+record may narrow evaluation by naming one approved `resource_type`/`resource_id`; a
+resource outside the list is refused at read time. The cross-account read Role therefore
 needs read permission for every configured type (for example
 `ec2:DescribeInstances`/`DescribeVolumes`/`DescribeSecurityGroups`,
-`rds:DescribeDBInstances`, and
+`rds:DescribeDBInstances` plus `ec2:DescribeSecurityGroups` for the ingress rules of
+attached RDS VPC security groups, and
 `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeLoadBalancerAttributes`)
 and nothing more.
 

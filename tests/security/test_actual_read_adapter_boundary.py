@@ -68,13 +68,16 @@ class RefusingClient:
 
 
 def _tool(adapter, factory_name):
+    factories = {factory_name: lambda credentials: RefusingClient()}
+    if adapter is AssumeRoleRdsResourceTool:
+        factories["ec2_client_factory"] = lambda credentials: RefusingClient()
     return adapter(
         customer_id=CUSTOMER,
         aws_account_id=ACCOUNT,
         role_arn=f"arn:aws:iam::{ACCOUNT}:role/read",
         external_id="random-customer-bound-external-id",
         sts=Sts(),
-        **{factory_name: lambda credentials: RefusingClient()},
+        **factories,
     )
 
 

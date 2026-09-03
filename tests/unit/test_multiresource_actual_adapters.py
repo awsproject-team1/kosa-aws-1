@@ -17,6 +17,7 @@ from agent.runtime import (
     AwsResourceScopeError,
     AwsResourceToolError,
     ResourceTypeRoutingAwsResourceTool,
+    build_actual_resource_tool,
 )
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
 
@@ -228,7 +229,7 @@ class Rds:
 
 
 class RdsAdapterTest(unittest.TestCase):
-    def _tool(self, client):
+    def _tool(self, client, ec2=None):
         return AssumeRoleRdsResourceTool(
             customer_id=CUSTOMER,
             aws_account_id=ACCOUNT,
@@ -236,6 +237,7 @@ class RdsAdapterTest(unittest.TestCase):
             external_id=EXTERNAL_ID,
             sts=Sts(),
             rds_client_factory=lambda credentials: client,
+            ec2_client_factory=lambda credentials: ec2 or Ec2(),
         )
 
     def test_reads_the_state_the_four_rds_rules_cite(self):
@@ -249,6 +251,12 @@ class RdsAdapterTest(unittest.TestCase):
         self.assertEqual(instance["EnabledCloudwatchLogsExports"], ("postgresql",))
         self.assertEqual(view.attributes["db_subnet_group"]["DBSubnetGroupName"], "demo-subnets")
         self.assertEqual(view.attributes["vpc_security_groups"][0]["VpcSecurityGroupId"], "sg-1")
+        self.assertEqual(
+            view.attributes["vpc_security_groups"][0]["IpPermissions"][0]["IpRanges"][0][
+                "CidrIp"
+            ],
+            "0.0.0.0/0",
+        )
 
     def test_does_not_project_connection_credentials(self):
         view = self._tool(Rds()).read_resource(
@@ -268,6 +276,16 @@ class RdsAdapterTest(unittest.TestCase):
     def test_reports_a_missing_db_instance_as_not_found(self):
         with self.assertRaises(AwsResourceNotFoundError):
             self._tool(Rds(missing=True)).read_resource(
+                query(RDS_INSTANCE_RESOURCE_TYPE, AwsResourceOperation.READ_RESOURCE, DB_IDENTIFIER)
+            )
+
+    def test_refuses_a_partial_security_group_read(self):
+        class MissingSecurityGroup(Ec2):
+            def describe_security_groups(self, **kwargs):
+                return {"SecurityGroups": []}
+
+        with self.assertRaisesRegex(AwsResourceToolError, "fewer groups"):
+            self._tool(Rds(), MissingSecurityGroup()).read_resource(
                 query(RDS_INSTANCE_RESOURCE_TYPE, AwsResourceOperation.READ_RESOURCE, DB_IDENTIFIER)
             )
 
@@ -392,6 +410,7 @@ class ResourceTypeRoutingTest(unittest.TestCase):
                     external_id=EXTERNAL_ID,
                     sts=Sts(),
                     rds_client_factory=lambda credentials: Rds(),
+                    ec2_client_factory=lambda credentials: Ec2(),
                 ),
             }
         )
@@ -433,6 +452,26 @@ class ResourceTypeRoutingTest(unittest.TestCase):
             ResourceTypeRoutingAwsResourceTool({})
         with self.assertRaisesRegex(TypeError, "must implement AwsResourceTool"):
             ResourceTypeRoutingAwsResourceTool({EC2_INSTANCE_RESOURCE_TYPE: object()})
+
+    def test_rds_factory_wires_both_rds_and_ec2_read_clients(self) -> None:
+        services = []
+
+        def provider(service):
+            services.append(service)
+            return lambda credentials: object()
+
+        tool = build_actual_resource_tool(
+            customer_id=CUSTOMER,
+            aws_account_id=ACCOUNT,
+            role_arn=ROLE,
+            external_id=EXTERNAL_ID,
+            resource_types=(RDS_INSTANCE_RESOURCE_TYPE,),
+            client_factory_provider=provider,
+            sts=Sts(),
+        )
+
+        self.assertTrue(tool.supports(RDS_INSTANCE_RESOURCE_TYPE))
+        self.assertEqual(services, ["rds", "ec2"])
 
 
 class PaginatedListTest(unittest.TestCase):
@@ -647,6 +686,11 @@ class ProjectedFieldBoundaryTest(unittest.TestCase):
                 "EnabledCloudwatchLogsExports",
             ),
         )
+        self.assertEqual(
+            rds_adapter._SECURITY_GROUP_FIELDS,
+            ("GroupId", "GroupName", "VpcId", "IpPermissions"),
+        )
+        self.assertNotIn("IpPermissionsEgress", rds_adapter._SECURITY_GROUP_FIELDS)
 
     def test_alb_projects_exactly_the_cited_fields(self) -> None:
         from agent.runtime import assume_role_alb_resource_tool as alb_adapter
@@ -668,6 +712,7 @@ class ProjectedFieldBoundaryTest(unittest.TestCase):
             external_id=EXTERNAL_ID,
             sts=Sts(),
             rds_client_factory=lambda credentials: Rds(),
+            ec2_client_factory=lambda credentials: Ec2(),
         ).read_resource(
             query(RDS_INSTANCE_RESOURCE_TYPE, AwsResourceOperation.READ_RESOURCE, DB_IDENTIFIER)
         )

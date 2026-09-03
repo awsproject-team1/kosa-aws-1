@@ -42,14 +42,20 @@ class ClientFactoryProvider(Protocol):
     def __call__(self, service: str) -> Callable[[Mapping[str, str]], object]: ...
 
 
-#: resource type → (AWS service name, adapter class, factory keyword).
-#: The service name is what the runtime asks its SDK for, so a deployment's read Role only
-#: ever needs the services of the types it declares.
-_ADAPTERS: dict[str, tuple[str, type[AwsResourceTool], str]] = {
-    S3_RESOURCE_TYPE: ("s3", AssumeRoleS3ResourceTool, "s3_client_factory"),
-    EC2_INSTANCE_RESOURCE_TYPE: ("ec2", AssumeRoleEc2ResourceTool, "ec2_client_factory"),
-    RDS_INSTANCE_RESOURCE_TYPE: ("rds", AssumeRoleRdsResourceTool, "rds_client_factory"),
-    ALB_RESOURCE_TYPE: ("elbv2", AssumeRoleAlbResourceTool, "elbv2_client_factory"),
+#: resource type → (adapter class, ((AWS service name, factory keyword), ...)).
+#: RDS also reads the ingress rules of its attached VPC security groups; registering both
+#: clients here keeps every SDK surface needed by one adapter explicit and read-only.
+_ADAPTERS: dict[str, tuple[type[AwsResourceTool], tuple[tuple[str, str], ...]]] = {
+    S3_RESOURCE_TYPE: (AssumeRoleS3ResourceTool, (("s3", "s3_client_factory"),)),
+    EC2_INSTANCE_RESOURCE_TYPE: (
+        AssumeRoleEc2ResourceTool,
+        (("ec2", "ec2_client_factory"),),
+    ),
+    RDS_INSTANCE_RESOURCE_TYPE: (
+        AssumeRoleRdsResourceTool,
+        (("rds", "rds_client_factory"), ("ec2", "ec2_client_factory")),
+    ),
+    ALB_RESOURCE_TYPE: (AssumeRoleAlbResourceTool, (("elbv2", "elbv2_client_factory"),)),
 }
 
 #: Every resource type an Actual read adapter exists for, in registration order.
@@ -59,7 +65,7 @@ ACTUAL_READ_RESOURCE_TYPES: tuple[str, ...] = tuple(_ADAPTERS)
 def aws_service_for(resource_type: str) -> str:
     """Return the AWS service name a resource type is read through."""
     try:
-        return _ADAPTERS[resource_type][0]
+        return _ADAPTERS[resource_type][1][0][0]
     except KeyError:
         raise AwsResourceToolError(
             f"no Actual read adapter exists for resource type {resource_type!r}"
@@ -91,19 +97,24 @@ def build_actual_resource_tool(
         raise AwsResourceToolError("at least one resource type must be declared")
     adapters: dict[str, AwsResourceTool] = {}
     for resource_type in ordered:
-        service, adapter, factory_keyword = _adapter_for(resource_type)
+        adapter, client_factories = _adapter_for(resource_type)
         adapters[resource_type] = adapter(
             customer_id=customer_id,
             aws_account_id=aws_account_id,
             role_arn=role_arn,
             external_id=external_id,
             sts=sts,
-            **{factory_keyword: client_factory_provider(service)},
+            **{
+                factory_keyword: client_factory_provider(service)
+                for service, factory_keyword in client_factories
+            },
         )
     return ResourceTypeRoutingAwsResourceTool(adapters)
 
 
-def _adapter_for(resource_type: str) -> tuple[str, type[AwsResourceTool], str]:
+def _adapter_for(
+    resource_type: str,
+) -> tuple[type[AwsResourceTool], tuple[tuple[str, str], ...]]:
     try:
         return _ADAPTERS[resource_type]
     except KeyError:

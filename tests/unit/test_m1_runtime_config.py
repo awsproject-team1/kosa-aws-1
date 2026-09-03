@@ -2,13 +2,26 @@
 
 import json
 import unittest
+from pathlib import Path
 
-from apps.backend.assessment.runtime import DynamoM1WorkRepository, _actual_resource_tool
+from apps.backend.assessment import AssessmentReportNotFoundError
+from apps.backend.assessment.runtime import (
+    DynamoM1WorkRepository,
+    _actual_resource_tool,
+    _ensure_evaluation_plan,
+    _with_complete_evaluation_plan,
+)
 from apps.backend.assessment.runtime_config import (
     M1RuntimeConfiguration,
     M1RuntimeConfigurationError,
 )
-from packages.contracts import ModelProfile, ModelProfileRole
+from apps.backend.policy import PolicyContextResolver, load_rule_registry
+from packages.contracts import (
+    EvaluationPerspective,
+    ModelProfile,
+    ModelProfileRole,
+    PlannedEvaluation,
+)
 
 TARGET = {
     "customer_id": "cust-001",
@@ -103,7 +116,7 @@ MULTI_TARGET = {
 }
 
 
-def _table(assessment: dict[str, object]):
+def _table(assessment: dict[str, object], *, policy_profile_id: str = "profile-mvp-baseline"):
     class Table:
         def query(self, **kwargs: object) -> dict[str, object]:
             return {
@@ -114,7 +127,7 @@ def _table(assessment: dict[str, object]):
             return {
                 "Item": {
                     "repository_id": "repo-001",
-                    "policy_profile_id": "profile-mvp-baseline",
+                    "policy_profile_id": policy_profile_id,
                     **assessment,
                 }
             }
@@ -171,15 +184,115 @@ class M1MultiResourceTargetTest(unittest.TestCase):
         with self.assertRaisesRegex(M1RuntimeConfigurationError, "outside M1 runtime scope"):
             repository.get_resource_work(job_id="job-001", expected_revision=0)
 
-    def test_refuses_an_unnamed_resource_when_several_are_approved(self) -> None:
+    def test_expands_an_api_created_assessment_over_every_approved_resource(self) -> None:
         repository = DynamoM1WorkRepository(
             _table({}), self._configuration(), model_profile=MODEL_PROFILE
         )
 
-        with self.assertRaisesRegex(
-            M1RuntimeConfigurationError, "must name the evaluated resource"
-        ):
+        works = repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+        self.assertEqual(
+            [(work.resource_type, work.resource_id) for work in works],
+            [
+                ("AWS::S3::Bucket", "customer-test-bucket"),
+                ("AWS::EC2::Instance", "i-0123456789abcdef0"),
+                ("AWS::RDS::DBInstance", "demo-db-001"),
+            ],
+        )
+        with self.assertRaisesRegex(M1RuntimeConfigurationError, "must be expanded"):
             repository.get_resource_work(job_id="job-001", expected_revision=0)
+
+    def test_expanded_resources_share_one_complete_immutable_plan(self) -> None:
+        policy_profile_id = "profile-multiresource-baseline"
+        target = {**MULTI_TARGET, "policy_profile_id": policy_profile_id}
+        repository = DynamoM1WorkRepository(
+            _table({}, policy_profile_id=policy_profile_id),
+            self._configuration(target),
+            model_profile=MODEL_PROFILE,
+        )
+        works = repository.get_resource_works(job_id="job-001", expected_revision=0)
+        resolver = PolicyContextResolver(
+            load_rule_registry(Path(__file__).parents[2] / "fixtures" / "rules").catalog
+        )
+
+        planned_works = _with_complete_evaluation_plan(works, resolver)
+
+        plans = {work.planned_coordinates for work in planned_works}
+        self.assertEqual(len(plans), 1)
+        plan = next(iter(plans))
+        assert plan is not None
+        self.assertEqual(
+            {coordinate.resource_id for coordinate in plan},
+            {
+                "customer-test-bucket",
+                "i-0123456789abcdef0",
+                "demo-db-001",
+            },
+        )
+        self.assertEqual(len(plan), 39)
+
+        class PlanStore:
+            def __init__(self) -> None:
+                self.plan = None
+                self.writes = 0
+
+            def get_planned_evaluations(self, **kwargs: object):
+                if self.plan is None:
+                    raise AssessmentReportNotFoundError("missing")
+                return self.plan.planned_coordinates
+
+            def put_plan_if_absent(self, next_plan: object) -> None:
+                self.plan = next_plan
+                self.writes += 1
+
+        store = PlanStore()
+        _ensure_evaluation_plan(store, planned_works[0])
+        _ensure_evaluation_plan(store, planned_works[0])
+        self.assertEqual(store.writes, 1)
+
+    def test_verification_expands_only_over_resources_in_the_source_plan(self) -> None:
+        policy_profile_id = "profile-multiresource-baseline"
+        target = {**MULTI_TARGET, "policy_profile_id": policy_profile_id}
+        planned = tuple(
+            PlannedEvaluation(
+                resource_id=resource_id,
+                rule_id=rule_id,
+                perspective=EvaluationPerspective.AWS_ACTUAL,
+            )
+            for resource_id, rule_id in (
+                ("customer-test-bucket", "S3-PUBLIC-001"),
+                ("demo-db-001", "RDS-ACCESS-001"),
+            )
+        )
+
+        class PlanReader:
+            def get_planned_evaluations(self, **kwargs: object):
+                return planned
+
+        repository = DynamoM1WorkRepository(
+            _table(
+                {
+                    "phase": "POST_DEPLOY_VERIFICATION",
+                    "source_assessment_id": "asm-source",
+                    "deployment_id": "dep-001",
+                    "model_profile_id": MODEL_PROFILE.model_profile_id,
+                    "rubric_version": MODEL_PROFILE.rubric_version,
+                    "policy_profile_version": "v1",
+                },
+                policy_profile_id=policy_profile_id,
+            ),
+            self._configuration(target),
+            model_profile=MODEL_PROFILE,
+            plan_reader=PlanReader(),
+        )
+
+        works = repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+        self.assertEqual(
+            [work.resource_id for work in works],
+            ["customer-test-bucket", "demo-db-001"],
+        )
+        self.assertTrue(all(work.planned_coordinates == planned for work in works))
 
     def test_refuses_half_a_resource_selector(self) -> None:
         repository = DynamoM1WorkRepository(

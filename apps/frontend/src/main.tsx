@@ -25,6 +25,7 @@ const rejectableStatuses = new Set(["PLAN_COMPLETED", "READINESS_EVALUATED", "WA
 
 const verifierKey = "governance.oauth.pkce.verifier";
 const stateKey = "governance.oauth.state";
+const returnToKey = "governance.oauth.return-to";
 const cognitoDomain = import.meta.env.VITE_COGNITO_DOMAIN;
 const cognitoClientId = import.meta.env.VITE_COGNITO_CLIENT_ID;
 const redirectUri = import.meta.env.VITE_COGNITO_REDIRECT_URI ?? window.location.origin;
@@ -43,6 +44,10 @@ async function startLogin() {
   const state = base64Url(crypto.getRandomValues(new Uint8Array(16)));
   sessionStorage.setItem(verifierKey, verifier);
   sessionStorage.setItem(stateKey, state);
+  const returnTo = new URL(window.location.href);
+  returnTo.searchParams.delete("code");
+  returnTo.searchParams.delete("state");
+  sessionStorage.setItem(returnToKey, `${returnTo.pathname}${returnTo.search}${returnTo.hash}`);
   const query = new URLSearchParams({ client_id: cognitoClientId, response_type: "code", scope: "openid email", redirect_uri: redirectUri, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
   window.location.assign(`https://${cognitoDomain}/oauth2/authorize?${query}`);
 }
@@ -62,11 +67,16 @@ async function exchangeCallback() {
   if (typeof token.access_token !== "string" || !token.access_token) throw new Error("Cognito did not return an access token.");
   sessionStorage.removeItem(verifierKey);
   sessionStorage.removeItem(stateKey);
-  history.replaceState({}, "", window.location.pathname);
+  const returnTo = sessionStorage.getItem(returnToKey);
+  sessionStorage.removeItem(returnToKey);
+  const destination = returnTo?.startsWith("/") && !returnTo.startsWith("//")
+    ? returnTo
+    : window.location.pathname;
+  history.replaceState({}, "", destination);
   return token.access_token;
 }
 
-function StartAssessment({ accessToken }: { accessToken: string }) {
+function StartAssessment({ accessToken, onStarted }: { accessToken: string; onStarted: (assessmentId: string) => void }) {
   const [repositoryId, setRepositoryId] = useState("");
   const [policyProfileId, setPolicyProfileId] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +87,7 @@ function StartAssessment({ accessToken }: { accessToken: string }) {
       body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: policyProfileId }),
     });
     if (typeof result.assessment_id !== "string" || !result.assessment_id) throw new Error("Assessment ID를 받지 못했습니다.");
-    window.location.assign(`${window.location.pathname}?assessment_id=${encodeURIComponent(result.assessment_id)}`);
+    onStarted(result.assessment_id);
   }
   return <main><h1>Initial Assessment</h1><form onSubmit={event => void submit(event).catch((reason: Error) => setError(reason.message))}><label>Repository ID <input required value={repositoryId} onChange={event => setRepositoryId(event.target.value)} /></label><label>Policy Profile ID <input required value={policyProfileId} onChange={event => setPolicyProfileId(event.target.value)} /></label><button type="submit">Assessment 시작</button>{error && <p role="alert">{error}</p>}</form></main>;
 }
@@ -108,10 +118,29 @@ function AssessmentReport({ assessmentId, accessToken }: { assessmentId: string;
  * The access token lives here rather than in each screen so the deployment approval screen and
  * the Assessment screen cannot end up authenticated differently.
  */
-function App({ assessmentId, deploymentId }: { assessmentId: string; deploymentId: string }) {
+function routeFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    assessmentId: params.get("assessment_id") ?? "",
+    deploymentId: params.get("deployment_id") ?? "",
+  };
+}
+
+function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { exchangeCallback().then(token => { if (token) setAccessToken(token); }).catch((reason: Error) => setError(reason.message)); }, []);
+  const [route, setRoute] = useState(routeFromLocation);
+  useEffect(() => {
+    exchangeCallback()
+      .then(token => {
+        if (token) setAccessToken(token);
+        setRoute(routeFromLocation());
+      })
+      .catch((reason: Error) => setError(reason.message));
+    const onPopState = () => setRoute(routeFromLocation());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   if (!accessToken) {
     return <main>
       <h1>Cloud Governance</h1>
@@ -120,9 +149,15 @@ function App({ assessmentId, deploymentId }: { assessmentId: string; deploymentI
       {error && <p role="alert">{error}</p>}
     </main>;
   }
-  if (deploymentId) return <DeploymentPanel deploymentId={deploymentId} accessToken={accessToken} />;
-  if (!assessmentId) return <StartAssessment accessToken={accessToken} />;
-  return <AssessmentReport assessmentId={assessmentId} accessToken={accessToken} />;
+  if (route.deploymentId) return <DeploymentPanel deploymentId={route.deploymentId} accessToken={accessToken} />;
+  if (!route.assessmentId) return <StartAssessment accessToken={accessToken} onStarted={assessmentId => {
+    const params = new URLSearchParams(window.location.search);
+    params.delete("deployment_id");
+    params.set("assessment_id", assessmentId);
+    history.pushState({}, "", `${window.location.pathname}?${params}${window.location.hash}`);
+    setRoute(routeFromLocation());
+  }} />;
+  return <AssessmentReport assessmentId={route.assessmentId} accessToken={accessToken} />;
 }
 
 function uniqueResults(values: Result[]) { return [...new Map(values.map(value => [`${value.resource_id}:${value.rule_id}:${value.perspective}`, value])).values()]; }
@@ -249,7 +284,4 @@ function DeploymentPanel({ deploymentId, accessToken }: { deploymentId: string; 
   </main>;
 }
 
-const params = new URLSearchParams(location.search);
-const assessmentId = params.get("assessment_id") ?? "";
-const deploymentId = params.get("deployment_id") ?? "";
-createRoot(document.getElementById("root")!).render(<StrictMode><App assessmentId={assessmentId} deploymentId={deploymentId} /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

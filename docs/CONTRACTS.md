@@ -107,6 +107,11 @@ Evidence scope 표, runtime 설정 검증, Deployment target 검증, 배포 게�
 있는지 대조한다. 볼륨 하나가 빠지면 남은 볼륨이 모두 암호화돼 있어 `PASS`처럼 보이지만, 암호화되지
 않은 볼륨은 그저 보이지 않았을 뿐이다. 없는 근거가 준수 근거로 읽혀서는 안 된다.
 
+RDS adapter도 DB 인스턴스에 연결된 모든 VPC 보안 그룹을 EC2
+`DescribeSecurityGroups`로 조회해 `IpPermissions`를 view에 포함한다. 그룹 ID와 연결 상태만으로는
+`RDS-ACCESS-001`이 요구하는 허용 네트워크·principal·port 범위를 판단할 수 없기 때문이다. 연결된
+그룹 중 하나라도 응답에서 빠지면 EC2 adapter와 동일하게 전체 read를 거부한다.
+
 EC2 adapter는 인스턴스에 연결된 EBS 볼륨과 보안 그룹을 인스턴스 view에 함께 담는다 — 두
 Rule(`EC2-EBS-ENCRYPT-001`, `EC2-SG-INGRESS-001`)의 근거가 그 상태에 있고, 볼륨/보안 그룹을 독립
 평가 대상으로 열면 같은 위반이 두 좌표에서 두 번 세어진다.
@@ -116,10 +121,12 @@ Rule(`EC2-EBS-ENCRYPT-001`, `EC2-SG-INGRESS-001`)의 근거가 그 상태에 있
 없음"과 구별할 수 없다. **Assessment Worker와 Deployment Worker는 같은 factory로 이 도구를 만든다.**
 한쪽만 읽을 수 있는 유형이 있으면 배포 후 검증이 그 유형을 조용히 건너뛴다.
 
-평가 대상 리소스는 배포 설정(`M1_ASSESSMENT_RUNTIME_JSON`)의 승인 목록이다. Assessment record가
-`resource_type`/`resource_id`로 그중 하나를 지목할 수 있고, 목록 밖의 리소스는 거부된다. 레거시
-단일 `s3_bucket_id` 설정은 그대로 유효하며 `AWS::S3::Bucket` 한 건으로 해석된다. 두 방식을 동시에
-선언하는 target은 거부한다 — "무엇을 평가할 수 있는가"에 답이 두 개가 되기 때문이다.
+평가 대상 리소스는 배포 설정(`M1_ASSESSMENT_RUNTIME_JSON`)의 승인 목록이다. 공개 Assessment API는
+Repository와 Policy Profile만 받으며, Worker가 그 요청을 승인 목록의 모든 리소스로 확장해 하나의
+완전한 평가 계획을 저장한다. 내부 또는 레거시 Initial Assessment record가 `resource_type`/`resource_id`로
+그중 하나를 지목할 수 있고, 목록 밖의 리소스는 거부된다. 레거시 단일 `s3_bucket_id` 설정은 그대로
+유효하며 `AWS::S3::Bucket` 한 건으로 해석된다. 두 설정 방식을 동시에 선언하는 target은 거부한다 —
+"무엇을 평가할 수 있는가"에 답이 두 개가 되기 때문이다.
 
 M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule × Perspective` 수를 분모로
 사용한다. `PASS`, `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE` 결과는 완료된

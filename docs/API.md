@@ -74,11 +74,11 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
 `customer_id`, S3 bucket/key, checksum 판정, parser/status를 직접 지정할 수 없다. 업로드 성공은
 정책 승인이나 Assessment 활성화를 의미하지 않는다.
 
-## M0 boundary payloads
+## Assessment boundary payloads
 
-- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`를 지정한다. Resource/AWS
-  Account Scope는 이후 Contract 확장 전까지 JWT claim과 승인된 Repository 설정에서 판정하며,
-  현재 M0 요청 body에는 포함하지 않는다.
+- Assessment 생성 요청은 승인된 `repository_id`, `policy_profile_id`만 지정한다. Resource/AWS
+  Account Scope는 JWT claim과 보호된 Worker runtime 설정에서 판정하며 요청 body에는 포함하지
+  않는다. target에 여러 리소스가 승인돼 있으면 Worker가 모두 하나의 평가 계획으로 확장한다.
 - Policy Profile 조회·평가는 `PolicyProfile.rule_references`로 version이 고정된 Rule만 사용하고,
   정책 Evidence는 `SourceReference.evidence_reference`의 `{source_id}@{source_version}#{locator}`
   정규형으로 반환한다. AWS Actual Evidence는 `aws:` namespace를 사용한다.
