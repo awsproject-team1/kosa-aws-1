@@ -38,12 +38,18 @@ concurrency:
 
 env:
   TF_VERSION: "1.9.5" # §1: Terraform version 고정 (.terraform.lock.hcl과 함께)
-  AWS_REGION: "<AWS_REGION_PLACEHOLDER>"
-  TF_PLAN_ROLE_ARN: "<TERRAFORM_PLAN_ROLE_ARN_PLACEHOLDER>"
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_PLAN_ROLE_ARN: ${{ vars.TF_PLAN_ROLE_ARN }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
+  TF_VAR_sandbox_bucket_name: ${{ vars.SANDBOX_BUCKET_NAME }}
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    # Environment 변수와 OIDC subject를 customer-terraform-plan으로 한정한다.
+    environment: customer-terraform-plan
     steps:
       - name: Checkout approved commit
         uses: actions/checkout@v4
@@ -66,7 +72,13 @@ jobs:
       - name: Terraform init (shared state backend)
         # state key는 (repository_id, workspace)로 분리한다(§2). workspace 이름은
         # {customer_id}-{repository_id}이며 bootstrap이 만든 backend를 가리킨다.
-        run: terraform init -input=false
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
 
       - name: Terraform fmt/validate (platform-side CI_VALIDATION, not customer CI)
         run: |

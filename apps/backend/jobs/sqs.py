@@ -71,6 +71,30 @@ class SqsDeploymentWorkflowDispatcher:
         )
 
 
+class CommandRoutingWorkflowDispatcher:
+    """Route each workflow task to the queue its command belongs to.
+
+    The transactional Outbox stores every workflow command in one table, so a single
+    scheduled sweeper drains Assessment, Remediation, and Deployment tasks together.
+    Each concrete dispatcher accepts only its own command, so both the sweeper and the
+    request-time dispatch need a dispatcher that selects the right queue per task
+    instead of one bound to a single queue. The composition root injects one concrete
+    dispatcher per command it supports.
+    """
+
+    def __init__(self, dispatchers: dict) -> None:
+        if not dispatchers:
+            raise ValueError("dispatchers must not be empty")
+        self._dispatchers = dict(dispatchers)
+
+    def dispatch(self, task: WorkflowTask) -> None:
+        _require_task(task)
+        dispatcher = self._dispatchers.get(task.command)
+        if dispatcher is None:
+            raise ValueError(f"no dispatcher configured for command {task.command.value}")
+        dispatcher.dispatch(task)
+
+
 def _require_configuration(client: SqsClient, queue_url: str) -> None:
     if client is None:
         raise TypeError("client is required")

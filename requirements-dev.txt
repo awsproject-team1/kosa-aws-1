@@ -1,3 +1,6 @@
 ruff==0.16.4
 cfn-lint==1.55.1
 PyYAML==6.0.3
+# Runtime Layer dependency (apps/backend/requirements.txt) mirrored here so the
+# Parent Orchestrator graph is testable locally and in CI without the Lambda Layer.
+langgraph==1.2.11

@@ -18,6 +18,7 @@ from apps.backend.jobs.lifecycle import (
 from apps.backend.jobs.models import Job
 from apps.backend.jobs.outbox import OutboxDispatcher, OutboxStatus, WorkflowOutboxEntry
 from apps.backend.jobs.sqs import (
+    CommandRoutingWorkflowDispatcher,
     SqsDeploymentWorkflowDispatcher,
     SqsPolicyAuthoringDispatcher,
     SqsRemediationWorkflowDispatcher,
@@ -26,6 +27,7 @@ from apps.backend.jobs.sqs import (
 
 __all__ = [
     "AssessmentScopeDenied",
+    "CommandRoutingWorkflowDispatcher",
     "InvalidJobTransition",
     "Job",
     "JobNotFoundError",

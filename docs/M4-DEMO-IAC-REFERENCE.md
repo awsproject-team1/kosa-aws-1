@@ -9,6 +9,10 @@
 경계(ADR-0007, ADR-0019 §6)를 우회한 채 데모만 성공하게 된다. 데모가 실제 고객 repository
 경계를 통과해야 데모 성공이 곧 제품 경로의 검증이 된다.
 
+`templates/customer-sandbox-terraform-repository/`는 고객 관리자가 별도 repository를 만들 때
+복사하는 **비배포용 시작 템플릿**일 뿐, 데모 Terraform 원문이나 customer configuration이 아니다.
+고객 account/state/role 값과 실제 데모 토글 IaC는 복사 이후 고객 repository에만 둔다.
+
 ## 1. 데모 저장소 식별자
 
 데모 IaC는 아래 좌표의 **별도 저장소**에 둔다. 실제 owner/repository 이름과 sandbox 계정 ID는

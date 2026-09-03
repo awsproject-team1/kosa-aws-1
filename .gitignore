@@ -23,3 +23,8 @@ __pycache__/
 policies-local/
 *.xlsx
 *.xls
+
+# GitHub App private keys and local secrets (never commit)
+*.pem
+*.private-key.pem
+*:Zone.Identifier

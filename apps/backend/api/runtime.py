@@ -7,6 +7,7 @@ import os
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 from apps.backend.api.assessments import AssessmentReportApiService
 from apps.backend.api.audit_events import AuditEventApiService
@@ -18,6 +19,7 @@ from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
+from apps.backend.api.remediations import RemediationApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
@@ -31,18 +33,21 @@ from apps.backend.deployment.runtime_config import (
 )
 from apps.backend.jobs import (
     AssessmentScopeDenied,
+    CommandRoutingWorkflowDispatcher,
     OutboxDispatcher,
     SqsDeploymentWorkflowDispatcher,
     SqsPolicyAuthoringDispatcher,
+    SqsRemediationWorkflowDispatcher,
     SqsWorkflowDispatcher,
 )
-from apps.backend.policy import DynamoDbPolicyCatalog
+from apps.backend.policy import DynamoDbPolicyCatalog, load_rule_registry
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbAuditEventRepository,
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
     DynamoDbPolicyApprovalRepository,
+    DynamoDbRemediationContextReader,
     DynamoDbRemediationExceptionRepository,
 )
 from apps.backend.repositories.comparison_input import DynamoDbComparisonInputReader
@@ -53,6 +58,7 @@ from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsRe
 from apps.backend.repositories.deployment_plan import DynamoDbDeploymentPlanReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
+from packages.contracts import WorkflowCommand
 
 
 class EnvironmentAssessmentScope(AssessmentScope):
@@ -96,10 +102,50 @@ def lambda_handler(event: Mapping[str, object], context: object) -> dict[str, ob
 
 
 def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
-    """EventBridge-scheduled at-least-once dispatch of durable Assessment tasks."""
-    repository, dispatcher = _workflow_components()
-    dispatched = OutboxDispatcher(repository=repository, dispatcher=dispatcher).dispatch_pending()
+    """EventBridge-scheduled at-least-once dispatch of every durable workflow task.
+
+    The Outbox holds Assessment, Remediation, and Deployment commands in one table, so
+    the sweeper must route each task to the queue its command belongs to rather than
+    assume every entry is an Assessment task. A single-queue dispatcher would leave
+    Remediation/Deployment entries PENDING forever.
+    """
+    repository, _ = _workflow_components()
+    dispatched = OutboxDispatcher(
+        repository=repository, dispatcher=_all_command_dispatcher()
+    ).dispatch_pending()
     return {"dispatched": dispatched}
+
+
+def _all_command_dispatcher() -> CommandRoutingWorkflowDispatcher:
+    """Build a dispatcher that routes each workflow command to its own internal queue."""
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    sqs = boto3.client("sqs")
+    assessment_url = _required_string(
+        os.environ.get("ASSESSMENT_QUEUE_URL"), "ASSESSMENT_QUEUE_URL"
+    )
+    remediation_url = _required_string(
+        os.environ.get("REMEDIATION_QUEUE_URL"), "REMEDIATION_QUEUE_URL"
+    )
+    deployment_url = _required_string(
+        os.environ.get("DEPLOYMENT_QUEUE_URL"), "DEPLOYMENT_QUEUE_URL"
+    )
+    return CommandRoutingWorkflowDispatcher(
+        {
+            WorkflowCommand.ASSESS_RESOURCE: SqsWorkflowDispatcher(sqs, queue_url=assessment_url),
+            WorkflowCommand.GENERATE_REMEDIATION: SqsRemediationWorkflowDispatcher(
+                sqs, queue_url=remediation_url
+            ),
+            WorkflowCommand.SYNC_ACTUAL_STATE: SqsRemediationWorkflowDispatcher(
+                sqs, queue_url=remediation_url
+            ),
+            WorkflowCommand.RUN_DEPLOYMENT: SqsDeploymentWorkflowDispatcher(
+                sqs, queue_url=deployment_url
+            ),
+        }
+    )
 
 
 def apply_completion_handler(event: Mapping[str, object], context: object) -> dict[str, str]:
@@ -169,6 +215,7 @@ def _http_handler() -> JobHttpHandler:
             now=lambda: datetime.now(UTC),
         ),
         deployments=_deployment_components(repository, reports),
+        remediations=_remediation_components(repository),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         policy_candidates=_policy_candidate_components(),
@@ -180,6 +227,7 @@ def _http_handler() -> JobHttpHandler:
         audit_events=AuditEventApiService(events=DynamoDbAuditEventRepository(_metadata_table())),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
+        orchestrations=_orchestration_components(),
     )
 
 
@@ -240,6 +288,89 @@ def _deployment_components(
         deployment_id_factory=lambda: f"dep-{uuid.uuid4()}",
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         now=lambda: datetime.now(UTC),
+    )
+
+
+def _remediation_components(
+    workflow_repository: DynamoDbAssessmentWorkflowRepository,
+) -> RemediationApiService:
+    """Wire `POST /findings/{findingId}/remediations` to its durable stores and B policy.
+
+    A(this service)는 finding_id 하나로 B의 정책 판정을 먼저 적용한 뒤에만 remediation을
+    영속화·dispatch한다. 조립 순서가 곧 경계다:
+
+    - `contexts`/`targets`: 같은 `DynamoDbRemediationContextReader`가 immutable 증거(Finding,
+      IAC/Actual 결과, 평가된 commit)를 되돌린다. 조치 유형은 정하지 않는다.
+    - `exceptions`: 읽기 전용 예외 view. `list_exceptions`만 쓰인다.
+    - `decision_maker`: B의 `RemediationPolicy`. 커밋된 eligibility(`fixtures/rules/remediation.json`)가
+      정본이며, 등록되지 않은 Rule은 자동 조치가 열리지 않고 `MANUAL_REVIEW`로 닫힌다.
+    - `repository`/`outbox_dispatcher`: 판정 record와 (actionable일 때) Job·outbox를 한
+      workflow repository로 쓰고, GENERATE_REMEDIATION/SYNC_ACTUAL_STATE task를 **Remediation
+      Worker 큐**로 dispatch한다. Assessment dispatcher는 ASSESS_RESOURCE만 받으므로 여기에
+      쓰면 remediation task가 거부되어 outbox에 PENDING으로 남는다.
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    queue_url = _required_string(os.environ.get("REMEDIATION_QUEUE_URL"), "REMEDIATION_QUEUE_URL")
+    remediation_policy = load_rule_registry(_rules_path()).remediation
+    context_reader = DynamoDbRemediationContextReader(_metadata_table())
+    dispatcher = SqsRemediationWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url)
+    return RemediationApiService(
+        contexts=context_reader,
+        targets=context_reader,
+        exceptions=_remediation_exception_reader(),
+        decision_maker=remediation_policy,
+        repository=workflow_repository,
+        outbox_dispatcher=OutboxDispatcher(repository=workflow_repository, dispatcher=dispatcher),
+        now=lambda: datetime.now(UTC),
+        job_id_factory=lambda: f"job-{uuid.uuid4()}",
+        remediation_id_factory=lambda: f"rem-{uuid.uuid4()}",
+    )
+
+
+def _rules_path() -> Path:
+    return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _orchestration_components() -> object | None:
+    """Wire POST /orchestrate to the LangGraph Parent Orchestrator (ADR-0012).
+
+    The Parent classifies one natural-language message into a Policy Q&A answer or a
+    workflow proposal; it starts no work. LangGraph and its dependencies live in a Lambda
+    Layer, so the import is deferred to here and the whole route is disabled (returns
+    None) when the Layer is absent, rather than failing the module import for every route.
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    try:
+        from agent.agents.parent_orchestrator import ParentOrchestrator
+        from apps.backend.api.orchestration import OrchestrationApiService
+    except ImportError:
+        # LangGraph Layer not attached to this function; leave the route unavailable
+        # instead of breaking unrelated routes at import time.
+        return None
+    profile = _parent_model_profile()
+    client = boto3.client("bedrock-runtime", region_name=profile.region)
+    return OrchestrationApiService(router=ParentOrchestrator(client=client), model_profile=profile)
+
+
+def _parent_model_profile() -> object:
+    from packages.contracts import ModelProfile, ModelProfileRole
+
+    raw = (Path(__file__).parents[3] / "fixtures" / "m1" / "parent_model_profile.json").read_text()
+    data = json.loads(raw)
+    return ModelProfile(
+        model_profile_id=data["model_profile_id"],
+        role=ModelProfileRole(data["role"]),
+        region=data["region"],
+        model_id=data["model_id"],
+        prompt_version=data["prompt_version"],
+        rubric_version=data["rubric_version"],
+        golden_dataset_version=data["golden_dataset_version"],
     )
 
 

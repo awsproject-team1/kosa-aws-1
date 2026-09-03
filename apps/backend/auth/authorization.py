@@ -19,6 +19,9 @@ class Action(StrEnum):
     PUBLISH_POLICY_PROFILE = "PUBLISH_POLICY_PROFILE"
     READ_OBSERVABILITY = "READ_OBSERVABILITY"
     READ_AUDIT_EVENTS = "READ_AUDIT_EVENTS"
+    # Natural-language routing (ADR-0012). The Parent only classifies and proposes; it
+    # cannot start work, so this is granted to any authenticated user.
+    ORCHESTRATE = "ORCHESTRATE"
 
 
 class AuthorizationDenied(PermissionError):
@@ -31,6 +34,7 @@ _USER_ACTIONS = frozenset(
         Action.START_REMEDIATION,
         Action.START_DEPLOYMENT,
         Action.READ_JOB,
+        Action.ORCHESTRATE,
     }
 )
 _ROLE_ACTIONS = {

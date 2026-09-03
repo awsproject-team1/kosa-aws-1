@@ -13,6 +13,18 @@ from packages.contracts import (
 )
 
 
+def _attr(item: dict, key: str) -> object:
+    """Read a value stored through the low-level transaction client (AttributeValue).
+
+    Transaction writes go through the low-level DynamoDB client, so items are stored
+    marshaled as AttributeValues such as {"S": "..."}; unwrap the scalar for assertions.
+    """
+    value = item[key]
+    if isinstance(value, dict) and len(value) == 1:
+        return next(iter(value.values()))
+    return value
+
+
 class InMemoryTable:
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict[str, object]] = {}
@@ -35,15 +47,18 @@ class InMemoryTable:
         return {} if item is None else {"Item": item}
 
     def transact_write_items(self, **kwargs: object) -> object:
+        # The production transaction client is a low-level DynamoDB client, so items
+        # arrive marshaled as AttributeValues ({"S": ...}); mirror that contract here.
         items = kwargs["TransactItems"]
         assert isinstance(items, list)
         candidates = [entry["Put"]["Item"] for entry in items]
-        if any((item["PK"], item["SK"]) in self.items for item in candidates):
+        keys = [(item["PK"]["S"], item["SK"]["S"]) for item in candidates]
+        if any(key in self.items for key in keys):
             error = Exception()
             error.response = {"Error": {"Code": "TransactionCanceledException"}}
             raise error
-        for item in candidates:
-            self.items[(item["PK"], item["SK"])] = item
+        for key, item in zip(keys, candidates, strict=True):
+            self.items[key] = item
         return {}
 
 
@@ -100,21 +115,21 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         )
 
         item = table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-001")]
-        self.assertEqual(item["job_id"], "job-001")
-        self.assertEqual(item["repository_id"], "repo-001")
-        self.assertEqual(item["policy_profile_id"], "profile-001")
-        self.assertEqual(item["GSI3PK"], "REPOSITORY#repo-001")
-        self.assertEqual(item["phase"], "INITIAL")
+        self.assertEqual(_attr(item, "job_id"), "job-001")
+        self.assertEqual(_attr(item, "repository_id"), "repo-001")
+        self.assertEqual(_attr(item, "policy_profile_id"), "profile-001")
+        self.assertEqual(_attr(item, "GSI3PK"), "REPOSITORY#repo-001")
+        self.assertEqual(_attr(item, "phase"), "INITIAL")
         self.assertNotIn("source_assessment_id", item)
         self.assertNotIn("deployment_id", item)
         self.assertNotIn("model_profile_id", item)
         self.assertNotIn("rubric_version", item)
         # 판본은 verification 전용 pin이 아니라 **모든 phase**가 갖는 값이다. Initial이 이것을
         # 저장하지 않으면 Runtime은 실행 시점의 최신 pointer로 평가하게 된다.
-        self.assertEqual(item["policy_profile_version"], "v1")
+        self.assertEqual(_attr(item, "policy_profile_version"), "v1")
         self.assertIn(("CUSTOMER#cust-001", "JOB#job-001"), table.items)
         outbox = table.items[("CUSTOMER#cust-001", "OUTBOX#JOB#job-001")]
-        self.assertEqual(outbox["GSI2PK"], "OUTBOX#PENDING")
+        self.assertEqual(_attr(outbox, "GSI2PK"), "OUTBOX#PENDING")
 
     def test_verification_assessment_persists_its_phase_and_correlation(self) -> None:
         table = InMemoryTable()
@@ -156,12 +171,12 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         )
 
         item = table.items[("CUSTOMER#cust-001", "ASSESSMENT#asm-002")]
-        self.assertEqual(item["phase"], "POST_DEPLOY_VERIFICATION")
-        self.assertEqual(item["source_assessment_id"], "asm-001")
-        self.assertEqual(item["deployment_id"], "dep-001")
-        self.assertEqual(item["model_profile_id"], "assessment-nova-lite-m1-v2")
-        self.assertEqual(item["rubric_version"], "m1-v2")
-        self.assertEqual(item["policy_profile_version"], "v2")
+        self.assertEqual(_attr(item, "phase"), "POST_DEPLOY_VERIFICATION")
+        self.assertEqual(_attr(item, "source_assessment_id"), "asm-001")
+        self.assertEqual(_attr(item, "deployment_id"), "dep-001")
+        self.assertEqual(_attr(item, "model_profile_id"), "assessment-nova-lite-m1-v2")
+        self.assertEqual(_attr(item, "rubric_version"), "m1-v2")
+        self.assertEqual(_attr(item, "policy_profile_version"), "v2")
 
 
 if __name__ == "__main__":

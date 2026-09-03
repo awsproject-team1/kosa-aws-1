@@ -146,14 +146,24 @@ class BedrockStructuredEvaluator:
 
 _SYSTEM_PROMPT = (
     "Evaluate exactly the supplied resource against the supplied approved rule. "
+    "First decide whether the rule even applies to this resource. A rule applies "
+    "only when its subject matches the resource under the given perspective; if the "
+    "rule governs a different resource kind, attribute, or concern than what this "
+    "resource exposes, it does not apply. "
     "When the rule carries an evaluation_rubric, that rubric is the criterion; the title "
     "alone is not. Judge only from the supplied resource_document: if it does not carry "
     "the evidence the rule requires, return status INSUFFICIENT_EVIDENCE instead of "
     "inferring the missing state. "
     "Return one JSON object only, with exactly status, score, rationale, and "
-    "evidence_references. status must be one of PASS, FAIL, MANUAL_REVIEW, "
-    "INSUFFICIENT_EVIDENCE, or OUT_OF_SCOPE; score must be 0 through 100; and every "
-    "evidence reference must come from allowed_evidence_references."
+    "evidence_references. status must be exactly one of PASS, FAIL, MANUAL_REVIEW, "
+    "INSUFFICIENT_EVIDENCE, or OUT_OF_SCOPE. "
+    "Use OUT_OF_SCOPE when the rule does not apply to this resource; in that case "
+    "the resource is neither compliant nor violating, so score must be 0 and the "
+    "rationale must state why the rule does not apply. When the rule applies, use PASS "
+    "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
+    "a human must decide and INSUFFICIENT_EVIDENCE when the supplied evidence cannot "
+    "support a judgment. score must be 0 through 100, and every evidence reference must "
+    "come from allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
 )
 
 #: 모델이 돌려줄 수 없는 status. `EXECUTION_ERROR`는 "평가가 실행되지 못했다"는 Code의 사실이지
@@ -195,6 +205,25 @@ def _rule_prompt_view(rule: PolicyRule) -> dict[str, object]:
     return view
 
 
+def _strip_json_fence(text: str) -> str:
+    """Remove a Markdown code fence the model may wrap around the JSON object.
+
+    Nova models frequently return the structured object inside a ```json ... ``` or
+    ``` ... ``` fence despite a JSON-only instruction. Unwrap exactly one leading and
+    trailing fence so parsing sees the object; text without a fence is returned as is,
+    and any non-JSON content still fails closed in the caller's json.loads.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    # Drop the opening fence line (which may carry a language tag such as ```json).
+    lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(response, Mapping):
         raise BedrockEvaluationError("Bedrock response is invalid")
@@ -211,7 +240,7 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(text, str):
         raise BedrockEvaluationError("Bedrock response text is missing")
     try:
-        value = json.loads(text)
+        value = json.loads(_strip_json_fence(text))
     except json.JSONDecodeError as error:
         raise BedrockEvaluationError("Bedrock response is not JSON") from error
     if not isinstance(value, dict):
