@@ -30,8 +30,26 @@ class ScopeApiService:
             raise TypeError("principal must be a Principal")
         entries = self._scope.get(principal.customer_id, [])
         repositories = [
-            {"repository_id": e.get("repository_id")}
+            self._repository_view(e)
             for e in entries
             if isinstance(e, dict) and e.get("repository_id")
         ]
         return {"customer_id": principal.customer_id, "repositories": repositories}
+
+    @staticmethod
+    def _repository_view(entry: dict) -> dict[str, object]:
+        """Public, non-secret connection facts for one assessment target.
+
+        The console shows these so an operator can confirm the platform is wired to the
+        real customer GitHub repository and AWS account before running a live assessment.
+        Only non-secret identifiers are surfaced; secret *references* (role ARNs, secret
+        IDs) are never returned by the read API.
+        """
+        view: dict[str, object] = {"repository_id": entry.get("repository_id")}
+        github_repository = entry.get("github_repository")
+        if isinstance(github_repository, str) and github_repository.strip():
+            view["github_repository"] = github_repository
+        aws_account_id = entry.get("aws_account_id")
+        if isinstance(aws_account_id, str) and aws_account_id.strip():
+            view["aws_account_id"] = aws_account_id
+        return view

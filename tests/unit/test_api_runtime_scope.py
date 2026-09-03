@@ -57,6 +57,38 @@ class EnvironmentAssessmentScopeTest(unittest.TestCase):
         with self.assertRaises(AssessmentScopeDenied):
             scope.authorize(PRINCIPAL, repository_id="repo-002")
 
+    def test_permits_repository_with_non_secret_connection_metadata(self) -> None:
+        """콘솔 표시용 github/account 필드가 있어도 scope 인가는 정상 동작한다."""
+        with patch.dict(
+            os.environ,
+            {
+                "ASSESSMENT_SCOPE_JSON": (
+                    '{"cust-001":[{"repository_id":"repo-001",'
+                    '"github_repository":"awsproject-team1/test",'
+                    '"aws_account_id":"369676914736"}]}'
+                )
+            },
+            clear=True,
+        ):
+            scope = EnvironmentAssessmentScope.from_environment()
+
+        self.assertIsNone(scope.authorize(PRINCIPAL, repository_id="repo-001"))
+
+    def test_unknown_field_still_fails_closed(self) -> None:
+        """알 수 없는 필드(예: 비밀 참조)는 여전히 거부한다."""
+        with patch.dict(
+            os.environ,
+            {
+                "ASSESSMENT_SCOPE_JSON": (
+                    '{"cust-001":[{"repository_id":"repo-001",'
+                    '"aws_read_role_arn":"arn:aws:iam::1:role/x"}]}'
+                )
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ASSESSMENT_SCOPE_JSON is invalid"):
+                EnvironmentAssessmentScope.from_environment()
+
     def test_missing_configuration_denies_every_repository(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             scope = EnvironmentAssessmentScope.from_environment()

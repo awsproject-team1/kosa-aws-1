@@ -620,13 +620,16 @@ def _repository_ids(value: object) -> frozenset[str]:
     """Read the repositories one customer may assess.
 
     항목에 `policy_profile_id`가 남아 있으면 거부한다. 조용히 무시하면, 운영자는 Profile 경계가
-    아직 환경변수로 강제된다고 믿은 채 배포한다.
+    아직 환경변수로 강제된다고 믿은 채 배포한다. `repository_id` 외에 콘솔 표시용 비밀 아닌
+    연결 정보(`github_repository`, `aws_account_id`)는 허용하되, 그 밖의 알 수 없는 필드는
+    fail-closed로 거부한다 — 비밀 참조(role ARN, secret id)를 이 환경변수에 넣지 않게 강제한다.
     """
+    allowed = {"repository_id", "github_repository", "aws_account_id"}
     if not isinstance(value, list):
         raise ValueError
     repositories: set[str] = set()
     for entry in value:
-        if not isinstance(entry, Mapping) or set(entry) != {"repository_id"}:
+        if not isinstance(entry, Mapping) or not set(entry) <= allowed or "repository_id" not in entry:
             raise ValueError
         repositories.add(_required_string(entry.get("repository_id"), "repository_id"))
     return frozenset(repositories)

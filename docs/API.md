@@ -64,7 +64,7 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 
 | Method | Path | 상태 | 설명 |
 | --- | --- | --- | --- |
-| `GET` | `/scope` | 배선됨 | 호출자 customer의 assessment scope에 연결된 repository 목록(`{customer_id, repositories:[{repository_id}]}`). 배포 구성(`ASSESSMENT_SCOPE_JSON`)에서 읽으며 다른 customer의 scope는 반환하지 않는다 |
+| `GET` | `/scope` | 배선됨 | 호출자 customer의 assessment scope에 연결된 대상 목록(`{customer_id, repositories:[{repository_id, github_repository?, aws_account_id?}]}`). 배포 구성(`ASSESSMENT_SCOPE_JSON`)에서 읽으며, 비밀 아닌 연결 정보(GitHub repo full name·AWS 계정 ID)만 노출하고 secret 참조(role ARN·secret id)는 반환하지 않는다. 다른 customer의 scope는 반환하지 않는다 |
 | `POST` | `/admin/users` | 배선됨 | Admin이 customer scope의 사용자 생성(`{email, role, temporary_password}` → `201 {email, role, customer_id}`). role은 `Admin`/`User`, 새 사용자는 호출자의 `custom:customer_id`로 고정 |
 | `GET` | `/admin/users` | 배선됨 | Admin이 자기 customer의 사용자 목록 조회(`{users:[{username, email, customer_id, profile, status, enabled}]}`). 비밀번호는 반환하지 않는다 |
 | `POST` | `/admin/users/profile` | 배선됨 | Admin이 사용자에게 기본 Policy Profile 지정(`{email, policy_profile_id}`). Cognito 표준 `profile` 속성에 저장되어 사용자가 로그인 시 자기 token에서 읽는다 |

@@ -87,9 +87,13 @@ body {
 
 /* connected repositories list */
 .repo-list { display: flex; flex-direction: column; gap: 7px; }
-.repo-chip { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
-.repo-chip .light { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.repo-chip .q-label { font-size: 12px; }
+.repo-chip { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
+.repo-chip .light { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 4px; }
+.repo-chip .q-label { font-size: 12px; font-weight: 600; }
+.repo-facts { display: flex; flex-direction: column; gap: 3px; }
+.repo-fact { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.repo-fact .repo-k { color: var(--muted); width: 44px; flex: none; text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
+.repo-fact code { font-size: 11px; }
 
 /* pipeline stepper (upload) */
 .stepper { display: flex; flex-direction: column; gap: 6px; }

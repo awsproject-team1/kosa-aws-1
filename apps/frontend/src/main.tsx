@@ -29,7 +29,8 @@ type LightState = "pending" | "active" | "done" | "failed";
 type GraphNodeId = "parent" | "policy_qa" | "assessment" | "remediation" | "deployment" | "authoring";
 type QueueJob = { id: string; label: string; queue: string; state: LightState; meta?: string };
 type PipelineStep = { key: string; label: string; state: LightState };
-type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null; repos: string[]; userProfiles: { email: string; profile: string | null }[] };
+type RepoScope = { repository_id: string; github_repository?: string; aws_account_id?: string };
+type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null; repos: RepoScope[]; userProfiles: { email: string; profile: string | null }[] };
 const OBS_DEFAULT: Observer = { nodeStates: {}, jobs: [], pipeline: null, repos: [], userProfiles: [] };
 
 function useObserver() {
@@ -39,7 +40,7 @@ function useObserver() {
     upsertJob(job: QueueJob) { setObs(o => ({ ...o, jobs: [job, ...o.jobs.filter(j => j.id !== job.id)].slice(0, 8) })); },
     setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
     patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
-    setRepos(repos: string[]) { setObs(o => ({ ...o, repos })); },
+    setRepos(repos: RepoScope[]) { setObs(o => ({ ...o, repos })); },
     setUserProfiles(userProfiles: { email: string; profile: string | null }[]) { setObs(o => ({ ...o, userProfiles })); },
   }), []);
   return { obs, ...api };
@@ -139,10 +140,17 @@ function ObserverPanel({ obs }: { obs: Observer }) {
     {obs.jobs.length === 0 && <div className="obs-empty">진행 중인 작업이 없습니다.</div>}
     {obs.jobs.map(j => <div key={j.id} className="queue-item"><span className={`light ${j.state}`} /><span className="q-label">{j.label}</span><span className="q-meta">{j.meta ?? j.queue}</span></div>)}
 
-    <div className="obs-title">연결된 리포지토리</div>
+    <div className="obs-title">연결된 고객사 리소스</div>
     {obs.repos.length === 0
-      ? <div className="obs-empty">연결된 리포지토리가 없습니다.</div>
-      : <div className="repo-list">{obs.repos.map(r => <div key={r} className="repo-chip"><span className="light done" /><span className="q-label">{r}</span></div>)}</div>}
+      ? <div className="obs-empty">연결된 리소스가 없습니다.</div>
+      : <div className="repo-list">{obs.repos.map(r => <div key={r.repository_id} className="repo-chip">
+          <span className="light done" />
+          <div className="repo-facts">
+            <span className="q-label">{r.repository_id}</span>
+            {r.github_repository && <span className="repo-fact"><span className="repo-k">GitHub</span><code>{r.github_repository}</code></span>}
+            {r.aws_account_id && <span className="repo-fact"><span className="repo-k">AWS</span><code>{r.aws_account_id}</code></span>}
+          </div>
+        </div>)}</div>}
 
     <div className="obs-title">사용자 · 지정 Profile</div>
     {obs.userProfiles.length === 0
@@ -248,14 +256,14 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   const [profileId, setProfileId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [repos, setRepos] = useState<string[]>([]);
+  const [repos, setRepos] = useState<RepoScope[]>([]);
 
   const refresh = async () => {
     try { const r = await api<{ sources: Doc[] }>("/policy-sources", session.accessToken); setDocs(r.sources); }
     catch (e) { setError((e as Error).message); }
   };
   const refreshScope = async () => {
-    try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); const ids = r.repositories.map(x => x.repository_id); setRepos(ids); obs.setRepos(ids); }
+    try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); setRepos(r.repositories); obs.setRepos(r.repositories); }
     catch { /* scope는 부가정보이므로 실패해도 문서 화면은 유지 */ }
   };
   useEffect(() => { void refresh(); void refreshScope(); /* eslint-disable-next-line */ }, []);
@@ -365,8 +373,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       <h2>정책 문서</h2>
       <p className="hint">문서를 업로드하면 정규화·후보추출까지 자동 진행됩니다(왼쪽 패널). 이미 추출한 문서는 다시 업로드하지 않고 '후보 조회'로 재사용합니다.</p>
       <div className="row" style={{ marginBottom: 4 }}>
-        <span className="hint">연결된 리포지토리:</span>
-        {repos.length === 0 ? <span className="hint">없음</span> : repos.map(r => <span key={r} className="badge">{r}</span>)}
+        <span className="hint">연결된 고객사 리소스:</span>
+        {repos.length === 0 ? <span className="hint">없음</span> : repos.map(r => <span key={r.repository_id} className="badge">{r.github_repository ? `GitHub ${r.github_repository}` : r.repository_id}{r.aws_account_id ? ` · AWS ${r.aws_account_id}` : ""}</span>)}
       </div>
       <div className="row">
         <label style={{ flex: 1 }}>형식<select value={mt} onChange={e => setMt(e.target.value)}>{FORMATS.map(f => <option key={f.mt} value={f.mt}>{f.label}</option>)}</select></label>
@@ -512,7 +520,7 @@ function App() {
   useEffect(() => {
     if (!session || !isAdmin) return;
     void (async () => {
-      try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); observer.setRepos(r.repositories.map(x => x.repository_id)); } catch { /* keep panel */ }
+      try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); observer.setRepos(r.repositories); } catch { /* keep panel */ }
       try { const r = await api<{ users: { email: string; profile: string | null }[] }>("/admin/users", session.accessToken); observer.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); } catch { /* keep panel */ }
     })();
     /* eslint-disable-next-line */
