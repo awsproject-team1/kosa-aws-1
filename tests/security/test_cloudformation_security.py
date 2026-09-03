@@ -248,6 +248,19 @@ class CloudFormationSecurityTest(unittest.TestCase):
         self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
         self.assertEqual(conditional[2], "AWS::NoValue")
 
+    def test_apply_completion_is_the_only_write_path_for_run_events(self) -> None:
+        """GitHub Actions에는 DynamoDB write 권한이 없다 — Event는 이 Lambda만 소비한다."""
+        rule = _properties(self.resources["ApplyCompletionRule"])
+        self.assertEqual(rule["EventPattern"]["detail-type"], ["terraform-apply-completed"])
+        self.assertEqual(rule["Targets"][0]["Arn"], "ApplyCompletionFunction.Arn")
+        permission = _properties(self.resources["AllowEventBridgeApplyCompletion"])
+        self.assertEqual(permission["Principal"], "events.amazonaws.com")
+        self.assertEqual(permission["SourceArn"], "ApplyCompletionRule.Arn")
+        variables = _properties(self.resources["ApplyCompletionFunction"])["Environment"][
+            "Variables"
+        ]
+        self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
+
     def test_deployment_http_routes_are_explicitly_jwt_protected(self) -> None:
         """Handler branches are unreachable unless API Gateway declares each route."""
         expected = {
@@ -328,7 +341,12 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
         }
         self.assertEqual(
             set(functions),
-            {"ApiRuntimeFunction", "OutboxSweeperFunction", "AssessmentWorkerFunction"},
+            {
+                "ApiRuntimeFunction",
+                "OutboxSweeperFunction",
+                "AssessmentWorkerFunction",
+                "ApplyCompletionFunction",
+            },
         )
         for function in functions.values():
             self.assertEqual(

@@ -2,6 +2,20 @@
 
 ## Current
 
+- **A/D 공유 계약의 A 몫(apply 완료 Event 예약 write)을 구현했다**(ADR-0019 §7, DATABASE.md
+  "완료 Event 경계"). D는 예약 item에서 `run_reference`를 읽어 검증·확정하는 경로를 이미 갖고
+  있었지만 예약을 쓰는 쪽이 없어 live `APPLY_COMPLETED`가 영원히 fail-closed였다.
+  `ApplyCompletionService` + `DynamoDbDeploymentCompletionStore` + `apply_completion_handler`
+  (EventBridge 진입점)로 닫았다. Event에서 읽는 값은 `deployment_id`/`run_id` **두 좌표뿐**이고
+  conclusion·commit·plan digest 같은 주장은 읽지도 저장하지도 않는다 — Event는 신호이지 정본이
+  아니며, 저장하는 순간 검증되지 않은 주장이 `derive_deployment_status()`의 입력이 된다.
+  EVENT 예약 + Job revision bump + `APPLY_COMPLETED` outbox는 하나의 조건부 transaction이다.
+  **소유 고객은 Event가 아니라 저장에서 해석한다** — `DEPLOYMENT#` item에
+  `GSI1PK = DEPLOYMENT#{deployment_id}`를 채우고 Job 해석과 같은 방식으로 id를 푼 뒤 그 customer
+  scope로 record를 다시 읽는다. payload에서 소유자를 받으면 Event를 만들 수 있는 누구든 남의 Job을
+  재개시킬 수 있다. 이미 terminal인 Job은 되살리지 않는다(사람이 끝낸 결정을 Event가 뒤집지 않는다).
+  CloudFormation에 `ApplyCompletionFunction`과 EventBridge rule/permission을 추가하고, 이 Lambda가
+  유일한 DynamoDB write 경로임을 security 회귀로 고정했다.
 - M3 A 조회·검증 reader를 붙여 `GET /deployments/{id}`와 `GET /deployments/{id}/verification`이
   실제로 답하게 했다(같은 브랜치). `DynamoDbDeploymentFactsReader`는 `DEPLOYMENT#{id}` SK prefix
   query 한 번으로 승인·거절·dispatch·EVENT item을 모두 읽고 Job과 합쳐 `DeploymentFacts`를 만든다.

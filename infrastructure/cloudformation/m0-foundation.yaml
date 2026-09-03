@@ -535,6 +535,24 @@ Resources:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
 
+  ApplyCompletionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-apply-completion"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.apply_completion_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          # 완료 Event 처리는 `APPLY_COMPLETED` task를 이 큐에 넣어 D Worker를 깨운다.
+          DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
+
   AssessmentWorkerFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -575,6 +593,30 @@ Resources:
       FunctionName: !Ref OutboxSweeperFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt OutboxSweepSchedule.Arn
+
+  # Apply run 완료 Event → 재조회 좌표 예약 (ADR-0019 §7). Event는 신호이므로 A는 좌표만
+  # 저장하고, conclusion 같은 사실은 D Worker가 run을 재조회해 확정한다. GitHub Actions에는
+  # DynamoDB write 권한을 주지 않는다 — 이 Lambda가 유일한 write 경로다.
+  ApplyCompletionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Reserve the verification coordinate for a completed Terraform apply run.
+      State: ENABLED
+      EventPattern:
+        source:
+          - !Sub "${ProjectName}.${Environment}.deployment"
+        detail-type:
+          - terraform-apply-completed
+      Targets:
+        - Arn: !GetAtt ApplyCompletionFunction.Arn
+          Id: ApplyCompletion
+  AllowEventBridgeApplyCompletion:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApplyCompletionFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ApplyCompletionRule.Arn
 
   HttpApi:
     Type: AWS::ApiGatewayV2::Api

@@ -19,6 +19,10 @@ from apps.backend.api.remediation_exceptions import RemediationExceptionApiServi
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
+from apps.backend.deployment.completion import (
+    ApplyCompletionService,
+    parse_completion_event,
+)
 from apps.backend.deployment.runtime_config import (
     DeploymentRuntimeConfiguration,
     DeploymentRuntimeConfigurationError,
@@ -38,6 +42,9 @@ from apps.backend.repositories import (
     DynamoDbRemediationExceptionRepository,
 )
 from apps.backend.repositories.comparison_input import DynamoDbComparisonInputReader
+from apps.backend.repositories.deployment_completion import (
+    DynamoDbDeploymentCompletionStore,
+)
 from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
@@ -85,6 +92,45 @@ def outbox_sweeper_handler(event: object, context: object) -> dict[str, int]:
     repository, dispatcher = _workflow_components()
     dispatched = OutboxDispatcher(repository=repository, dispatcher=dispatcher).dispatch_pending()
     return {"dispatched": dispatched}
+
+
+def apply_completion_handler(event: Mapping[str, object], context: object) -> dict[str, str]:
+    """EventBridge entrypoint reserving one apply run's verification coordinate.
+
+    A는 이 경계에서 좌표만 예약한다. run의 conclusion·commit·plan digest는 읽지도 저장하지도
+    않는다 — D Worker가 `run_id`로 run을 재조회해 승인 사실과 대조한 것만 정본이 된다
+    (ADR-0019 §7, DATABASE.md "완료 Event 경계").
+    """
+    deployment_id, run_id = parse_completion_event(event)
+    _apply_completion_service().record_completion(deployment_id=deployment_id, run_id=run_id)
+    return {"deployment_id": deployment_id, "run_id": run_id}
+
+
+def _apply_completion_service() -> ApplyCompletionService:
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3 is provided by Lambda runtime.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    queue_url = _required_string(os.environ.get("DEPLOYMENT_QUEUE_URL"), "DEPLOYMENT_QUEUE_URL")
+    table = _metadata_table()
+    transaction_client = boto3.client("dynamodb")
+    workflow_repository = DynamoDbAssessmentWorkflowRepository(
+        table, table_name=table_name, transaction_client=transaction_client
+    )
+    return ApplyCompletionService(
+        deployments=DynamoDbDeploymentRepository(
+            table=table, table_name=table_name, transaction_client=transaction_client
+        ),
+        jobs=workflow_repository,
+        reservations=DynamoDbDeploymentCompletionStore(
+            table_name=table_name, transaction_client=transaction_client
+        ),
+        outbox_dispatcher=OutboxDispatcher(
+            repository=workflow_repository,
+            dispatcher=SqsDeploymentWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url),
+        ),
+    )
 
 
 def _http_handler() -> JobHttpHandler:
