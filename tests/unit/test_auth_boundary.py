@@ -79,8 +79,18 @@ class AuthBoundaryTest(unittest.TestCase):
                 "MANAGE_POLICY_SOURCES",
                 "PUBLISH_POLICY_PROFILE",
                 "READ_OBSERVABILITY",
+                "READ_AUDIT_EVENTS",
             },
         )
+
+    def test_only_admin_can_read_audit_events(self) -> None:
+        # 감사 이력은 Admin 전용 조회다 (DATABASE.md audit event 경계).
+        admin = Principal.from_verified_claims(access_claims("Admin"))
+        user = Principal.from_verified_claims(access_claims("User"))
+
+        self.assertIsNone(authorize(admin, Action.READ_AUDIT_EVENTS))
+        with self.assertRaises(AuthorizationDenied):
+            authorize(user, Action.READ_AUDIT_EVENTS)
 
     def test_only_admin_can_read_observability(self) -> None:
         # ADR-0021 §3: 관측·비용 기록 조회는 Admin 전용이다.

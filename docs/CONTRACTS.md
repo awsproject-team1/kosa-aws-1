@@ -493,8 +493,19 @@ PLAN_REQUESTED → PLAN_COMPLETED → READINESS_EVALUATED → WAITING_APPROVAL
 같은 필드명과 어휘를 쓴다. 현재 값은 위 셋에 `REMEDIATION_DECIDED`·
 `REMEDIATION_EXCEPTION_APPROVED`와 A가 구현한 `DEPLOYMENT_REQUESTED`·`DEPLOYMENT_REJECTED`를 더한
 일곱이다. apply 실행 단계의 `APPLY_DISPATCHED`, `APPLY_COMPLETED`, `APPLY_FAILED`,
-`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 D의 live plan/apply 구현 커밋에서
-추가한다.
+`POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`도 ADR-0019 합의대로 어휘에 들어갔고,
+그 값을 쓰는 writer는 apply/verify 경계가 배선될 때 붙는다. 어휘를 writer보다 먼저 고정하는 이유는
+조회 경로에 있다 — `GET /audit-events`가 값별 분기 없이 한 vocabulary만 보게 하려면 종류의 집합이
+먼저 닫혀 있어야 하고, 나중에 값을 늘리면 이미 나간 응답의 의미가 바뀐다.
+
+`AuditEvent`/`AuditEventPage`는 그 감사 이력의 read projection이다(`GET /audit-events`, M2 A).
+`event_id`/`event_type`/`occurred_at`/`customer_id` 네 identity 필드는 모든 writer가 쓰는 값이고,
+writer별 payload는 타입을 나누지 않고 `details` mapping에 그대로 둔다. 일곱 writer의 payload가 서로
+다르고 앞으로도 늘어나므로, 종류별 typed schema를 두면 새 event마다 contract가 바뀌면서 호출자가
+값에서 직접 읽을 수 있는 것 이상을 주지 못한다. `audit_event_details()`가 저장 bookkeeping
+(DynamoDB key·GSI·`entity_type`·`version`)을 걷어내므로 새 인프라 속성이 조용히 공개 필드가 되지
+않는다. `occurred_at`은 offset 있는 ISO-8601만 받는다 — 페이지가 최신순이라 offset 없는 시각은
+실행 환경마다 다르게 정렬된다.
 
 `PlannedEvaluation`은 계획된 `(resource_id, rule_id, perspective)` 좌표 하나이며 Assessment 계획의
 단위다. `rule_version`은 일부러 없다 — version이 바뀐 좌표도 before/after가 짝을 이뤄야

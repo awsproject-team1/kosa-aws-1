@@ -21,7 +21,12 @@ from packages.contracts.assessments import (
     ReadinessScore,
     ScoringMode,
 )
-from packages.contracts.audit import AuditEventType
+from packages.contracts.audit import (
+    AuditEvent,
+    AuditEventPage,
+    AuditEventType,
+    audit_event_details,
+)
 from packages.contracts.deployments import (
     ApplyDispatchReceipt,
     ApplyOutcome,
@@ -136,6 +141,8 @@ __all__ = [
     "AssessmentComparison",
     "AssessmentPhase",
     "AssessmentSuccessMetric",
+    "AuditEvent",
+    "AuditEventPage",
     "AuditEventType",
     "AuditTrailMetric",
     "ComparisonIneligibilityReason",
@@ -218,6 +225,7 @@ __all__ = [
     "WorkflowRunFacts",
     "WorkflowRunReference",
     "WorkflowTask",
+    "audit_event_details",
     "canonical_plan_bytes",
     "compute_plan_hash",
     "derive_deployment_status",

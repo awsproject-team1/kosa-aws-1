@@ -25,6 +25,7 @@
 | `POST` | `/remediation-exceptions` | Admin이 만료 필수 고객 예외를 승인·등록 |
 | `POST` | `/deployments/{deploymentId}/approve` | 승인된 commit/plan으로 배포 승인 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
+| `GET` | `/audit-events` | Admin 전용 감사 이력 조회 |
 
 ## Customer policy ingestion endpoints
 
@@ -166,7 +167,7 @@ ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두
 저장으로 완결 배선됐고, `POST /deployments/{id}/approve`·`GET /deployments/{id}`·
 `GET /deployments/{id}/verification`은 handler에 노출되나 D live plan·검증 데이터를 조립하는 reader
 (승인 plan reader, DeploymentFacts reader, 비교 입력 reader)가 D live adapter 통합에서 오므로 그 전에는
-fail-closed한다. `GET /audit-events`는 아직 미구현이다.
+fail-closed한다. `GET /audit-events`는 구현·배선됐다(아래 "Admin 감사 이력 조회" 참조).
 
 | Method | Path | 상태 | Purpose |
 | --- | --- | --- | --- |
@@ -174,7 +175,7 @@ fail-closed한다. `GET /audit-events`는 아직 미구현이다.
 | `GET` | `/deployments/{deploymentId}` | 배선됨(facts reader 대기) | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
 | `GET` | `/deployments/{deploymentId}/verification` | 배선됨(비교 입력 reader 대기) | Post-Deploy Verification의 before/after 비교 projection 조회 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
-| `GET` | `/audit-events` | 대기 | Admin 전용 감사 이력 조회 |
+| `GET` | `/audit-events` | 배선됨 | Admin 전용 감사 이력 조회 |
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
   지정하지 않는다. A는 저장된 `RemediationDecision`이 actionable인지, C Worker 결과가 있는지,
@@ -206,7 +207,25 @@ fail-closed한다. `GET /audit-events`는 아직 미구현이다.
   `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
 
 경로와 wire shape는 이 A endpoint 구현에서 확정됐다. D live adapter 통합 시 reader 조립기를 붙여
-approve/get/verification의 fail-closed를 해소하고, `/audit-events`는 후속에서 추가한다.
+approve/get/verification의 fail-closed를 해소한다.
+
+### Admin 감사 이력 조회 (`GET /audit-events`)
+
+- Admin 전용(`READ_AUDIT_EVENTS`)이며 범위는 항상 호출자의 verified `custom:customer_id`다. 조회
+  대상 고객을 query로 지정할 수 없다 — 지정 가능한 순간 이 endpoint가 전체 tenant 이력을 읽는
+  유일한 경로가 된다.
+- Query: `limit`(1–100, 기본 25), `cursor`(불투명 페이지 토큰), `event_type`(`AuditEventType` 값).
+  알 수 없는 `event_type`은 빈 페이지가 아니라 `400`이다. 빈 페이지는 "그런 일이 없었다"로
+  읽히므로 오탈자를 성공으로 표시하지 않는다.
+- 응답은 `occurred_at` 역순(최신 우선)이며 `{ "events": [...], "next_cursor": string|null }`이다.
+  각 event는 `event_id`, `event_type`, `occurred_at`, `customer_id`와 writer별 payload를 담은
+  `details`를 가진다. `details`에는 DynamoDB key·GSI·`entity_type`·`version` 같은 저장 bookkeeping이
+  들어가지 않는다.
+- `event_type` 필터는 key 조건이 아니라 읽은 페이지에 적용되는 filter다. 필터가 걸린 페이지는
+  `limit`보다 짧거나 비어 있으면서도 `next_cursor`를 가질 수 있으므로, Client는 짧은 페이지를
+  끝으로 보지 말고 `next_cursor`를 따라가야 한다.
+- `cursor`는 Client가 되돌려주는 값이므로 Backend가 호출자의 customer scope에 속하는지 검증하고,
+  벗어나면 `400`으로 거절한다.
 
 ## Error envelope
 

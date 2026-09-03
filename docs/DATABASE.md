@@ -59,7 +59,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
-| Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail |
+| Audit event | `CUSTOMER#{customer_id}` | `AUDIT#{occurred_at}#{event_id}` | Immutable application audit trail. `GET /audit-events`는 이 prefix를 SK 역순으로 읽는다 |
 
 `Assessment result` and `Finding` are co-located with their Assessment so one query can retrieve the full assessment report. If an Assessment can exceed DynamoDB partition or response limits, results and Findings are independently paginated by their `SK` prefixes. 새 plan의 `completed_evaluations`는 Result/Finding immutable write와 같은 transaction에서만 증가하며, 진행 중 Coverage read는 이 counter를 사용한다. large report payloads remain in S3.
 
@@ -74,6 +74,7 @@ counter와 materialized score는 이후 storage migration 전에는 Assessment m
 | Base table | `CUSTOMER#{customer_id}` + `JOB#{job_id}` | Get a customer-scoped Job |
 | Base table | `CUSTOMER#{customer_id}` + `ASSESSMENT#{assessment_id}` prefix | Assessment with results/findings |
 | Base table | `CUSTOMER#{customer_id}` + `DEPLOYMENT#{deployment_id}` prefix | Deployment and approval records |
+| Base table | `CUSTOMER#{customer_id}` + `AUDIT#` prefix (descending) | Admin 감사 이력 페이지 조회. SK가 `occurred_at`으로 시작하므로 최신순이 key 순서 읽기이고 정렬이 필요 없다 |
 | Base table | `CUSTOMER#{customer_id}` + `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}` prefix | 고객의 exact Rule version 예외 조회; resource scope는 조회 후 좁힌다 |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
@@ -189,9 +190,16 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   (`RemediationAction` 값)을 다른 뜻으로 함께 쓰므로, 두 개념에 같은 필드명을 쓰면 값이 충돌한다.
   `action`을 종류 필드로 쓰던 세 곳(`DEPLOYMENT_APPROVED`, `POLICY_SOURCE_APPROVED`,
   `POLICY_PROFILE_PUBLISHED`)은 `event_type`으로 개명했고 다섯 writer 모두 같은 필드명을 쓴다.
-  M3에서 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`,
-  `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`가 ADR-0019 합의와 함께
-  추가된다.
+  M3의 `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_REJECTED`, `APPLY_DISPATCHED`, `APPLY_COMPLETED`,
+  `APPLY_FAILED`, `POST_DEPLOY_VERIFIED`, `MANUAL_RECONCILIATION_REQUIRED`는 ADR-0019 합의대로
+  `AuditEventType`에 들어갔다. 앞의 둘은 Deployment 생성·거절 writer가 이미 쓰고, 나머지 다섯은
+  apply/verify 경계가 dev에 배선될 때 같은 어휘로 쓴다 — 조회 경로가 값별 분기 없이 한 vocabulary만
+  보도록 어휘를 먼저 고정한다.
+- Admin 조회(`GET /audit-events`)는 `CUSTOMER#{customer_id}` partition의 `AUDIT#` prefix를 SK
+  역순으로 읽는 단일 query다. scan은 쓰지 않는다. 응답에는 `event_id`/`event_type`/`occurred_at`/
+  `customer_id`와 writer별 payload(`details`)만 담고 DynamoDB key·GSI·`entity_type`·`version` 같은
+  저장 bookkeeping은 제외한다. 종류 필터는 key 조건이 아니라 filter이므로 필터가 걸린 페이지는
+  `limit`보다 짧을 수 있고, 그때도 `next_cursor`가 남으면 이력은 계속된다.
 
 ## Example items
 
