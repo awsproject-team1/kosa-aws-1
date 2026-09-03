@@ -2,6 +2,69 @@
 
 ## Current
 
+- M4 A 관측·비용 조회를 HTTP 경계에 붙였다(`GET /deployments/{id}/observability`, Admin 전용).
+  `DemoRunObservabilityService`는 정의만 있고 route가 없었다. live CloudWatch/CloudTrail/Cost
+  Explorer adapter는 아직 없으므로 composition root는 source를 `None`으로 두고 route는 404로
+  남는다 — 주입할 source가 없는 것을 항상 실패하는 endpoint(500)로 보여주지 않는다. 남은 조각은
+  live metric source 하나이고, 그건 실제 AWS 자격 증명이 있어야 동작·검증된다.
+- **A/D 공유 계약의 A 몫(apply 완료 Event 예약 write)을 구현했다**(ADR-0019 §7, DATABASE.md
+  "완료 Event 경계"). D는 예약 item에서 `run_reference`를 읽어 검증·확정하는 경로를 이미 갖고
+  있었지만 예약을 쓰는 쪽이 없어 live `APPLY_COMPLETED`가 영원히 fail-closed였다.
+  `ApplyCompletionService` + `DynamoDbDeploymentCompletionStore` + `apply_completion_handler`
+  (EventBridge 진입점)로 닫았다. Event에서 읽는 값은 `deployment_id`/`run_id` **두 좌표뿐**이고
+  conclusion·commit·plan digest 같은 주장은 읽지도 저장하지도 않는다 — Event는 신호이지 정본이
+  아니며, 저장하는 순간 검증되지 않은 주장이 `derive_deployment_status()`의 입력이 된다.
+  EVENT 예약 + Job revision bump + `APPLY_COMPLETED` outbox는 하나의 조건부 transaction이다.
+  **소유 고객은 Event가 아니라 저장에서 해석한다** — `DEPLOYMENT#` item에
+  `GSI1PK = DEPLOYMENT#{deployment_id}`를 채우고 Job 해석과 같은 방식으로 id를 푼 뒤 그 customer
+  scope로 record를 다시 읽는다. payload에서 소유자를 받으면 Event를 만들 수 있는 누구든 남의 Job을
+  재개시킬 수 있다. 이미 terminal인 Job은 되살리지 않는다(사람이 끝낸 결정을 Event가 뒤집지 않는다).
+  CloudFormation에 `ApplyCompletionFunction`과 EventBridge rule/permission을 추가하고, 이 Lambda가
+  유일한 DynamoDB write 경로임을 security 회귀로 고정했다.
+- M3 A 조회·검증 reader를 붙여 `GET /deployments/{id}`와 `GET /deployments/{id}/verification`이
+  실제로 답하게 했다(같은 브랜치). `DynamoDbDeploymentFactsReader`는 `DEPLOYMENT#{id}` SK prefix
+  query 한 번으로 승인·거절·dispatch·EVENT item을 모두 읽고 Job과 합쳐 `DeploymentFacts`를 만든다.
+  apply 결론은 D가 재조회로 확정한 `VERIFIED` EVENT item에서만 온다 — dispatch 영수증과 예약된
+  `PENDING_VERIFICATION` item은 "실행 중"일 뿐 결론이 아니다(ADR-0019 §5·§7).
+  `DynamoDbComparisonInputReader`는 두 Assessment를 complete `ComparisonAssessment`로 만든다.
+  **`model_profile_id`/`rubric_version`은 결과에서 파생한다** — Initial Assessment는 그 pin을 item에
+  저장하지 않는 것이 규칙이고(pin은 검증 전용, ADR-0020 §3), 원본 쪽은 파생 말고 근거가 없으며,
+  양쪽을 같은 방법으로 읽어야 비교 축이 한 종류가 된다. 결과의 값은 "이 값으로 평가했다"는 사실이고
+  비교가 필요로 하는 건 그쪽이다. 한 Assessment가 Profile/rubric을 섞고 있으면 비교 전에
+  fail-closed한다. 상태 화면의 검증 판정은 검증 조회와 **같은** reader를 써서 둘이 어긋나지 않게 했다.
+- **`POST /deployments/{id}/approve`는 의도적으로 fail-closed로 남겼다.** 승인 plan reader는 plan과
+  함께 C의 readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan 요약(`refreshed`,
+  `mapped_resource_ids`, destructive 여부)을 `PlanExecutionResult`가 영속화하지 않는다.
+  `PlanReadinessInput`은 D를 producer로 지목하지만 저장 경로가 없다. 같은 이유로 상태 파생의
+  readiness도 `None`이다 — 근거 없이 `READY_FOR_APPROVAL`을 넣으면 C가 막았을 plan(예: destructive
+  변경)이 "승인 대기"로 보인다. **다음 작업은 D가 `PlanExecutionResult`에 plan 요약을 실어 plan
+  facts와 함께 저장하는 것**이고, 그게 되면 plan reader와 approve가 같이 열린다.
+- M3 A Deployment 생성 경로를 실제로 살렸다(`feature/m3-a-deployment-readers`, base=dev). 문서는
+  생성이 "durable 배선 완결"이라고 적었지만, composition root가 `DeploymentApiService(sources=...)`
+  를 넘기지 않아 `POST /remediations/{id}/deployments`는 프로덕션에서 항상
+  `deployment creation dependencies are not configured`로 죽고 있었다. 원인은 그 아래에 하나 더
+  있었다 — **C Remediation Worker 결과를 저장하는 DynamoDB 구현이 아예 없었다**
+  (`RemediationResultStore`의 실구현이 테스트 fake뿐). 결과가 저장되지 않으니 생성이 확인해야 할
+  전제조건("worker 결과가 존재") 자체를 만들 수 없었다. 세 조각을 넣어 경로를 닫았다:
+  (1) `DynamoDbRemediationResultStore` — `REMEDIATION#{id}` item에 `result`를 conditional
+  update로 한 번만 채운다. plan facts와 같은 관례(멱등 흡수, 덮어쓰기 불가)이고, 별도 `#RESULT`
+  item으로 나누지 않은 이유는 생성이 decision과 결과를 **함께** 봐야 하기 때문이다 — 한 item이면
+  단일 strongly-consistent get이고, 두 item이면 decision만 보이는 중간 상태를 읽는다.
+  (2) `DynamoDbDeploymentSourceReader` — decision·worker 결과·source Assessment를 한 번에 읽고
+  대상 commit을 정한다. `ACTUAL_SYNC`는 저장된 sync target commit이 곧 대상이라 GitHub read가
+  없고, `TERRAFORM_PATCH`는 ADR-0019 §3대로 **merge된 default branch commit**이 대상이다.
+  merge 전이면 도달 불가로 표시하고 commit을 지어내지 않는다. `source_assessment_id`가 없으면
+  검증을 정확한 before-state에 묶을 수 없으므로 fail-closed한다.
+  (3) `DeploymentCommitResolver` port(D 소유)와 `LiveDeploymentCommitResolver` — default branch
+  이름을 repository에서 읽고(설정을 믿지 않는다), patch에서 결정적으로 유도한 head branch로 PR을
+  찾고, merge commit이 default branch에서 **여전히** 도달 가능한지 compare로 확인한다. `merged_at`만
+  보면 merge 뒤 revert된 commit을 배포하게 된다. 미설정 배포에서는 `TERRAFORM_PATCH`만 fail-closed
+  되고 `ACTUAL_SYNC` 배포는 GitHub 없이 그대로 동작한다.
+  CloudFormation에 `DeploymentRuntimeJson`/`DeploymentGitHubSecretArns` 파라미터와 all-or-none
+  Rule, API Lambda 환경 변수, 조건부 secret 정책(와일드카드 아님)을 추가하고 security 회귀로
+  고정했다. 문서(CONTRACTS/DATABASE) 동기화. **남은 reader 3종**(`DeploymentPlanReader`/
+  `DeploymentFactsReader`/`ComparisonInputReader`)은 approve/get/verification을 여는 후속이다.
+
 - M2 A Admin 감사 이력 조회(`GET /audit-events`)를 구현했다(`feature/m2-a-audit-events`, base=dev).
   일곱 writer가 이미 `AUDIT#{occurred_at}#{event_id}` 한 SK 규약과 `event_type` 한 필드명을 쓰고
   있어, 조회는 writer별 분기 없이 고객 partition의 `AUDIT#` prefix를 SK 역순으로 읽는 단일 query다

@@ -107,6 +107,14 @@ class RemediationSyncTarget:
         for name in ("finding_id", "customer_id", "repository_id", "commit_sha"):
             require_non_empty_string(getattr(self, name), name)
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "finding_id": self.finding_id,
+            "customer_id": self.customer_id,
+            "repository_id": self.repository_id,
+            "commit_sha": self.commit_sha,
+        }
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PlanReadinessInput:

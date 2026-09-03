@@ -49,6 +49,8 @@ def _error_code(error: BaseException) -> str | None:
 class DynamoReadTable(Protocol):
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
 
+    def query(self, **kwargs: object) -> Mapping[str, object]: ...
+
 
 class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
     """Atomically append an exact approval and a metadata-only audit event."""
@@ -237,6 +239,11 @@ class DynamoDbDeploymentRepository(DeploymentRecordRepository):
             "entity_type": "DEPLOYMENT",
             "created_at": occurred_at,
             "version": 1,
+            # Apply 완료 Event는 deployment만 지목하고 소유 고객은 말하지 않는다. 소유자를
+            # payload에서 받으면 Event를 만들 수 있는 누구든 남의 Job을 재개시킬 수 있으므로,
+            # Job과 같은 방식으로(GSI1로 id를 풀고 customer scope를 확인) 저장에서 해석한다.
+            "GSI1PK": f"DEPLOYMENT#{record.deployment_id}",
+            "GSI1SK": pk,
             **record.to_dict(),
         }
         audit_item = {
@@ -343,6 +350,34 @@ class DynamoDbDeploymentRepository(DeploymentRecordRepository):
             }:
                 raise DuplicateJobError("deployment is already rejected or changed") from None
             raise RepositoryError("deployment reject failed") from None
+
+    def resolve_customer_id(self, *, deployment_id: str) -> str | None:
+        """Return the customer that owns a deployment, or `None` when it is unknown.
+
+        Mirrors the Job resolution pattern: GSI1 turns a global id into exactly one
+        item, and the caller re-reads the record under that customer scope. A query
+        that returns anything other than one row is treated as unknown rather than
+        guessed — two rows for one deployment id means the index is not what it claims.
+        """
+        if not isinstance(deployment_id, str) or not deployment_id.strip():
+            raise ValueError("deployment_id must be a non-empty string")
+        try:
+            response = self._table.query(
+                IndexName="GSI1",
+                KeyConditionExpression="GSI1PK = :deployment",
+                ExpressionAttributeValues={":deployment": f"DEPLOYMENT#{deployment_id}"},
+                Limit=2,
+            )
+        except Exception:
+            raise RepositoryError("deployment owner read failed") from None
+        items = response.get("Items", []) if isinstance(response, Mapping) else None
+        if not isinstance(items, list) or len(items) != 1:
+            return None
+        item = items[0]
+        if not isinstance(item, Mapping) or item.get("deployment_id") != deployment_id:
+            return None
+        customer_id = item.get("customer_id")
+        return customer_id if isinstance(customer_id, str) and customer_id.strip() else None
 
     def get_deployment(self, *, customer_id: str, deployment_id: str) -> DeploymentRecord | None:
         for value, name in ((customer_id, "customer_id"), (deployment_id, "deployment_id")):

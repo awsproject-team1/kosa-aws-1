@@ -48,6 +48,17 @@ Parameters:
     NoEcho: true
     AllowedPattern: '^$|^arn:[^:,]+:iam::[0-9]{12}:role/[^,]+(,arn:[^:,]+:iam::[0-9]{12}:role/[^,]+)*$'
     ConstraintDescription: Comma-separated non-empty IAM role ARNs or empty for fixture mode.
+  DeploymentRuntimeJson:
+    Type: String
+    Default: ""
+    NoEcho: true
+    ConstraintDescription: Optional approved deployment target configuration; empty leaves the TERRAFORM_PATCH deployment path fail-closed.
+  DeploymentGitHubSecretArns:
+    Type: String
+    Default: ""
+    NoEcho: true
+    AllowedPattern: '^$|^arn:[^:,]+:secretsmanager:[^:,]+:[0-9]{12}:secret:[^,]+(,arn:[^:,]+:secretsmanager:[^:,]+:[0-9]{12}:secret:[^,]+)*$'
+    ConstraintDescription: Comma-separated non-empty Secrets Manager ARNs holding approved repository GitHub tokens, or empty.
   FrontendCallbackUrl:
     Type: String
     Default: http://localhost:5173
@@ -73,6 +84,20 @@ Rules:
         AssertDescription: >-
           M1 runtime JSON, secret ARNs, and read-role ARNs must be either all empty
           for fixture mode or all non-empty for live mode.
+  DeploymentCommitResolutionAllOrNone:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::And:
+                - Fn::Equals: [!Ref DeploymentRuntimeJson, ""]
+                - Fn::Equals: [!Ref DeploymentGitHubSecretArns, ""]
+            - Fn::And:
+                - Fn::Not: [!Equals [!Ref DeploymentRuntimeJson, ""]]
+                - Fn::Not: [!Equals [!Ref DeploymentGitHubSecretArns, ""]]
+        AssertDescription: >-
+          Deployment runtime JSON and GitHub secret ARNs must be either both empty or
+          both non-empty. Target configuration without a readable token would resolve
+          no commit while presenting as configured.
   M1AssessmentRegionMatchesModelProfile:
     RuleCondition: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
     Assertions:
@@ -82,6 +107,7 @@ Rules:
 
 Conditions:
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
+  DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
 
 Resources:
   MetadataTable:
@@ -370,6 +396,18 @@ Resources:
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
+        # 빈 IAM policy는 만들지 않는다(IAM이 거부한다). 미설정 배포에서는 API가 GitHub를
+        # 전혀 읽지 않으므로 이 정책 자체가 없어야 한다.
+        - !If
+          - DeploymentCommitResolutionEnabled
+          - PolicyName: DeploymentCommitResolutionGitHubToken
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Split [",", !Ref DeploymentGitHubSecretArns]
+          - !Ref AWS::NoValue
   WorkflowRuntimeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -475,6 +513,10 @@ Resources:
           DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
+          # 승인된 배포 대상의 GitHub 좌표. Deployment 생성이 TERRAFORM_PATCH의 merge commit을
+          # 해석하려면 필요하다(ADR-0019 §3·§4). 비어 있으면 그 경로만 fail-closed되고,
+          # ACTUAL_SYNC 배포는 GitHub read 없이 그대로 동작한다.
+          DEPLOYMENT_RUNTIME_JSON: !Ref DeploymentRuntimeJson
 
   OutboxSweeperFunction:
     Type: AWS::Lambda::Function
@@ -492,6 +534,24 @@ Resources:
         Variables:
           METADATA_TABLE_NAME: !Ref MetadataTable
           ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
+
+  ApplyCompletionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-apply-completion"
+      Runtime: python3.12
+      Handler: apps.backend.api.runtime.apply_completion_handler
+      Role: !GetAtt ApiRuntimeRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          # 완료 Event 처리는 `APPLY_COMPLETED` task를 이 큐에 넣어 D Worker를 깨운다.
+          DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
 
   AssessmentWorkerFunction:
     Type: AWS::Lambda::Function
@@ -533,6 +593,30 @@ Resources:
       FunctionName: !Ref OutboxSweeperFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt OutboxSweepSchedule.Arn
+
+  # Apply run 완료 Event → 재조회 좌표 예약 (ADR-0019 §7). Event는 신호이므로 A는 좌표만
+  # 저장하고, conclusion 같은 사실은 D Worker가 run을 재조회해 확정한다. GitHub Actions에는
+  # DynamoDB write 권한을 주지 않는다 — 이 Lambda가 유일한 write 경로다.
+  ApplyCompletionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Reserve the verification coordinate for a completed Terraform apply run.
+      State: ENABLED
+      EventPattern:
+        source:
+          - !Sub "${ProjectName}.${Environment}.deployment"
+        detail-type:
+          - terraform-apply-completed
+      Targets:
+        - Arn: !GetAtt ApplyCompletionFunction.Arn
+          Id: ApplyCompletion
+  AllowEventBridgeApplyCompletion:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApplyCompletionFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ApplyCompletionRule.Arn
 
   HttpApi:
     Type: AWS::ApiGatewayV2::Api

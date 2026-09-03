@@ -1,6 +1,6 @@
 """D execution port signatures for the M3 approved-apply boundary (ADR-0019).
 
-These four Protocols are the seam between A/C (who orchestrate and evaluate) and
+These Protocols are the seam between A/C (who orchestrate and evaluate) and
 D (who runs Terraform and calls GitHub). They are frozen here first, ahead of D's
 live adapters, so A and C can build against Protocols and fixtures in parallel
 rather than waiting for D's implementation (PROGRESS.md M3 ordering). D owns the
@@ -16,6 +16,7 @@ from packages.contracts import (
     ApplyDispatchReceipt,
     DeploymentApproval,
     PlanExecutionResult,
+    RemediationPatch,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowRunFacts,
@@ -99,3 +100,28 @@ class ActualRereadPort(Protocol):
         deployment_id: str,
         sync_target: RemediationSyncTarget,
     ) -> None: ...
+
+
+@runtime_checkable
+class DeploymentCommitResolver(Protocol):
+    """Resolve the default-branch commit a `TERRAFORM_PATCH` deployment applies.
+
+    ADR-0019 §3 fixes the apply target as the **merge commit on the default
+    branch**, not the patch's base commit: the PR head's plan is CI reference only,
+    and applying anything but merged code makes the later `DRIFT` perspective read a
+    tree no human approved. §4 then makes "reachable from the default branch" a
+    precondition of creating the deployment at all.
+
+    Both questions are one GitHub read, so they are one method. `None` means the
+    patch is not on the default branch yet — normally because nobody has merged the
+    PR. That is an ordinary not-yet, not an error, so it is a return value: the
+    caller reports `CONFLICT` and the customer merges when ready. We deliberately do
+    not observe the customer's CI (§4); an unmerged PR simply fails this check.
+
+    `ACTUAL_SYNC` does not use this port. Its target is already a default-branch
+    commit that passed the `IAC` perspective (`RemediationSyncTarget.commit_sha`).
+    """
+
+    def resolve_default_branch_commit(
+        self, *, customer_id: str, repository_id: str, patch: RemediationPatch
+    ) -> str | None: ...

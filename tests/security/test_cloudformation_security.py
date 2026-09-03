@@ -230,6 +230,37 @@ class CloudFormationSecurityTest(unittest.TestCase):
         variables = _properties(function)["Environment"]["Variables"]
         self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
 
+    def test_api_runtime_receives_the_deployment_target_configuration(self) -> None:
+        """Deployment 생성이 merge commit을 해석하려면 cold start에 이 값이 있어야 한다."""
+        variables = _properties(self.resources["ApiRuntimeFunction"])["Environment"]["Variables"]
+        self.assertEqual(variables["DEPLOYMENT_RUNTIME_JSON"], "DeploymentRuntimeJson")
+
+    def test_api_runtime_reads_github_tokens_only_when_configured(self) -> None:
+        """미설정 배포에서는 API가 GitHub를 읽지 않으므로 secret 정책 자체가 없어야 한다."""
+        policies = _properties(self.resources["ApiRuntimeRole"])["Policies"]
+        conditional = policies[1]
+        self.assertEqual(conditional[0], "DeploymentCommitResolutionEnabled")
+        self.assertEqual(conditional[1]["PolicyName"], "DeploymentCommitResolutionGitHubToken")
+        statements = conditional[1]["PolicyDocument"]["Statement"]
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(statements[0]["Action"], "secretsmanager:GetSecretValue")
+        # 토큰은 명시된 ARN 목록으로만 제한한다. 와일드카드면 API가 계정의 모든 secret을 읽는다.
+        self.assertEqual(statements[0]["Resource"], [",", "DeploymentGitHubSecretArns"])
+        self.assertEqual(conditional[2], "AWS::NoValue")
+
+    def test_apply_completion_is_the_only_write_path_for_run_events(self) -> None:
+        """GitHub Actions에는 DynamoDB write 권한이 없다 — Event는 이 Lambda만 소비한다."""
+        rule = _properties(self.resources["ApplyCompletionRule"])
+        self.assertEqual(rule["EventPattern"]["detail-type"], ["terraform-apply-completed"])
+        self.assertEqual(rule["Targets"][0]["Arn"], "ApplyCompletionFunction.Arn")
+        permission = _properties(self.resources["AllowEventBridgeApplyCompletion"])
+        self.assertEqual(permission["Principal"], "events.amazonaws.com")
+        self.assertEqual(permission["SourceArn"], "ApplyCompletionRule.Arn")
+        variables = _properties(self.resources["ApplyCompletionFunction"])["Environment"][
+            "Variables"
+        ]
+        self.assertEqual(variables["DEPLOYMENT_QUEUE_URL"], "DeploymentQueue")
+
     def test_deployment_http_routes_are_explicitly_jwt_protected(self) -> None:
         """Handler branches are unreachable unless API Gateway declares each route."""
         expected = {
@@ -310,7 +341,12 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
         }
         self.assertEqual(
             set(functions),
-            {"ApiRuntimeFunction", "OutboxSweeperFunction", "AssessmentWorkerFunction"},
+            {
+                "ApiRuntimeFunction",
+                "OutboxSweeperFunction",
+                "AssessmentWorkerFunction",
+                "ApplyCompletionFunction",
+            },
         )
         for function in functions.values():
             self.assertEqual(

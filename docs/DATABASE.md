@@ -55,7 +55,7 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
-| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job/result reference |
+| Remediation | `CUSTOMER#{customer_id}` | `REMEDIATION#{remediation_id}` | Immutable `RemediationDecision`, C context (including optional source Assessment identity), source Finding, optional Job 참조, 그리고 C Worker 결과 `result` |
 | Remediation exception | `CUSTOMER#{customer_id}` | `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}#EXCEPTION#{exception_id}` | Admin-approved enum reason, optional Resource scope, approval/expiry binding |
 | Deployment | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}` | Plan, approval, apply, verification state |
 | Approval | `CUSTOMER#{customer_id}` | `DEPLOYMENT#{deployment_id}#APPROVAL#{approval_id}` | Approver, `commit_sha`, `plan_hash` binding |
@@ -77,6 +77,7 @@ counter와 materialized score는 이후 storage migration 전에는 Assessment m
 | Base table | `CUSTOMER#{customer_id}` + `AUDIT#` prefix (descending) | Admin 감사 이력 페이지 조회. SK가 `occurred_at`으로 시작하므로 최신순이 key 순서 읽기이고 정렬이 필요 없다 |
 | Base table | `CUSTOMER#{customer_id}` + `REMEDIATION_EXCEPTION#RULE#{rule_id}#VERSION#{version}` prefix | 고객의 exact Rule version 예외 조회; resource scope는 조회 후 좁힌다 |
 | `GSI1` | `GSI1PK = JOB#{job_id}`, `GSI1SK = CUSTOMER#{customer_id}` | Resolve a Job ID, then verify customer scope before return |
+| `GSI1` | `GSI1PK = DEPLOYMENT#{deployment_id}`, `GSI1SK = CUSTOMER#{customer_id}` | apply 완료 Event의 deployment id로 소유 고객을 해석한 뒤 그 scope로 record를 다시 읽는다 |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#JOB_STATUS#{status}`, `GSI2SK = updated_at#JOB#{job_id}` | Customer Job list by status and recency |
 | Base table | `CUSTOMER#{customer_id}` + `POLICY_INGESTION#{source_id}#VERSION#{version}` | Processing status of one uploaded Policy Source version |
 | `GSI2` | `GSI2PK = CUSTOMER#{customer_id}#INGESTION_STATUS#{status}`, `GSI2SK = updated_at#POLICY_INGESTION#{source_id}#VERSION#{version}` | Customer ingestion list by status and recency |
@@ -104,6 +105,23 @@ Finding/Snapshot/evidence 값이며 immutable하다. `MANUAL_REVIEW`와 `SUPPRES
 audit 두 항목만 쓰고 Job/Outbox는 만들지 않는다. 고객 예외 등록도 exact Rule version key와
 `REMEDIATION_EXCEPTION_APPROVED` audit event를 같은 transaction에 쓰며 ID/customer/approver/time은
 Backend가 발급한다.
+
+C Remediation Worker의 결과는 같은 `REMEDIATION#{remediation_id}` item에 `result` 속성으로
+conditional update(`attribute_not_exists(result)`)한다. plan facts를 `DEPLOYMENT#` item에 채우는
+것과 같은 관례이며 이유도 같다 — at-least-once 재시도는 흡수되고, 다른 결과는 이미 기록된 것을
+덮어쓰지 못한다. `result.kind`는 `RemediationAction` 값(`TERRAFORM_PATCH`/`ACTUAL_SYNC`)이고
+payload는 각각 `patch`(`RemediationPatch`)와 `sync_target`(`RemediationSyncTarget`)이다. 별도
+`#RESULT` item으로 나누지 않는 이유는 Deployment 생성 경로에 있다 — 생성은 decision과 결과를 함께
+확인해야 하는데(ADR-0019 §4), 한 item이면 그 확인이 단일 strongly-consistent get이고, 두 item이면
+decision은 보이는데 결과는 아직 안 보이는 중간 상태를 읽을 수 있다.
+
+Deployment 생성의 대상 commit은 action마다 다르다(ADR-0019 §3). `ACTUAL_SYNC`는 저장된
+`sync_target.commit_sha`(이미 `IAC` 관점을 통과한 default branch commit)를 그대로 쓰므로 GitHub
+read가 필요 없다. `TERRAFORM_PATCH`는 사람이 merge한 **default branch의 merge commit**이 대상이며,
+그 값은 저장돼 있지 않고 D 소유 read-only port(`DeploymentCommitResolver`)가 GitHub에서 해석한다.
+merge 전이면 해석 결과가 없고, 생성은 도달 불가로 거절된다. patch의 `base_commit_sha`를 대신 쓰지
+않는다 — base는 patch를 만든 시점의 스냅샷이고, 그걸 apply하면 사람이 승인하지 않은 코드를
+배포하게 된다.
 
 ## M3 planned deployment and verification storage
 
@@ -149,12 +167,19 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
 
 - **Queue payload는 여전히 최소다:** `job_id`, `expected_revision`, `command`만 흐른다. `run_id`는
   큐에 싣지 않는다(payload 불신 원칙, ADR-0019 §7).
-- **A / EventBridge (writer):** GitHub Actions apply run 완료 Event를 받으면, 그 event에서 얻은
-  `run_id`로 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을 `status=PENDING_VERIFICATION`으로
+- **A / EventBridge (writer, 구현됨):** GitHub Actions apply run 완료 Event를 받으면, 그 event에서
+  얻은 `run_id`로 `DEPLOYMENT#{deployment_id}#EVENT#{run_id}` item을 `status=PENDING_VERIFICATION`으로
   write하고(담는 값은 `run_id`뿐, run의 conclusion/facts는 담지 않는다 — 신뢰 대상이 아니므로),
   같은 deployment의 Job을 다음 revision으로 올리며 `APPLY_COMPLETED` task를 Deployment Queue에 넣는다.
   이 예약 item은 "재조회할 run 좌표 포인터"이지 사실 기록이 아니다. GitHub Actions에는 DynamoDB
-  write 권한을 주지 않는다.
+  write 권한을 주지 않는다 — `ApplyCompletionFunction`이 유일한 write 경로다.
+  세 write는 하나의 조건부 transaction이다. Job revision만 올라가고 예약이 없으면 D가
+  `run_reference`를 못 찾아 fail-closed되고, 예약만 되고 task가 없으면 아무도 검증하지 않는다.
+  EVENT item의 `attribute_not_exists(SK)`와 Job의 revision 조건이 함께 at-least-once 재전달을
+  흡수한다. Event가 지목하는 것은 deployment뿐이고 **소유 고객은 Event가 아니라 저장에서 해석한다**
+  — `DEPLOYMENT#` item의 `GSI1PK = DEPLOYMENT#{deployment_id}`로 id를 풀고 그 customer scope로
+  record를 다시 읽는다(Job 해석과 같은 방식). 소유자를 payload에서 받으면 Event를 만들 수 있는
+  누구든 남의 Job을 재개시킬 수 있다. 이미 terminal인 Job(거절·실패·완료)은 재개하지 않는다.
 - **D Worker (reader → verifier):** `APPLY_COMPLETED`를 소비하면 `(job_id, revision)`으로 work를
   다시 읽고, 그 deployment의 `PENDING_VERIFICATION` EVENT item에서 `run_id`를 읽어 `run_reference`를
   만든다. 그 `run_id`로 GitHub Actions run을 재조회(`WorkflowRunReader`)해 승인 사실
@@ -162,7 +187,7 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   `DeploymentVerificationStore`가 같은 `#EVENT#{run_id}` item을 검증된 `WorkflowRunFacts`로
   `status=VERIFIED`로 확정한다. 하나라도 다르면 재시도 없이 차단한다(MANUAL_REVIEW로 파생).
   예약 item이 없으면(`run_reference` 부재) Worker는 `APPLY_COMPLETED`를 fail-closed한다.
-- **미구현 조각:** live plan 어댑터(`PlanRequestPort`)는 아직 없어 live `RUN_DEPLOYMENT`는 명시적
+- **미구현 조각:** live plan 어댑터의 GitHub plan run I/O는 sandbox 자격 증명 전까지 명시적
   오류로 멈춘다. fixture 경로(Mock 어댑터)는 세 command를 모두 구동한다.
 - Post-Deploy Verification은 **새 `assessment_id`**로 저장한다. `ASSESSMENT#{assessment_id}` item에
   `phase`, `source_assessment_id`, `deployment_id`를 추가하고, result/finding SK 구조는 바꾸지 않는다.
