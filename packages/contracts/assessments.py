@@ -17,11 +17,17 @@ class AssessmentPhase(StrEnum):
 
 
 class EvaluationPerspective(StrEnum):
-    """The source relationship represented by a Resource × Rule result."""
+    """The source relationship represented by a Resource × Rule result.
+
+    `MANUAL`은 additive다. 사람이 검토해야 할 조직 통제를 기존 IAC/AWS_ACTUAL/DRIFT 중 하나로
+    표현하면, 그 결과가 "IaC를 읽고 내린 판단"처럼 보인다 — 근거가 무엇이었는지 결과에서
+    복원할 수 없게 된다. 이 값을 더해도 기존 status·scoring·severity 계약은 바뀌지 않는다.
+    """
 
     IAC = "IAC"
     AWS_ACTUAL = "AWS_ACTUAL"
     DRIFT = "DRIFT"
+    MANUAL = "MANUAL"
 
 
 class EvaluationStatus(StrEnum):

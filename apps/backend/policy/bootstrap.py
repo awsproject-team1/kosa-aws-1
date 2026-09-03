@@ -101,13 +101,26 @@ def _items_for_registry(
             }
         )
     for profile in registry.profiles:
+        # 판본 이력과 current pointer를 **둘 다** 만든다. pointer만 두면 version을 고정한
+        # Assessment가 나중에 그 판본을 직접 읽을 수 없고, 판본만 두면 새 Assessment가 어떤
+        # Profile을 쓸지 정할 곳이 없다.
+        published = {
+            "PK": pk,
+            "entity_type": "POLICY_PROFILE",
+            "customer_id": customer_id,
+            **profile.to_dict(),
+        }
         items.append(
             {
-                "PK": pk,
+                **published,
+                "SK": f"POLICY_PROFILE#{profile.policy_profile_id}#VERSION#{profile.version}",
+            }
+        )
+        items.append(
+            {
+                **published,
                 "SK": f"POLICY_PROFILE#{profile.policy_profile_id}",
-                "entity_type": "POLICY_PROFILE",
-                "customer_id": customer_id,
-                **profile.to_dict(),
+                "current_version": profile.version,
             }
         )
     return tuple(items)

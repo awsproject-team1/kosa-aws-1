@@ -76,6 +76,7 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
             job_id="job-001",
             repository_id="repo-001",
             policy_profile_id="profile-001",
+            policy_profile_version="v1",
         )
         job = create_job(
             job_id="job-001",
@@ -108,7 +109,9 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         self.assertNotIn("deployment_id", item)
         self.assertNotIn("model_profile_id", item)
         self.assertNotIn("rubric_version", item)
-        self.assertNotIn("policy_profile_version", item)
+        # 판본은 verification 전용 pin이 아니라 **모든 phase**가 갖는 값이다. Initial이 이것을
+        # 저장하지 않으면 Runtime은 실행 시점의 최신 pointer로 평가하게 된다.
+        self.assertEqual(item["policy_profile_version"], "v1")
         self.assertIn(("CUSTOMER#cust-001", "JOB#job-001"), table.items)
         outbox = table.items[("CUSTOMER#cust-001", "OUTBOX#JOB#job-001")]
         self.assertEqual(outbox["GSI2PK"], "OUTBOX#PENDING")

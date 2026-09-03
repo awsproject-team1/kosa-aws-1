@@ -35,7 +35,13 @@ class PolicyApprovalRepository(Protocol):
     ]: ...
 
     def record_profile(
-        self, *, customer_id: str, profile: PolicyProfile, published_by: str, published_at: str
+        self,
+        *,
+        customer_id: str,
+        profile: PolicyProfile,
+        published_by: str,
+        published_at: str,
+        expected_current_version: str | None = None,
     ) -> None: ...
 
 
@@ -117,7 +123,14 @@ class PolicyApprovalApiService:
         source_version: str,
         policy_profile_id: str,
         version: str,
+        expected_current_version: str | None = None,
     ) -> PolicyProfile:
+        """게시자는 자기가 교체하려는 판본을 명시한다.
+
+        `expected_current_version`이 없으면 최초 게시로 본다. 값이 있으면 그 판본을 가리키고
+        있을 때만 pointer가 움직인다 — 동시에 게시된 두 Profile 중 나중 것이 앞의 것을 조용히
+        덮어쓰지 않게 한다.
+        """
         if not isinstance(principal, Principal):
             raise TypeError("principal must be a Principal")
         for name, value in (
@@ -146,6 +159,7 @@ class PolicyApprovalApiService:
             profile=profile,
             published_by=principal.subject,
             published_at=self._now_iso(),
+            expected_current_version=expected_current_version,
         )
         return profile
 

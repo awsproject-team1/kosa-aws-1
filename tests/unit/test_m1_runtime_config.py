@@ -26,7 +26,6 @@ from packages.contracts import (
 TARGET = {
     "customer_id": "cust-001",
     "repository_id": "repo-001",
-    "policy_profile_id": "profile-mvp-baseline",
     "commit_sha": "a" * 40,
     "github_repository": "customer/iac",
     "github_token_secret_id": "github-token",
@@ -53,14 +52,12 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
         target = configuration.resolve(
             customer_id="cust-001",
             repository_id="repo-001",
-            policy_profile_id="profile-mvp-baseline",
         )
         self.assertEqual(target.commit_sha, "a" * 40)
         with self.assertRaisesRegex(M1RuntimeConfigurationError, "outside M1 runtime scope"):
             configuration.resolve(
                 customer_id="cust-001",
                 repository_id="repo-other",
-                policy_profile_id="profile-mvp-baseline",
             )
 
     def test_rejects_missing_or_extra_configuration_fields(self) -> None:
@@ -89,6 +86,7 @@ class M1RuntimeConfigurationTest(unittest.TestCase):
                     "Item": {
                         "repository_id": "repo-001",
                         "policy_profile_id": "profile-mvp-baseline",
+                        "policy_profile_version": "v1",
                     }
                 }
 
@@ -128,6 +126,9 @@ def _table(assessment: dict[str, object], *, policy_profile_id: str = "profile-m
                 "Item": {
                     "repository_id": "repo-001",
                     "policy_profile_id": policy_profile_id,
+                    # 모든 phase가 Profile 판본을 고정한다. 없으면 Runtime이 최신 pointer로
+                    # 조용히 대체하지 않고 실패한다.
+                    "policy_profile_version": "v1",
                     **assessment,
                 }
             }
@@ -145,7 +146,6 @@ class M1MultiResourceTargetTest(unittest.TestCase):
         return self._configuration(target).resolve(
             customer_id="cust-001",
             repository_id="repo-001",
-            policy_profile_id="profile-mvp-baseline",
         )
 
     def test_the_legacy_single_bucket_target_stays_valid(self) -> None:
@@ -204,7 +204,7 @@ class M1MultiResourceTargetTest(unittest.TestCase):
 
     def test_expanded_resources_share_one_complete_immutable_plan(self) -> None:
         policy_profile_id = "profile-multiresource-baseline"
-        target = {**MULTI_TARGET, "policy_profile_id": policy_profile_id}
+        target = dict(MULTI_TARGET)
         repository = DynamoM1WorkRepository(
             _table({}, policy_profile_id=policy_profile_id),
             self._configuration(target),
@@ -252,7 +252,7 @@ class M1MultiResourceTargetTest(unittest.TestCase):
 
     def test_verification_expands_only_over_resources_in_the_source_plan(self) -> None:
         policy_profile_id = "profile-multiresource-baseline"
-        target = {**MULTI_TARGET, "policy_profile_id": policy_profile_id}
+        target = dict(MULTI_TARGET)
         planned = tuple(
             PlannedEvaluation(
                 resource_id=resource_id,
@@ -361,7 +361,6 @@ class ActualResourceToolWiringTest(unittest.TestCase):
         return configuration.resolve(
             customer_id="cust-001",
             repository_id="repo-001",
-            policy_profile_id="profile-mvp-baseline",
         )
 
     def test_builds_one_adapter_per_declared_resource_type(self) -> None:

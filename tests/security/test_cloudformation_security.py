@@ -436,6 +436,8 @@ class CloudFormationSecurityTest(unittest.TestCase):
             "GET /policy-sources/{sourceId}/versions/{version}",
             "POST /policy-sources/{sourceId}/versions/{version}/process",
             "POST /policy-sources/{sourceId}/versions/{version}/approve",
+            "POST /policy-sources/{sourceId}/versions/{version}/candidates",
+            "GET /policy-sources/{sourceId}/versions/{version}/candidates",
         }
         for method, path in sorted(self._declared_routes()):
             if f"{method} {path}" in helper_served:
@@ -538,6 +540,7 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
                 "ApplyCompletionFunction",
                 "RemediationWorkerFunction",
                 "DeploymentWorkerFunction",
+                "PolicyAuthoringWorkerFunction",
             },
         )
         for function in functions.values():

@@ -33,11 +33,18 @@ Authenticated upload request
 → file signature/MIME/size/malware validation
 → format-specific parser
 → normalized Policy Document artifact
+→ extraction request (queued) → Policy Authoring Worker
 → Control/Rule candidates with stable locator + content hash
-→ human review and approval
+→ human review and partial approval
 → version-pinned Policy Source/Rule/Profile publication
+→ Assessment creation pins the Profile version
 → Policy Context → Assessment
 ```
+
+후보 추출은 ADR-0023이 정한 경계를 따른다. 제품이 평가할 수 있는 범위는 code-owned Governance
+Control Catalog(`apps/backend/policy/control_catalog.py`)가 정의하고, AI는 그 경계 안에서
+Requirement를 제안할 뿐 판정·심각도·점수를 만들지 않는다. 자동 평가할 수 없는 요구사항은
+`UNSUPPORTED`로 보존되며 승인 가능한 Rule이 되지 않는다.
 
 원본과 정규화 결과는 Artifact로 분리한다. 평가기는 업로드 원본 전체를 임의로 읽지 않고 승인된
 Profile의 Rule과 필요한 정규화 구간만 받는다. Parser, 정규화 Schema, Rule 또는 승인된 Policy
@@ -180,10 +187,15 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 1. 고객 Scope가 고정된 Policy Source upload session 생성
 2. 업로드 완료 확인과 비동기 validation/parsing 시작
 3. Source version별 처리 상태·지원 불가 사유·검토 경고 조회
-4. 추출된 Control/Rule 후보 검토 및 승인
-5. 승인된 Rule version으로 versioned Policy Profile 생성 또는 갱신(publication)
+4. 후보 추출 요청(비동기, `202 Accepted`)과 그 결과 조회
+5. 추출된 Control/Rule 후보 검토 및 승인
+6. 승인된 Rule version으로 versioned Policy Profile 생성 또는 갱신(publication)
 
-4번과 5번은 서로 다른 operation이다. 승인은 Source/Control/Rule version을 확정할 뿐이고, 그
+4번은 요청을 durable하게 남긴 뒤 Authoring Queue로 보낸다. 조회는 완결된 실행만 후보를 돌려준다 —
+부분 결과를 보여주면 리뷰어가 그것을 전체로 착각하고 승인한다. 응답에는 정규화 문서의 원문이
+들어가지 않으며, 리뷰어가 보는 문장은 모델이 쓴 재진술과 서버가 만든 `content_sha256`이다.
+
+5번과 6번은 서로 다른 operation이다. 승인은 Source/Control/Rule version을 확정할 뿐이고, 그
 Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. Profile publication은 다음을
 거부해야 한다.
 
@@ -207,13 +219,17 @@ Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. P
       막지 못한다 — 증폭이 압축 해제 **이후** Parser 안에서 일어나므로 선언 크기도 읽은
       바이트도 작다. 정규화 unit 수 상한도 형식과 무관하게 강제한다.
 - [x] 각 지원 형식이 동일한 Normalized Policy Document Contract를 생성한다.
-- [ ] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
+- [x] 고객 A가 고객 B의 원문, 정규화 Artifact, Source/Rule/Profile을 조회할 수 없다.
+      (모든 read가 호출자 partition만 사용하고,
+      `tests/integration/test_policy_authoring_to_assessment.py`가 이를 고정한다.)
 - [x] 암호화·손상·미지원·텍스트 없는 문서가 명확한 상태와 오류로 종료된다.
 - [x] Source version, Parser version, locator, 원문/정규화 hash가 Evidence까지 추적된다.
       (정규화 unit → `source_reference_for()` → 승인 record의 finalization tuple →
       게시된 Profile → `PolicyContext.allows_evidence()`까지 테스트로 이어져 있다.)
 - [x] 사람 승인 전 Rule은 Profile 및 Assessment Context에 들어가지 않는다.
-- [ ] 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트가 통과한다.
+- [x] 업로드 → 정규화 → 후보 추출 → 승인 → Profile → Assessment 통합 테스트가 통과한다.
+      (`tests/integration/test_policy_authoring_to_assessment.py`. 평가되는 Rule이 커밋된
+      fixture Rule이 아니라 업로드한 정책에서 나온 것임을 함께 확인한다.)
 - [x] 정책 원문이나 추출 텍스트가 Git diff, Queue payload, 운영 로그에 노출되지 않는다.
       (Contract가 텍스트를 담을 수 없고, `tests/security/test_policy_ingestion_boundary.py`가
       직렬화·실패 코드·오류 메시지에 원문이 없음을 고정한다.)

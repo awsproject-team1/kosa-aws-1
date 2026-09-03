@@ -15,6 +15,7 @@ from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
 from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
+from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.assessment import DynamoDbAssessmentReportStore
@@ -32,8 +33,10 @@ from apps.backend.jobs import (
     AssessmentScopeDenied,
     OutboxDispatcher,
     SqsDeploymentWorkflowDispatcher,
+    SqsPolicyAuthoringDispatcher,
     SqsWorkflowDispatcher,
 )
+from apps.backend.policy import DynamoDbPolicyCatalog
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbAuditEventRepository,
@@ -53,10 +56,15 @@ from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploa
 
 
 class EnvironmentAssessmentScope(AssessmentScope):
-    """Fail-closed deployment configuration for approved customer selectors."""
+    """Fail-closed deployment configuration for the repositories a customer may assess.
 
-    def __init__(self, configured_scopes: Mapping[str, frozenset[tuple[str, str]]]) -> None:
-        self._configured_scopes = configured_scopes
+    **Policy Profile은 여기서 판정하지 않는다.** 환경변수 allow-list에 Profile을 고정하면, 고객이
+    정책을 승인·게시할 때마다 인프라 배포가 필요해진다 — 승인 직후 평가에 쓸 수 있어야 한다는
+    목표와 충돌한다. 어떤 Profile을 쓸 수 있는지는 고객 partition의 Catalog가 답한다.
+    """
+
+    def __init__(self, configured_repositories: Mapping[str, frozenset[str]]) -> None:
+        self._configured_repositories = configured_repositories
 
     @classmethod
     def from_environment(cls) -> EnvironmentAssessmentScope:
@@ -68,20 +76,18 @@ class EnvironmentAssessmentScope(AssessmentScope):
             if not isinstance(parsed, Mapping):
                 raise ValueError
             scopes = {
-                _required_string(customer_id, "customer_id"): _selector_pairs(entries)
+                _required_string(customer_id, "customer_id"): _repository_ids(entries)
                 for customer_id, entries in parsed.items()
             }
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise RuntimeError("ASSESSMENT_SCOPE_JSON is invalid") from error
         return cls(scopes)
 
-    def authorize(
-        self, principal: Principal, *, repository_id: str, policy_profile_id: str
-    ) -> None:
-        if (repository_id, policy_profile_id) not in self._configured_scopes.get(
+    def authorize(self, principal: Principal, *, repository_id: str) -> None:
+        if repository_id not in self._configured_repositories.get(
             principal.customer_id, frozenset()
         ):
-            raise AssessmentScopeDenied("assessment selectors are outside configured scope")
+            raise AssessmentScopeDenied("assessment repository is outside configured scope")
 
 
 def lambda_handler(event: Mapping[str, object], context: object) -> dict[str, object]:
@@ -137,9 +143,15 @@ def _apply_completion_service() -> ApplyCompletionService:
 
 def _http_handler() -> JobHttpHandler:
     repository, dispatcher = _workflow_components()
+    metadata_table = _metadata_table()
     service = JobApiService(
         repository=repository,
         assessment_scope=EnvironmentAssessmentScope.from_environment(),
+        # Profile 조회는 항상 호출자의 partition에서만 일어난다. Catalog가 생성 시점에 하나의
+        # `customer_id`에 묶이므로 다른 고객의 Profile은 이 어댑터로 표현할 수 없다.
+        policy_catalog_factory=lambda *, customer_id: DynamoDbPolicyCatalog(
+            metadata_table, customer_id=customer_id
+        ),
         outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=dispatcher),
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
@@ -159,6 +171,7 @@ def _http_handler() -> JobHttpHandler:
         deployments=_deployment_components(repository, reports),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
+        policy_candidates=_policy_candidate_components(),
         # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
         # 관측·비용 조회는 live metric source가 주입된 배포에서만 존재한다. source 없이
         # route만 노출하면 항상 실패하는 endpoint가 생기고, 그 실패가 "값이 없다"인지
@@ -320,6 +333,30 @@ def _policy_approval_components() -> PolicyApprovalApiService:
     return PolicyApprovalApiService(repository)
 
 
+def _policy_candidate_components() -> PolicyCandidateApiService | None:
+    """후보 추출 요청·조회 서비스를 구성한다. queue가 없으면 route를 열지 않는다.
+
+    queue URL 없이 service만 배선하면, 요청은 저장되지만 아무도 처리하지 않는 실행이 쌓인다.
+    그 상태는 "추출 중"과 구별되지 않으므로 배선 자체를 만들지 않는다.
+    """
+    queue_url = os.environ.get("POLICY_AUTHORING_QUEUE_URL")
+    if not queue_url or not queue_url.strip():
+        return None
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    table_name = _required_string(os.environ.get("METADATA_TABLE_NAME"), "METADATA_TABLE_NAME")
+    return PolicyCandidateApiService(
+        repository=DynamoDbPolicyApprovalRepository(
+            table_name=table_name,
+            transaction_client=boto3.client("dynamodb"),
+            table=_metadata_table(),
+        ),
+        queue=SqsPolicyAuthoringDispatcher(boto3.client("sqs"), queue_url=queue_url),
+    )
+
+
 def _workflow_components() -> tuple[DynamoDbAssessmentWorkflowRepository, SqsWorkflowDispatcher]:
     try:
         import boto3
@@ -421,20 +458,20 @@ def _metadata_table() -> object:
     return boto3.resource("dynamodb").Table(table_name)
 
 
-def _selector_pairs(value: object) -> frozenset[tuple[str, str]]:
+def _repository_ids(value: object) -> frozenset[str]:
+    """Read the repositories one customer may assess.
+
+    항목에 `policy_profile_id`가 남아 있으면 거부한다. 조용히 무시하면, 운영자는 Profile 경계가
+    아직 환경변수로 강제된다고 믿은 채 배포한다.
+    """
     if not isinstance(value, list):
         raise ValueError
-    pairs: set[tuple[str, str]] = set()
+    repositories: set[str] = set()
     for entry in value:
-        if not isinstance(entry, Mapping):
+        if not isinstance(entry, Mapping) or set(entry) != {"repository_id"}:
             raise ValueError
-        pairs.add(
-            (
-                _required_string(entry.get("repository_id"), "repository_id"),
-                _required_string(entry.get("policy_profile_id"), "policy_profile_id"),
-            )
-        )
-    return frozenset(pairs)
+        repositories.add(_required_string(entry.get("repository_id"), "repository_id"))
+    return frozenset(repositories)
 
 
 def _required_string(value: object, field_name: str) -> str:

@@ -36,6 +36,7 @@ from apps.backend.policy.ingestion.parsers.text import (
     parse_markdown,
     parse_plain_text,
 )
+from apps.backend.policy.ingestion.storage_keys import normalized_artifact_id
 from packages.contracts import SourceReference
 from packages.contracts.policy_ingestion import (
     FORMAT_MEDIA_TYPES,
@@ -188,7 +189,7 @@ def _normalize(original: UploadedPolicyOriginal, payload: bytes) -> Normalizatio
         byte_size=original.byte_size,
         parser_id=registration.parser_id,
         parser_version=registration.parser_version,
-        normalized_artifact_id=_normalized_artifact_id(original),
+        normalized_artifact_id=normalized_artifact_id(original.artifact_id),
         normalized_sha256=parsed.normalized_sha256,
         status=status,
         units=parsed.units,
@@ -213,11 +214,6 @@ def _require_finalized_bytes(original: UploadedPolicyOriginal, payload: bytes) -
             IngestionFailureCode.CORRUPTED_DOCUMENT,
             "the payload digest does not match the finalized content_sha256",
         )
-
-
-def _normalized_artifact_id(original: UploadedPolicyOriginal) -> str:
-    """Derive the normalized artifact ID from the original it was produced from."""
-    return f"{original.artifact_id}#normalized"
 
 
 def _failed(

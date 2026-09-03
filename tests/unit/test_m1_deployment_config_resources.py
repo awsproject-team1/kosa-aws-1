@@ -23,7 +23,6 @@ READ_ROLE = f"arn:aws:iam::{ACCOUNT}:role/GovernanceRead"
 COMMON = {
     "customer_id": "cust-001",
     "repository_id": "repo-001",
-    "policy_profile_id": "profile-multiresource-baseline",
     "commit_sha": "a" * 40,
     "github_repository": "customer/iac",
     "github_token_secret_id": GITHUB_SECRET,
@@ -38,16 +37,8 @@ def _environment(target: dict) -> dict[str, str]:
         "M1_ASSESSMENT_MODE": "live",
         "EXPECTED_AWS_ACCOUNT_ID": ACCOUNT,
         "AWS_REGION": REGION,
-        "ASSESSMENT_SCOPE_JSON": json.dumps(
-            {
-                "cust-001": [
-                    {
-                        "repository_id": "repo-001",
-                        "policy_profile_id": "profile-multiresource-baseline",
-                    }
-                ]
-            }
-        ),
+        # Assessment scope는 Repository 경계만 선언한다. Profile은 고객 Catalog가 정한다.
+        "ASSESSMENT_SCOPE_JSON": json.dumps({"cust-001": [{"repository_id": "repo-001"}]}),
         "M1_ASSESSMENT_RUNTIME_JSON": json.dumps([target]),
         "M1_ASSESSMENT_SECRET_ARNS": f"{GITHUB_SECRET},{EXTERNAL_ID_SECRET}",
         "M1_ASSESSMENT_READ_ROLE_ARNS": READ_ROLE,

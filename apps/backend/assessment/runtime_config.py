@@ -1,8 +1,17 @@
 """Fail-closed, customer-scoped configuration for the live M1 worker path.
 
-This deployment JSON maps an approved customer/repository/profile tuple to one exact Git
-commit, the AWS resources that may be evaluated, and secret *references*. Secret values are
-read only by the Worker; callers cannot supply them through the public API.
+This deployment JSON maps an approved customer/repository pair to one exact Git commit, the
+AWS resources that may be evaluated, and secret *references*. Secret values are read only by
+the Worker; callers cannot supply them through the public API.
+
+**Policy Profile은 여기 없다.** 두 경계는 다른 질문에 답한다.
+
+    Runtime configuration — 이 고객이 어떤 Repository와 AWS Resource를 읽을 수 있는가
+    DynamoDB Policy Catalog — 이 고객이 어떤 게시된 Policy Profile을 쓸 수 있는가
+
+Profile을 배포 JSON key에 넣으면, 고객이 정책을 승인·게시할 때마다 인프라 배포가 필요해진다 —
+"업로드한 정책이 승인 직후 평가에 쓰인다"는 목표와 정면으로 충돌한다. 사용 가능한 Profile은
+Catalog가 정하고, 어떤 판본을 쓸지는 Assessment 생성 시점에 고정한다.
 
 The evaluated resources are an approved list, not a customer-supplied selector. An
 Assessment may name which of them it is about, but it can never introduce a resource the
@@ -51,7 +60,6 @@ class M1AssessmentResource:
 class M1AssessmentTarget:
     customer_id: str
     repository_id: str
-    policy_profile_id: str
     commit_sha: str
     github_repository: str
     github_token_secret_id: str
@@ -64,7 +72,6 @@ class M1AssessmentTarget:
         for name in (
             "customer_id",
             "repository_id",
-            "policy_profile_id",
             "commit_sha",
             "github_repository",
             "github_token_secret_id",
@@ -129,10 +136,7 @@ class M1RuntimeConfiguration:
         external_id_secret_ids = {target.aws_external_id_secret_id for target in targets}
         if github_secret_ids & external_id_secret_ids:
             raise ValueError("M1 credential secret roles must be disjoint")
-        self._targets = {
-            (target.customer_id, target.repository_id, target.policy_profile_id): target
-            for target in targets
-        }
+        self._targets = {(target.customer_id, target.repository_id): target for target in targets}
         if len(self._targets) != len(targets):
             raise ValueError("M1 assessment target scope must be unique")
 
@@ -151,11 +155,9 @@ class M1RuntimeConfiguration:
         except (TypeError, ValueError) as error:
             raise M1RuntimeConfigurationError("M1 runtime configuration is invalid") from error
 
-    def resolve(
-        self, *, customer_id: str, repository_id: str, policy_profile_id: str
-    ) -> M1AssessmentTarget:
+    def resolve(self, *, customer_id: str, repository_id: str) -> M1AssessmentTarget:
         try:
-            return self._targets[(customer_id, repository_id, policy_profile_id)]
+            return self._targets[(customer_id, repository_id)]
         except KeyError:
             raise M1RuntimeConfigurationError(
                 "assessment selectors are outside M1 runtime scope"
@@ -166,7 +168,6 @@ _COMMON_FIELDS = frozenset(
     {
         "customer_id",
         "repository_id",
-        "policy_profile_id",
         "commit_sha",
         "github_repository",
         "github_token_secret_id",

@@ -58,12 +58,18 @@ RULE = PolicyRule(
 
 
 class Catalog:
-    def get_profile(self, policy_profile_id: str) -> PolicyProfile | None:
-        return PolicyProfile(
+    def get_profile(
+        self, policy_profile_id: str, version: str | None = None
+    ) -> PolicyProfile | None:
+        """Honour the pin the way the real Catalog does — an unknown판본은 없는 것이다."""
+        profile = PolicyProfile(
             policy_profile_id="profile-001",
             version="v1",
             rule_references=(PolicyRuleReference(rule_id="S3-001", version="v1"),),
         )
+        if version is not None and profile.version != version:
+            return None
+        return profile
 
     def get_rule(self, rule_id: str, version: str) -> PolicyRule | None:
         return RULE if (rule_id, version) == (RULE.rule_id, RULE.version) else None

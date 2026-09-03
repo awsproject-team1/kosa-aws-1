@@ -8,6 +8,10 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from apps.backend.assessment.drift import derive_drift_results
+from apps.backend.assessment.execution_plan import (
+    PERSPECTIVE_ORDER,
+    EvaluationExecutionPlanner,
+)
 from apps.backend.assessment.model_profiles import ModelProfileRegistry
 from apps.backend.assessment.reporting import AssessmentEvaluationPlan
 from apps.backend.assessment.runner import AssessmentRunner
@@ -18,12 +22,19 @@ from packages.contracts import (
     EvaluationResult,
     ModelProfile,
     PlannedEvaluation,
+    PolicyRule,
     WorkflowCommand,
     WorkflowTask,
 )
 
 # Evaluate IaC before Actual so a derived DRIFT rationale always reads in that order.
-_PERSPECTIVE_ORDER = (EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL)
+# 순서는 `EvaluationExecutionPlanner`와 공유한다 — 두 곳이 다른 순서를 쓰면 계획된 좌표와
+# 저장된 결과의 순서가 어긋난다.
+_PERSPECTIVE_ORDER = tuple(
+    perspective
+    for perspective in PERSPECTIVE_ORDER
+    if perspective is not EvaluationPerspective.DRIFT
+)
 
 
 class AssessmentPlanError(ValueError):
@@ -186,6 +197,15 @@ class AssessmentWorker:
             )
         )
         self._derive_drift = derive_drift
+        # 계획과 실행이 같은 답을 쓰도록 planner 하나를 worker의 실제 runner 집합에서 만든다.
+        self._planner = EvaluationExecutionPlanner(
+            available_perspectives=(
+                ()
+                if self._perspective_runners is None
+                else tuple(perspective for perspective, _ in self._perspective_runners)
+            ),
+            derive_drift=derive_drift,
+        )
         self._model_profiles = model_profiles
         self._result_store = result_store
         self._plan_store = plan_store
@@ -253,24 +273,22 @@ class AssessmentWorker:
             raise AssessmentPlanError(
                 "policy context resolves one rule_id to more than one rule version"
             )
-        perspectives = self._planned_perspectives(work)
+        # **Perspective는 Rule마다 다르다.** IaC 전용 Rule에 AWS 좌표를 계획하면 그 좌표는
+        # 영원히 채워지지 않고 coverage가 완료되지 않는다.
         return tuple(
             PlannedEvaluation(
-                resource_id=work.resource_id, rule_id=rule_id, perspective=perspective
+                resource_id=work.resource_id, rule_id=rule.rule_id, perspective=perspective
             )
-            for rule_id in rule_ids
-            for perspective in perspectives
+            for rule in context.rules
+            for perspective in self._planned_perspectives(work, rule)
         )
 
     def _planned_perspectives(
-        self, work: AssessmentResourceWork
+        self, work: AssessmentResourceWork, rule: PolicyRule
     ) -> tuple[EvaluationPerspective, ...]:
         if self._perspective_runners is None:
             return (work.perspective,)
-        evaluated = tuple(perspective for perspective, _ in self._perspective_runners)
-        if self._derive_drift:
-            return (*evaluated, EvaluationPerspective.DRIFT)
-        return evaluated
+        return self._planner.perspectives_for(rule)
 
     def _evaluate(
         self,
@@ -289,9 +307,16 @@ class AssessmentWorker:
             )
         evaluated: dict[EvaluationPerspective, tuple[EvaluationResult, ...]] = {}
         for perspective, runner in self._perspective_runners:
+            # 그 Perspective가 실제로 평가하는 Rule만 넘긴다. 전체를 넘기면 IaC 전용 Rule이
+            # Actual 평가기에도 들어가고, 그 평가기는 볼 수 없는 것에 대해 판정하게 된다.
+            subset = self._planner.rules_for(perspective, context.rules)
+            if not subset:
+                continue
             evaluated[perspective] = self._checked(
                 runner.evaluate_resource(
-                    resource_id=work.resource_id, context=context, model_profile=profile
+                    resource_id=work.resource_id,
+                    context=replace(context, rules=subset),
+                    model_profile=profile,
                 ),
                 perspective=perspective,
                 profile=profile,
@@ -299,13 +324,25 @@ class AssessmentWorker:
         results = tuple(
             result
             for perspective, _ in self._perspective_runners
-            for result in evaluated[perspective]
+            for result in evaluated.get(perspective, ())
         )
         if not self._derive_drift:
             return results
+        # **Drift 대상은 두 Perspective를 모두 평가한 Rule뿐이다.** 한쪽만 평가하는 Rule을
+        # 넘기면 `derive_drift_results()`가 없는 쪽을 "누락된 Perspective"로 읽어
+        # `MANUAL_REVIEW`를 만들고, 그것은 실제 불일치와 구별되지 않는다.
+        drift_rule_ids = {rule.rule_id for rule in self._planner.drift_rules(context.rules)}
         drift = derive_drift_results(
-            iac_results=evaluated.get(EvaluationPerspective.IAC, ()),
-            actual_results=evaluated.get(EvaluationPerspective.AWS_ACTUAL, ()),
+            iac_results=tuple(
+                result
+                for result in evaluated.get(EvaluationPerspective.IAC, ())
+                if result.rule_id in drift_rule_ids
+            ),
+            actual_results=tuple(
+                result
+                for result in evaluated.get(EvaluationPerspective.AWS_ACTUAL, ())
+                if result.rule_id in drift_rule_ids
+            ),
         )
         return results + self._checked(
             drift, perspective=EvaluationPerspective.DRIFT, profile=profile, context=context

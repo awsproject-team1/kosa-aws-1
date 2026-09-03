@@ -7,10 +7,18 @@ from packages.contracts._validation import require_non_empty_string
 
 
 class ModelProfileRole(StrEnum):
+    """Which workflow a model profile is approved for.
+
+    역할을 나누는 이유는 prompt와 rubric이 역할마다 다르기 때문만이 아니다. 한 profile이 모든
+    역할에 쓰이면, Assessment용으로 승인된 모델이 정책 추출에도 쓰이고 그 반대도 가능해진다 —
+    승인 경계가 역할별로 존재하지 않게 된다.
+    """
+
     PARENT = "PARENT"
     ASSESSMENT = "ASSESSMENT"
     REMEDIATION = "REMEDIATION"
     DEPLOYMENT = "DEPLOYMENT"
+    POLICY_AUTHORING = "POLICY_AUTHORING"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

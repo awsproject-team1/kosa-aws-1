@@ -48,13 +48,36 @@ class Dispatcher:
         self.tasks.append(task)
 
 
+class PublishedProfiles:
+    """A tenant-scoped Profile reader. 게시된 Profile만 존재하고, 판본이 함께 나온다."""
+
+    def __init__(self, version: str = "v1") -> None:
+        self.version = version
+        self.customers: list[str] = []
+
+    def __call__(self, *, customer_id: str) -> "PublishedProfiles":
+        self.customers.append(customer_id)
+        return self
+
+    def get_profile(self, policy_profile_id: str, version: str | None = None):
+        from packages.contracts import PolicyProfile, PolicyRuleReference
+
+        if version is not None and version != self.version:
+            return None
+        return PolicyProfile(
+            policy_profile_id=policy_profile_id,
+            version=self.version,
+            rule_references=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
+
+
 class ApprovedScope:
     def __init__(self, approved: bool = True) -> None:
         self.approved = approved
         self.calls = []
 
-    def authorize(self, principal, *, repository_id: str, policy_profile_id: str) -> None:
-        self.calls.append((principal, repository_id, policy_profile_id))
+    def authorize(self, principal, *, repository_id: str) -> None:
+        self.calls.append((principal, repository_id))
         if not self.approved:
             raise AssessmentScopeDenied("outside approved scope")
 
@@ -76,6 +99,7 @@ class JobApiServiceTest(unittest.TestCase):
         self.service = JobApiService(
             repository=self.repository,
             assessment_scope=self.scope,
+            policy_catalog_factory=PublishedProfiles(),
             outbox_dispatcher=OutboxDispatcher(
                 repository=self.repository, dispatcher=self.dispatcher
             ),
@@ -114,6 +138,7 @@ class JobApiServiceTest(unittest.TestCase):
         self.service = JobApiService(
             repository=self.repository,
             assessment_scope=self.scope,
+            policy_catalog_factory=PublishedProfiles(),
             outbox_dispatcher=OutboxDispatcher(
                 repository=self.repository, dispatcher=failed_dispatcher
             ),

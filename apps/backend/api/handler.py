@@ -18,6 +18,7 @@ from apps.backend.api.jobs import (
 )
 from apps.backend.api.observability import DemoRunObservabilityService
 from apps.backend.api.policy_approval import PolicyApprovalApiService
+from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import (
     RemediationExceptionApiService,
@@ -47,6 +48,7 @@ class JobHttpHandler:
         deployments: DeploymentApiService | None = None,
         policy_sources: PolicySourceApiService | None = None,
         policy_approvals: PolicyApprovalApiService | None = None,
+        policy_candidates: PolicyCandidateApiService | None = None,
         audit_events: AuditEventApiService | None = None,
         observability: DemoRunObservabilityService | None = None,
         policy_reader: object | None = None,
@@ -78,6 +80,10 @@ class JobHttpHandler:
             policy_approvals, PolicyApprovalApiService
         ):
             raise TypeError("policy_approvals must be a PolicyApprovalApiService or None")
+        if policy_candidates is not None and not isinstance(
+            policy_candidates, PolicyCandidateApiService
+        ):
+            raise TypeError("policy_candidates must be a PolicyCandidateApiService or None")
         if audit_events is not None and not isinstance(audit_events, AuditEventApiService):
             raise TypeError("audit_events must be an AuditEventApiService or None")
         if observability is not None and not isinstance(observability, DemoRunObservabilityService):
@@ -85,6 +91,7 @@ class JobHttpHandler:
         self._observability = observability
         self._policy_sources = policy_sources
         self._policy_approvals = policy_approvals
+        self._policy_candidates = policy_candidates
         self._audit_events = audit_events
         self._policy_reader = policy_reader
 
@@ -134,6 +141,31 @@ class JobHttpHandler:
                             "policy source process request is invalid"
                         ) from error
                     return _response(202, response.to_dict())
+                if action == "candidates":
+                    if self._policy_candidates is None:
+                        raise JobNotFoundError("policy candidate route not found")
+                    if method == "POST":
+                        if event.get("body") not in (None, "", "{}"):
+                            raise RequestValidationError("policy candidate body is invalid")
+                        accepted = self._policy_candidates.request_extraction(
+                            principal, source_id=source_id, source_version=source_version
+                        )
+                        return _response(202, accepted.to_dict())
+                    if method == "GET":
+                        limit, cursor = _candidate_page_query(event.get("queryStringParameters"))
+                        try:
+                            page = self._policy_candidates.list_candidates(
+                                principal,
+                                source_id=source_id,
+                                source_version=source_version,
+                                **({} if cursor is None else {"cursor": cursor}),
+                                **({} if limit is None else {"limit": limit}),
+                            )
+                        except ValueError as error:
+                            raise RequestValidationError(
+                                "policy candidate query is invalid"
+                            ) from error
+                        return _response(200, page.to_dict())
                 if method == "POST" and action == "approve" and self._policy_approvals is not None:
                     try:
                         approved_rules = _policy_approval_request(event.get("body"))
@@ -296,6 +328,30 @@ def _audit_event_query(
     return parameters.get("limit"), parameters.get("cursor"), parameters.get("event_type")
 
 
+def _candidate_page_query(parameters: object) -> tuple[int | None, str | None]:
+    """Read the candidate page query. Bounds belong to `PolicyCandidateApiService`.
+
+    `limit`만 여기서 정수로 바꾼다 — query string은 항상 문자열이고, 서비스는 정수 계약을 갖는다.
+    상한과 하한 판정은 서비스가 한다. 두 곳에 두면 하나만 바뀐다.
+    """
+    if parameters is None:
+        return None, None
+    if not isinstance(parameters, Mapping):
+        raise RequestValidationError("policy candidate query is invalid")
+    raw_limit = parameters.get("limit")
+    if raw_limit is None:
+        limit = None
+    else:
+        try:
+            limit = int(str(raw_limit))
+        except ValueError as error:
+            raise RequestValidationError("policy candidate limit is invalid") from error
+    cursor = parameters.get("cursor")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor.strip()):
+        raise RequestValidationError("policy candidate cursor is invalid")
+    return limit, cursor
+
+
 def _request_parts(event: Mapping[str, object]) -> tuple[str, str, Mapping[str, object]]:
     if not isinstance(event, Mapping):
         raise TypeError("event must be a mapping")
@@ -395,7 +451,7 @@ def _policy_source_path(path: str) -> tuple[str, str, str | None] | None:
     if (
         not source_id
         or not source_version
-        or (len(parts) == 6 and parts[5] not in {"process", "approve"})
+        or (len(parts) == 6 and parts[5] not in {"process", "approve", "candidates"})
     ):
         return None
     return source_id, source_version, parts[5] if len(parts) == 6 else None

@@ -25,7 +25,15 @@ REQUIRED_PHASES = (
     AssessmentPhase.INITIAL,
     AssessmentPhase.POST_DEPLOY_VERIFICATION,
 )
-REQUIRED_PERSPECTIVES = tuple(EvaluationPerspective)
+#: 데모가 덮는 Profile은 legacy fixture Rule로만 이뤄져 있고, 그 Rule들은 정확히 이 세
+#: Perspective를 만든다(`EvaluationExecutionPlanner`의 `None` 행). `tuple(EvaluationPerspective)`로
+#: 두면 Perspective가 하나 추가될 때마다 데모가 만들지도 않는 좌표를 Golden fixture에 요구한다 —
+#: MANUAL은 승인된 MANUAL Rule이 있을 때만 생기고, 이 Profile에는 그런 Rule이 없다.
+REQUIRED_PERSPECTIVES = (
+    EvaluationPerspective.IAC,
+    EvaluationPerspective.AWS_ACTUAL,
+    EvaluationPerspective.DRIFT,
+)
 
 
 class DemoPolicyCoverageError(ValueError):

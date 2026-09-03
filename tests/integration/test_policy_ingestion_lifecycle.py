@@ -133,7 +133,9 @@ class ReviewRepository:
             ),
         )
 
-    def record_profile(self, *, customer_id, profile, published_by, published_at):
+    def record_profile(
+        self, *, customer_id, profile, published_by, published_at, expected_current_version=None
+    ):
         self.profiles[(customer_id, profile.policy_profile_id)] = profile
 
 

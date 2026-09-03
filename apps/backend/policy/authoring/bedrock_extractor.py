@@ -1,0 +1,405 @@
+"""Constrained Bedrock adapter that proposes Requirement candidates, and nothing else.
+
+이 어댑터가 지키는 것은 하나다: **모델은 제안만 하고 결정은 하지 않는다.** 그래서 응답은
+allow-list로만 해석된다.
+
+- 정확한 출력 key 집합. 모르는 key가 하나라도 있으면 거부한다.
+- 비-JSON 거부. 자유 텍스트에서 값을 캐내는 파싱을 하지 않는다.
+- 금지 필드(`judgment`/`severity`/`score`/`source_score`/`anchor`)가 있으면 응답 전체를 거부한다.
+  그 필드를 조용히 버리면, 모델이 판정을 시도했다는 사실 자체가 사라진다.
+- locator·Control·resource type·evaluation type·evidence는 전부 넘겨준 allow-list 안이어야 한다.
+- field별 길이 상한과 후보 개수 상한.
+- application log에 정책 text를 남기지 않는다.
+
+**대용량 문서.** 구조 기반 deterministic chunk로 나눈다. 인접 unit overlap을 두어 문장이 경계에서
+잘려 의미를 잃는 경우를 줄이고, 고정 크기로 나눠 같은 문서가 같은 경계를 갖게 한다. 고정 batch
+크기는 결과의 **재현성을 높일 뿐 결과 불변을 보장하지 않는다** — 모델은 temperature 0에서도
+동일 출력을 보장하지 않는다.
+
+IaC 관련 Catalog hint는 prompt 경계로만 쓴다. 이 단계에서 HCL을 분석하지 않는다.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
+from apps.backend.policy.authoring.artifact_reader import ExtractionUnit
+from apps.backend.policy.authoring.extractor import ExtractorIdentity
+from packages.contracts import (
+    FORBIDDEN_EXTRACTION_FIELDS,
+    CandidateClassification,
+    ControlAutomationSupport,
+    ExtractedRequirement,
+    GovernanceControlCatalog,
+    ModelProfile,
+    ModelProfileRole,
+    NormalizedPolicyDocument,
+    RuleEvaluationType,
+)
+from packages.contracts.policy_authoring import (
+    MAX_LOCATORS_PER_REQUIREMENT,
+    MAX_MAPPING_REASON_LENGTH,
+    MAX_REQUIREMENT_LENGTH,
+    MAX_REQUIREMENT_SUMMARY_LENGTH,
+)
+
+#: 한 chunk가 담는 unit 수와 인접 chunk가 겹치는 unit 수. 구조 기반 고정 크기라 같은 문서는
+#: 항상 같은 경계로 나뉜다.
+UNITS_PER_CHUNK = 40
+CHUNK_OVERLAP_UNITS = 4
+
+#: 한 문서 전체가 만들 수 있는 후보 수의 상한. 모델이 문장마다 후보를 만들어도 저장 계층의
+#: 상한 안에 머문다.
+MAX_REQUIREMENTS_PER_DOCUMENT = 150
+MAX_REQUIREMENTS_PER_CHUNK = 40
+
+_RESPONSE_KEYS = frozenset({"requirements"})
+_REQUIRED_FIELDS = frozenset(
+    {"source_locators", "requirement", "requirement_summary", "classification", "mapping_reason"}
+)
+_OPTIONAL_FIELDS = frozenset(
+    {
+        "mapped_control_key",
+        "resource_types",
+        "evaluation_type",
+        "applicability_semantics",
+        "required_evidence",
+        "optional_evidence",
+        "evaluation_rubric",
+        "severity_guidance",
+        "exception_semantics",
+        "compensating_control_semantics",
+    }
+)
+
+PROMPT_VERSION = "policy-authoring/2026-09-03"
+
+_SYSTEM_PROMPT = (
+    "Extract the requirements the supplied policy units state, and map each one to the "
+    "supplied governance control catalog. Return one JSON object only, with exactly the key "
+    "requirements, holding a list of requirement objects. Each requirement must cite only "
+    "locators from the supplied units. Classify a requirement AUTOMATABLE only when the "
+    "catalog declares a control that can evaluate it, MANUAL when the catalog's manual "
+    "control applies, and UNSUPPORTED otherwise. Never output a judgment, severity, score, "
+    "source_score, or anchor: you propose rules, you do not evaluate anything."
+)
+
+
+class BedrockExtractionError(ValueError):
+    """Raised when a model response is not a safe structured extraction."""
+
+
+class BedrockConverseClient(Protocol):
+    def converse(self, **kwargs: object) -> Mapping[str, object]: ...
+
+
+class BedrockPolicyCandidateExtractor:
+    """Ask an approved model for Requirement candidates inside the Catalog boundary."""
+
+    def __init__(
+        self,
+        *,
+        client: BedrockConverseClient,
+        model_profile: ModelProfile,
+        units_per_chunk: int = UNITS_PER_CHUNK,
+        chunk_overlap: int = CHUNK_OVERLAP_UNITS,
+    ) -> None:
+        if client is None:
+            raise TypeError("client is required")
+        if not isinstance(model_profile, ModelProfile):
+            raise TypeError("model_profile must be a ModelProfile")
+        if model_profile.role is not ModelProfileRole.POLICY_AUTHORING:
+            # Assessment용으로 승인된 모델이 정책 추출에도 쓰이면, 승인 경계가 역할별로
+            # 존재하지 않게 된다.
+            raise BedrockExtractionError("model profile is not approved for policy authoring")
+        if units_per_chunk <= 0 or chunk_overlap < 0 or chunk_overlap >= units_per_chunk:
+            raise ValueError("chunk sizing must be positive with a smaller overlap")
+        self._client = client
+        self._model_profile = model_profile
+        self._units_per_chunk = units_per_chunk
+        self._chunk_overlap = chunk_overlap
+
+    @property
+    def identity(self) -> ExtractorIdentity:
+        return ExtractorIdentity(
+            extractor_id="bedrock-policy-candidate-extractor",
+            extractor_version="1.0.0",
+            model_id=self._model_profile.model_id,
+            model_version=self._model_profile.model_profile_id,
+            prompt_version=self._model_profile.prompt_version,
+        )
+
+    def extract(
+        self,
+        *,
+        document: NormalizedPolicyDocument,
+        units: tuple[ExtractionUnit, ...],
+        catalog: GovernanceControlCatalog,
+    ) -> tuple[ExtractedRequirement, ...]:
+        if not isinstance(document, NormalizedPolicyDocument):
+            raise TypeError("document must be a NormalizedPolicyDocument")
+        if not isinstance(catalog, GovernanceControlCatalog):
+            raise TypeError("catalog must be a GovernanceControlCatalog")
+        if not units:
+            raise ValueError("units must not be empty")
+
+        merged: dict[str, ExtractedRequirement] = {}
+        for chunk in _chunks(units, self._units_per_chunk, self._chunk_overlap):
+            for requirement in self._extract_chunk(chunk, catalog):
+                # deterministic merge: 겹치는 unit에서 같은 Requirement가 두 번 나올 수 있다.
+                # digest가 같으면 같은 것이므로 먼저 본 것을 유지한다.
+                merged.setdefault(requirement.digest, requirement)
+                if len(merged) > MAX_REQUIREMENTS_PER_DOCUMENT:
+                    raise BedrockExtractionError(
+                        "the model proposed more requirements than one document may carry"
+                    )
+        # canonical order: digest 순. 모델의 출력 순서에 의존하지 않는다.
+        return tuple(merged[digest] for digest in sorted(merged))
+
+    def _extract_chunk(
+        self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
+    ) -> tuple[ExtractedRequirement, ...]:
+        response = self._client.converse(
+            modelId=self._model_profile.model_id,
+            system=[{"text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": self._request_body(chunk, catalog)}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 4096},
+        )
+        payload = _response_object(response)
+        entries = payload["requirements"]
+        if not isinstance(entries, list):
+            raise BedrockExtractionError("requirements must be a list")
+        if len(entries) > MAX_REQUIREMENTS_PER_CHUNK:
+            raise BedrockExtractionError("the model proposed more requirements than one chunk may")
+        allowed_locators = frozenset(unit.locator for unit in chunk)
+        return tuple(
+            _requirement_from_response(entry, allowed_locators, catalog) for entry in entries
+        )
+
+    def _request_body(
+        self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
+    ) -> str:
+        return json.dumps(
+            {
+                "policy_units": [
+                    {"locator": unit.locator, "kind": unit.kind.value, "text": unit.text}
+                    for unit in chunk
+                ],
+                "control_catalog": _catalog_prompt_view(catalog),
+                "classifications": [value.value for value in CandidateClassification],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+def _catalog_prompt_view(catalog: GovernanceControlCatalog) -> list[dict[str, object]]:
+    """The boundary the model may map into — supported controls only.
+
+    `KNOWN_UNSUPPORTED` Control은 prompt에 넣지 않는다. 넣으면 모델이 그것을 자동 평가 가능한
+    선택지로 취급하고, 실행 경로가 없는 Rule을 제안한다.
+    """
+    view: list[dict[str, object]] = []
+    for control in catalog.controls:
+        if control.automation_support is ControlAutomationSupport.KNOWN_UNSUPPORTED:
+            continue
+        view.append(
+            {
+                "control_key": control.control_key,
+                "title": control.title,
+                "description": control.description,
+                "automation_support": control.automation_support.value,
+                "supported_resource_types": list(control.supported_resource_types),
+                "supported_evaluation_types": [
+                    value.value for value in control.supported_evaluation_types
+                ],
+                "evidence_capabilities": [
+                    {
+                        "capability_key": binding.capability_key,
+                        "perspective": binding.perspective.value,
+                        "resource_type": binding.resource_type,
+                        # IaC hint는 prompt 경계 설명일 뿐이며 증거가 아니다.
+                        "terraform_resource_types": list(binding.terraform_resource_types),
+                        "terraform_attribute_names": list(binding.terraform_attribute_names),
+                    }
+                    for binding in control.available_evidence_capabilities
+                ],
+            }
+        )
+    return view
+
+
+def _chunks(
+    units: tuple[ExtractionUnit, ...], size: int, overlap: int
+) -> tuple[tuple[ExtractionUnit, ...], ...]:
+    """Split by structure into fixed, overlapping windows.
+
+    같은 문서가 항상 같은 경계로 나뉘어야 재추출 결과를 비교할 수 있다. overlap은 요구사항이
+    경계에서 잘려 문맥을 잃는 경우를 줄인다.
+    """
+    if len(units) <= size:
+        return (units,)
+    step = size - overlap
+    windows: list[tuple[ExtractionUnit, ...]] = []
+    start = 0
+    while start < len(units):
+        windows.append(units[start : start + size])
+        if start + size >= len(units):
+            break
+        start += step
+    return tuple(windows)
+
+
+def _response_object(response: Mapping[str, object]) -> dict[str, object]:
+    if not isinstance(response, Mapping):
+        raise BedrockExtractionError("Bedrock response is invalid")
+    output = response.get("output")
+    if not isinstance(output, Mapping):
+        raise BedrockExtractionError("Bedrock response output is missing")
+    message = output.get("message")
+    if not isinstance(message, Mapping):
+        raise BedrockExtractionError("Bedrock response message is missing")
+    content = message.get("content")
+    if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], Mapping):
+        raise BedrockExtractionError("Bedrock response must contain one text block")
+    text = content[0].get("text")
+    if not isinstance(text, str):
+        raise BedrockExtractionError("Bedrock response text is missing")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
+        # 자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다.
+        raise BedrockExtractionError("Bedrock response is not JSON") from error
+    if not isinstance(value, dict) or set(value) != _RESPONSE_KEYS:
+        raise BedrockExtractionError("Bedrock response fields are invalid")
+    return value
+
+
+def _requirement_from_response(
+    entry: object, allowed_locators: frozenset[str], catalog: GovernanceControlCatalog
+) -> ExtractedRequirement:
+    if not isinstance(entry, Mapping):
+        raise BedrockExtractionError("requirement entry must be an object")
+    present = set(entry)
+    forbidden = sorted(present & FORBIDDEN_EXTRACTION_FIELDS)
+    if forbidden:
+        # 조용히 버리지 않는다. 버리면 모델이 판정을 시도했다는 사실 자체가 사라진다.
+        raise BedrockExtractionError(
+            "the model returned an evaluation outcome field: " + ", ".join(forbidden)
+        )
+    if not _REQUIRED_FIELDS <= present or not present <= (_REQUIRED_FIELDS | _OPTIONAL_FIELDS):
+        raise BedrockExtractionError("requirement fields are invalid")
+
+    locators = _string_tuple(entry.get("source_locators"), "source_locators")
+    if not locators or len(locators) > MAX_LOCATORS_PER_REQUIREMENT:
+        raise BedrockExtractionError("source_locators must cite between one and the unit limit")
+    outside = sorted(set(locators) - allowed_locators)
+    if outside:
+        # 모델이 지어낸 locator는 그 문서에 없다. Evidence가 모델의 주장이 되게 두지 않는다.
+        raise BedrockExtractionError("source_locators cite units outside this chunk")
+
+    classification = _enum(entry.get("classification"), CandidateClassification, "classification")
+    control_key = _optional_string(entry.get("mapped_control_key"), "mapped_control_key")
+    if control_key is not None and catalog.control(control_key) is None:
+        raise BedrockExtractionError("mapped_control_key is outside the control catalog")
+    evaluation_type = (
+        None
+        if entry.get("evaluation_type") is None
+        else _enum(entry.get("evaluation_type"), RuleEvaluationType, "evaluation_type")
+    )
+
+    resource_types = _string_tuple(entry.get("resource_types"), "resource_types")
+    required_evidence = _string_tuple(entry.get("required_evidence"), "required_evidence")
+    optional_evidence = _string_tuple(entry.get("optional_evidence"), "optional_evidence")
+    if control_key is not None:
+        control = catalog.control(control_key)
+        assert control is not None
+        _require_subset(resource_types, control.supported_resource_types, "resource_types")
+        _require_subset(required_evidence, control.capability_keys, "required_evidence")
+        _require_subset(optional_evidence, control.capability_keys, "optional_evidence")
+
+    try:
+        return ExtractedRequirement(
+            source_locators=locators,
+            requirement=_bounded(entry.get("requirement"), "requirement", MAX_REQUIREMENT_LENGTH),
+            requirement_summary=_bounded(
+                entry.get("requirement_summary"),
+                "requirement_summary",
+                MAX_REQUIREMENT_SUMMARY_LENGTH,
+            ),
+            classification=classification,
+            mapping_reason=_bounded(
+                entry.get("mapping_reason"), "mapping_reason", MAX_MAPPING_REASON_LENGTH
+            ),
+            mapped_control_key=control_key,
+            resource_types=resource_types,
+            evaluation_type=evaluation_type,
+            applicability_semantics=_optional_string(
+                entry.get("applicability_semantics"), "applicability_semantics"
+            ),
+            required_evidence=required_evidence,
+            optional_evidence=optional_evidence,
+            evaluation_rubric=_optional_string(entry.get("evaluation_rubric"), "evaluation_rubric"),
+            severity_guidance=_optional_string(entry.get("severity_guidance"), "severity_guidance"),
+            exception_semantics=_optional_string(
+                entry.get("exception_semantics"), "exception_semantics"
+            ),
+            compensating_control_semantics=_optional_string(
+                entry.get("compensating_control_semantics"), "compensating_control_semantics"
+            ),
+        )
+    except BedrockExtractionError:
+        # 이미 구체적인 사유를 가진 거부다. 일반 메시지로 덮으면 무엇이 규칙을 어겼는지 사라진다.
+        raise
+    except (TypeError, ValueError) as error:
+        # Contract의 분류 불변식을 만족하지 못하는 응답도 여기서 거부한다. 메시지에 정책 문장을
+        # 넣지 않기 위해 원인 텍스트는 그대로 전달하지 않는다.
+        raise BedrockExtractionError("the model returned an invalid requirement shape") from error
+
+
+def _require_subset(values: tuple[str, ...], allowed: tuple[str, ...], field_name: str) -> None:
+    outside = sorted(set(values) - set(allowed))
+    if outside:
+        raise BedrockExtractionError(f"{field_name} is outside the control catalog boundary")
+
+
+def _enum[T](value: object, enum_type: type[T], field_name: str) -> T:
+    if not isinstance(value, str):
+        raise BedrockExtractionError(f"{field_name} is invalid")
+    try:
+        return enum_type(value)  # type: ignore[call-arg]
+    except ValueError as error:
+        raise BedrockExtractionError(f"{field_name} is invalid") from error
+
+
+def _bounded(value: object, field_name: str, limit: int) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise BedrockExtractionError(f"{field_name} must be a non-empty string")
+    if len(value) > limit:
+        raise BedrockExtractionError(f"{field_name} is longer than the allowed limit")
+    return value
+
+
+def _optional_string(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise BedrockExtractionError(f"{field_name} must be a non-empty string when present")
+    return value
+
+
+def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise BedrockExtractionError(f"{field_name} must be a list")
+    result: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            raise BedrockExtractionError(f"{field_name} items must be non-empty strings")
+        if entry not in result:
+            result.append(entry)
+    return tuple(result)

@@ -27,7 +27,6 @@ COMMON_TARGET_FIELDS = frozenset(
     {
         "customer_id",
         "repository_id",
-        "policy_profile_id",
         "commit_sha",
         "github_repository",
         "github_token_secret_id",
@@ -45,7 +44,9 @@ RESOURCE_FIELDS = frozenset({"resource_type", "resource_id"})
 #: Resource types the Worker has an Actual read adapter for. Imported, not restated: a
 #: hand-copied list would let this gate accept a type the Worker cannot read.
 SUPPORTED_RESOURCE_TYPES = frozenset(ACTUAL_READ_RESOURCE_TYPES)
-SCOPE_FIELDS = frozenset({"repository_id", "policy_profile_id"})
+#: Assessment scope는 Repository 경계만 선언한다. Policy Profile은 고객 partition의 Catalog가
+#: 정하므로, 여기 남아 있으면 두 경계가 서로 다른 것을 말하게 된다.
+SCOPE_FIELDS = frozenset({"repository_id"})
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 
@@ -100,10 +101,7 @@ def validate_environment(environment: Mapping[str, str]) -> str:
         )
 
     targets = _targets(runtime_raw)
-    target_scope = {
-        (target["customer_id"], target["repository_id"], target["policy_profile_id"])
-        for target in targets
-    }
+    target_scope = {(target["customer_id"], target["repository_id"]) for target in targets}
     if target_scope != scope:
         raise DeploymentConfigurationError(
             "assessment scope and M1 runtime selector sets must match exactly"
@@ -175,7 +173,7 @@ def _scope(raw: object) -> set[tuple[str, str, str]]:
     parsed = _json(raw, "ASSESSMENT_SCOPE_JSON")
     if not isinstance(parsed, dict):
         raise DeploymentConfigurationError("ASSESSMENT_SCOPE_JSON must be an object")
-    selectors: set[tuple[str, str, str]] = set()
+    selectors: set[tuple[str, str]] = set()
     count = 0
     for customer_id, entries in parsed.items():
         customer = _required(customer_id, "assessment scope customer_id")
@@ -184,11 +182,7 @@ def _scope(raw: object) -> set[tuple[str, str, str]]:
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) != SCOPE_FIELDS:
                 raise DeploymentConfigurationError("assessment scope selector fields are invalid")
-            selector = (
-                customer,
-                _required(entry.get("repository_id"), "repository_id"),
-                _required(entry.get("policy_profile_id"), "policy_profile_id"),
-            )
+            selector = (customer, _required(entry.get("repository_id"), "repository_id"))
             selectors.add(selector)
             count += 1
     if len(selectors) != count:
@@ -207,10 +201,7 @@ def _targets(raw: str) -> tuple[dict[str, str], ...]:
         target = {name: _required(value.get(name), name) for name in _target_field_names(value)}
         _validate_resources(value)
         targets.append(target)
-    selectors = {
-        (target["customer_id"], target["repository_id"], target["policy_profile_id"])
-        for target in targets
-    }
+    selectors = {(target["customer_id"], target["repository_id"]) for target in targets}
     if len(selectors) != len(targets):
         raise DeploymentConfigurationError("M1 runtime selectors must be unique")
     return tuple(targets)

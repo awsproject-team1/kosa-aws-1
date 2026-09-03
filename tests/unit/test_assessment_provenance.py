@@ -17,7 +17,6 @@ from packages.contracts import (
 TARGET = {
     "customer_id": "cust-001",
     "repository_id": "repo-001",
-    "policy_profile_id": "profile-mvp-baseline",
     "commit_sha": "a" * 40,
     "github_repository": "customer/iac",
     "github_token_secret_id": "github-token",
@@ -33,13 +32,16 @@ SNAPSHOT = {
     "perspective": "AWS_ACTUAL",
 }
 
-# ADR-0020 §3: a verification pins the scope it reuses, so these travel with the
-# correlation on every POST_DEPLOY_VERIFICATION Assessment.
+# ADR-0020 §3: a verification pins the Model Profile and rubric it reuses, so these travel
+# with the correlation on every POST_DEPLOY_VERIFICATION Assessment.
+#
+# `policy_profile_version`은 여기 없다 — 그 값은 **모든 phase**가 갖는 필수 값이다. Initial이
+# 판본을 고정하지 않으면, 실행 도중 게시된 새 Profile이 이미 계획된 평가의 Rule 집합을 바꾼다.
 PINS = {
     "model_profile_id": "assessment-nova-lite-m1-v2",
     "rubric_version": "m1-v2",
-    "policy_profile_version": "v2",
 }
+PROFILE_VERSION = {"policy_profile_version": "v2"}
 
 MODEL_PROFILE = ModelProfile(
     model_profile_id="assessment-nova-lite-m1-v2",
@@ -107,9 +109,11 @@ class StubTable:
 
 
 def _stored(**overrides: object) -> dict[str, object]:
+    """A stored Assessment record. 모든 phase가 Profile 판본을 고정한다."""
     item: dict[str, object] = {
         "repository_id": "repo-001",
         "policy_profile_id": "profile-mvp-baseline",
+        "policy_profile_version": "v2",
     }
     item.update(overrides)
     return item
@@ -121,6 +125,7 @@ def _stored_verification(**overrides: object) -> dict[str, object]:
         "source_assessment_id": "asm-001",
         "deployment_id": "dep-001",
         **PINS,
+        **PROFILE_VERSION,
     }
     values.update(overrides)
     return _stored(**values)
@@ -145,6 +150,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
             job_id="job-001",
             repository_id="repo-001",
             policy_profile_id="profile-001",
+            policy_profile_version="v2",
         )
 
         self.assertIs(assessment.phase, AssessmentPhase.INITIAL)
@@ -152,7 +158,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
         self.assertIsNone(assessment.deployment_id)
         self.assertIsNone(assessment.model_profile_id)
         self.assertIsNone(assessment.rubric_version)
-        self.assertIsNone(assessment.policy_profile_version)
+        self.assertEqual(assessment.policy_profile_version, "v2")
 
     def test_verification_assessment_carries_both_correlation_values(self) -> None:
         assessment = Assessment(
@@ -161,6 +167,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
             job_id="job-002",
             repository_id="repo-001",
             policy_profile_id="profile-001",
+            policy_profile_version="v2",
             phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
             source_assessment_id="asm-001",
             deployment_id="dep-001",
@@ -185,6 +192,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                         job_id="job-002",
                         repository_id="repo-001",
                         policy_profile_id="profile-001",
+                        policy_profile_version="v2",
                         phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                         **PINS,
                         **correlation,
@@ -203,6 +211,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                         job_id="job-002",
                         repository_id="repo-001",
                         policy_profile_id="profile-001",
+                        policy_profile_version="v2",
                         phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                         source_assessment_id="asm-001",
                         deployment_id="dep-001",
@@ -222,6 +231,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                             job_id="job-002",
                             repository_id="repo-001",
                             policy_profile_id="profile-001",
+                            policy_profile_version="v2",
                             phase=phase,
                             **{pinned: PINS[pinned]},
                         )
@@ -234,6 +244,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                 job_id="job-002",
                 repository_id="repo-001",
                 policy_profile_id="profile-001",
+                policy_profile_version="v2",
                 phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                 source_assessment_id="asm-002",
                 deployment_id="dep-001",
@@ -250,6 +261,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                         job_id="job-002",
                         repository_id="repo-001",
                         policy_profile_id="profile-001",
+                        policy_profile_version="v2",
                         phase=phase,
                         source_assessment_id="asm-001",
                         deployment_id="dep-001",
@@ -263,6 +275,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                 job_id="job-001",
                 repository_id="repo-001",
                 policy_profile_id="profile-001",
+                policy_profile_version="v2",
                 phase="INITIAL",
             )
 
@@ -274,6 +287,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                 job_id="job-002",
                 repository_id="repo-001",
                 policy_profile_id="profile-001",
+                policy_profile_version="v2",
                 phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                 source_assessment_id="  ",
                 deployment_id="dep-001",
@@ -291,6 +305,7 @@ class AssessmentProvenanceTest(unittest.TestCase):
                         job_id="job-002",
                         repository_id="repo-001",
                         policy_profile_id="profile-001",
+                        policy_profile_version="v2",
                         phase=AssessmentPhase.POST_DEPLOY_VERIFICATION,
                         source_assessment_id="asm-001",
                         deployment_id="dep-001",
@@ -318,7 +333,12 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
         self.assertEqual(work.expected_profile_version, "v2")
         self.assertEqual(plan_reader.calls, [("cust-001", "asm-001")])
 
-    def test_an_initial_assessment_derives_its_own_plan_and_pins_no_version(self) -> None:
+    def test_an_initial_assessment_derives_its_own_plan_but_still_pins_the_version(self) -> None:
+        """Initial은 자기 plan을 만들지만 Profile 판본은 고정한다.
+
+        고정하지 않으면 실행 도중 게시된 새 Profile이 이 Assessment의 Rule 집합을 바꾸고, 그
+        사실이 결과 어디에도 남지 않는다.
+        """
         plan_reader = StubPlanReader()
         repository = _m1_repository(_stored(phase="INITIAL"), plan_reader=plan_reader)
 
@@ -326,8 +346,17 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
 
         assert work is not None
         self.assertIsNone(work.planned_coordinates)
-        self.assertIsNone(work.expected_profile_version)
+        self.assertEqual(work.expected_profile_version, "v2")
         self.assertEqual(plan_reader.calls, [])
+
+    def test_a_stored_assessment_without_a_pinned_version_fails_closed(self) -> None:
+        """최신 pointer로 조용히 대체하지 않는다. 판본 없는 기존 record는 backfill 대상이다."""
+        item = _stored(phase="INITIAL")
+        del item["policy_profile_version"]
+        repository = _m1_repository(item)
+
+        with self.assertRaisesRegex(ValueError, "policy_profile_version pin is missing"):
+            repository.get_resource_work(job_id="job-002", expected_revision=0)
 
     def test_a_pinned_model_profile_the_runtime_cannot_honour_fails_closed(self) -> None:
         for pinned, message in (
@@ -393,7 +422,9 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
         ):
             with self.subTest(correlation=sorted(correlation)):
                 repository = _m1_repository(
-                    _stored(phase="POST_DEPLOY_VERIFICATION", **PINS, **correlation)
+                    _stored(
+                        phase="POST_DEPLOY_VERIFICATION", **PINS, **PROFILE_VERSION, **correlation
+                    )
                 )
                 with self.assertRaisesRegex(ValueError, "correlation is incomplete"):
                     repository.get_resource_work(job_id="job-002", expected_revision=0)
@@ -416,7 +447,7 @@ class StoredAssessmentPhaseTest(unittest.TestCase):
     def test_stored_non_verification_phase_with_correlation_fails_closed(self) -> None:
         for stored in (
             {"source_assessment_id": "asm-001", "deployment_id": "dep-001"},
-            {"policy_profile_version": "v2"},
+            {"model_profile_id": "assessment-nova-lite-m1-v2"},
         ):
             with self.subTest(stored=sorted(stored)):
                 repository = _m1_repository(_stored(phase="INITIAL", **stored))

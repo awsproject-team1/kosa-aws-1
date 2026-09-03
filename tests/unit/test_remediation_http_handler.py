@@ -27,6 +27,29 @@ from packages.contracts import (
 NOW = datetime(2026, 9, 1, 8, 0, tzinfo=UTC)
 
 
+class PublishedProfiles:
+    """A tenant-scoped Profile reader. 게시된 Profile만 존재하고, 판본이 함께 나온다."""
+
+    def __init__(self, version: str = "v1") -> None:
+        self.version = version
+        self.customers: list[str] = []
+
+    def __call__(self, *, customer_id: str) -> "PublishedProfiles":
+        self.customers.append(customer_id)
+        return self
+
+    def get_profile(self, policy_profile_id: str, version: str | None = None):
+        from packages.contracts import PolicyProfile, PolicyRuleReference
+
+        if version is not None and version != self.version:
+            return None
+        return PolicyProfile(
+            policy_profile_id=policy_profile_id,
+            version=self.version,
+            rule_references=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
+
+
 class Repository:
     def __init__(self):
         self.pending = []
@@ -62,7 +85,7 @@ class Dispatcher:
 
 
 class Scope:
-    def authorize(self, principal, *, repository_id, policy_profile_id):
+    def authorize(self, principal, *, repository_id):
         return None
 
 
@@ -171,6 +194,7 @@ def handler(action, remediation_exceptions=None):
     jobs = JobApiService(
         repository=repository,
         assessment_scope=Scope(),
+        policy_catalog_factory=PublishedProfiles(),
         outbox_dispatcher=outbox,
         job_id_factory=lambda: "assessment-job",
         assessment_id_factory=lambda: "assessment-001",

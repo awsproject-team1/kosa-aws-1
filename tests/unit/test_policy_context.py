@@ -50,8 +50,17 @@ class Catalog:
             ),
         }
 
-    def get_profile(self, policy_profile_id: str):
-        return self.profile if policy_profile_id == self.profile.policy_profile_id else None
+    def get_profile(self, policy_profile_id: str, version: str | None = None):
+        """Honour the version pin the way the real Catalog does.
+
+        pin을 무시하는 double은 "고정된 판본으로 평가한다"는 계약을 테스트가 검증하지 못하게
+        만든다 — resolver가 pin을 아예 넘기지 않아도 통과한다.
+        """
+        if policy_profile_id != self.profile.policy_profile_id:
+            return None
+        if version is not None and self.profile.version != version:
+            return None
+        return self.profile
 
     def get_rule(self, rule_id: str, version: str):
         rule = self.rules.get(rule_id)
