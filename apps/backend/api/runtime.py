@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from apps.backend.api.assessments import AssessmentReportApiService
+from apps.backend.api.audit_events import AuditEventApiService
 from apps.backend.api.deployments import DeploymentApiService
 from apps.backend.api.handler import JobHttpHandler
 from apps.backend.api.jobs import AssessmentScope, JobApiService
@@ -26,6 +27,7 @@ from apps.backend.jobs import (
 )
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
+    DynamoDbAuditEventRepository,
     DynamoDbDeploymentApprovalRepository,
     DynamoDbDeploymentRepository,
     DynamoDbPolicyApprovalRepository,
@@ -102,6 +104,8 @@ def _http_handler() -> JobHttpHandler:
         deployments=_deployment_components(repository),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
+        # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
+        audit_events=AuditEventApiService(events=DynamoDbAuditEventRepository(_metadata_table())),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
     )

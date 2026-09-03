@@ -2,6 +2,26 @@
 
 ## Current
 
+- M2 A Admin 감사 이력 조회(`GET /audit-events`)를 구현했다(`feature/m2-a-audit-events`, base=dev).
+  일곱 writer가 이미 `AUDIT#{occurred_at}#{event_id}` 한 SK 규약과 `event_type` 한 필드명을 쓰고
+  있어, 조회는 writer별 분기 없이 고객 partition의 `AUDIT#` prefix를 SK 역순으로 읽는 단일 query다
+  (scan 없음). `AuditEvent`/`AuditEventPage` read projection은 네 identity 필드와 writer별 payload
+  `details`만 담고, `audit_event_details()`가 DynamoDB key·GSI·`entity_type`·`version` 같은 저장
+  bookkeeping을 걷어낸다. 범위는 항상 호출자의 verified `custom:customer_id`이며 조회 대상 고객을
+  query로 지정할 수 없다. cursor도 Client가 되돌려주는 값이므로 customer scope를 검증해 다른
+  고객 이력으로 넘어가는 것을 막는다. 알 수 없는 `event_type`은 빈 페이지가 아니라 400이다.
+  `AuditEventType`에 ADR-0019가 합의한 다섯 값(`APPLY_DISPATCHED`/`APPLY_COMPLETED`/`APPLY_FAILED`/
+  `POST_DEPLOY_VERIFIED`/`MANUAL_RECONCILIATION_REQUIRED`)을 먼저 넣어 어휘를 닫았다 — 조회가 한
+  vocabulary만 보게 하려면 종류 집합이 writer보다 먼저 고정돼야 한다. `GetAuditEventsRoute`를
+  CloudFormation에 JWT authorizer와 함께 선언하고, route 누락을 security 회귀로 고정했다.
+  문서(API/CONTRACTS/DATABASE) 동기화. **M2 A는 이로써 남은 항목이 없다.**
+- D Deployment Worker runtime의 설정 검증 순서를 고쳤다(`fix/deployment-runtime-env-validation-order`).
+  `lambda_handler`가 `_metadata_table()`을 `_required_env("METADATA_TABLE_NAME")`보다 먼저 평가해
+  필수 환경 변수 누락이 fail-closed된 설정 오류 대신 boto3 `NoRegionError`로 새어 나갔고, 그 때문에
+  `dev`에서 unit 테스트 1건이 실패하고 있었다. 검증을 AWS client 생성보다 먼저 끝내고,
+  `_required_env()`가 누락된 이름을 밝히는 `DeploymentRuntimeError`를 올리도록 바꿨다. live mode
+  테스트도 실제 동작에 맞게 다시 썼다 — 기존 테스트는 "설정이 유효해 plan I/O에서 멈춘다"고
+  주장했지만 실제로는 그보다 먼저 멈추고 있었다.
 - M4 A 관측·비용 기록 조립 경계를 구현했다(ADR-0021 §3, `feature/m4-a-observability`, base=dev).
   데모 폐루프 1회 실행의 일곱 항목(Assessment 성공률, Bedrock 호출, Queue 건전성, Job 재개,
   plan/apply, 감사 이력, 비용)을 immutable하게 묶는 `DemoRunObservability` 계약을 두고, 각 항목은
@@ -540,8 +560,6 @@
   `START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED`) 위에 올린다.
   검증 조회는 `compare_post_deploy_assessments()`에 complete `ComparisonAssessment` 두 개를
   fail-closed로 배선한다 (ADR-0019 §4·§8, ADR-0020 §1·§7).
-- **M2 A:** 감사 event 종류 필드는 `event_type`으로 통일됐다. 남은 것은 그 위에 올릴 Admin
-  `GET /audit-events` 조회다. ADR-0019 합의로 `AuditEventType`에 값 7개가 늘 때 같은 어휘를 쓴다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
   16개 정합 `PASS` snapshot과 logging 설정이 남은 Actual/Drift 2개 `FAIL` snapshot이며 원 Assessment와
   같은 rubric을 쓴다. fixture gate는 통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로
@@ -651,7 +669,7 @@
 
 **Exit criteria:** 선택된 Finding에서 최소 Terraform Patch, Branch/Commit/PR, CI 및 Deployment Readiness Validation/plan까지 이어진다.
 
-- [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader까지 mockable 구현 완료; customer runtime wiring 대기)*
+- [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader, Admin `GET /audit-events` 감사 이력 조회까지 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
 - [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 destructive 판정은 ADR-0019 `Accepted`로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR·Terraform plan SDK adapter와 customer runtime 배선)*

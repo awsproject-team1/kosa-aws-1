@@ -237,6 +237,9 @@ class CloudFormationSecurityTest(unittest.TestCase):
             "GetDeploymentRoute": "GET /deployments/{deploymentId}",
             "GetDeploymentVerificationRoute": "GET /deployments/{deploymentId}/verification",
             "PostDeploymentRejectRoute": "POST /deployments/{deploymentId}/reject",
+            # 감사 이력 조회도 같은 JWT authorizer 뒤에 있어야 한다. handler가 Admin 권한을
+            # 검사하더라도, route가 authorizer 없이 선언되면 인증 없는 호출이 handler까지 닿는다.
+            "GetAuditEventsRoute": "GET /audit-events",
         }
         for name, route_key in expected.items():
             route = _properties(self.resources[name])
