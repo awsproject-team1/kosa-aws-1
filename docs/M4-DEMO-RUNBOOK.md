@@ -120,6 +120,60 @@ payload는 `deployment_id`, `commit_sha`, `plan_hash`, `run_id`, `conclusion`만
   payload만으로 상태를 확정하지 않는다(ADR-0019 §7).
 - **검증 3회 후 불일치:** `VERIFICATION_INDETERMINATE`로 사람 판단에 넘긴다(ADR-0020 §8).
 
+## 4. 발표 시연 순서 (S3 6 Rule 고정)
+
+§0의 전제가 갖춰진 뒤, 아래 순서로 한 번 리허설하고 그대로 발표한다. 시연 범위는 S3 6 Rule × 3 관점이다.
+정책 업로드 → Profile 게시 경로는 화면이 없으므로 기본 시연에서 제외하고 fixture Profile
+`profile-mvp-baseline`으로 시작한다. 보여주고 싶으면 §4-0을 curl로 먼저 돌린다.
+
+### 4-0. 준비 (발표 1시간 전)
+
+- GitHub App installation token 재발급 → Secrets Manager 갱신(handoff §2). 1시간 만료다.
+- 고객 저장소 `awsproject-team1/test` main이 여섯 토글 위반 조합(`b283b6b` 계열)인지, sandbox 버킷의
+  public access block이 위반 상태인지 확인한다. 이것이 시연의 **시작 상태**다(정리하지 않는다).
+- SPA 로컬 실행(호스팅 리소스 없음, Cognito callback은 `http://localhost:5173` 기본값):
+  ```bash
+  export VITE_API_BASE_URL='https://8cimz0a9n9.execute-api.us-east-1.amazonaws.com'
+  export VITE_COGNITO_DOMAIN='kosa-governance-sandbox-369676914736.auth.us-east-1.amazoncognito.com'
+  export VITE_COGNITO_CLIENT_ID='66ektgjk0aan5nb8ah7789f160'
+  export VITE_COGNITO_REDIRECT_URI='http://localhost:5173'
+  npm --prefix apps/frontend run dev
+  ```
+- (선택) 정책 업로드 경로: `POST /policy-sources/uploads` → `/process` → authoring worker가 후보 생성 →
+  `/approve` → `POST /policy-profiles`. 화면이 없으므로 curl. 재배포 후 리허설에서 먼저 1회 확인한다.
+
+### 4-1. 순서와 화면
+
+| 순서 | 무엇을 보여주나 | 어디서 | 확인 포인트 |
+| --- | --- | --- | --- |
+| 1 | 관리자 로그인 | SPA (Cognito Hosted UI) | access token에 customer claim |
+| 2 | 자연어로 묻기 | `POST /orchestrate {"message": ...}` (curl) | Parent가 PolicyQA/ASSESSMENT 등 decision을 **제안만** 한다 |
+| 3 | Initial Assessment 시작 | SPA "평가 시작" | coverage 18/18, findings에 위반 다수 |
+| 4 | Finding 설명·evidence | SPA 리포트 | 정책 locator와 리소스 evidence가 나뉘어 보인다; 사람 검토 항목은 조치 버튼 없음 |
+| 5 | 조치 요청 | Finding 카드의 조치 버튼 (S3-PUBLIC-001) | decision `TERRAFORM_PATCH`; Worker가 Bedrock patch 생성 |
+| 6 | PR이 열렸다 | GitHub `awsproject-team1/test` PR 목록 | branch `remediation/{finding_id}/…`, 사람이 검토·머지 |
+| 7 | Deployment 생성·plan | `POST /remediations/{id}/deployments` (curl) → SPA 승인 화면 | `commit_sha`(merge commit)·`plan_hash` 표시 |
+| 8 | 사람 승인 | SPA 승인 버튼 | 승인 없이는 apply가 없다는 점을 말로 짚는다 |
+| 9 | apply | GitHub Actions `terraform-apply` (protected Environment 2차 게이트) | plan_hash·state lineage 재검증 뒤 saved plan만 적용 |
+| 10 | 검증 Assessment 자동 생성 | `GET /deployments/{id}` | `verification_assessment_id` 채워짐 |
+| 11 | Before/After | `GET /deployments/{id}/verification` | Resolution `RESOLVED`; 점수가 아니라 Resolution 값으로 말한다 |
+| 12 | 감사 이력 | `GET /audit-events` | Remediation·Approval·Apply·Verification event |
+
+### 4-2. 시간을 잡아둘 곳
+
+- **apply 후 재조회는 현재 1회다**(ADR-0020 §8의 15초·45초 재조회 미구현). 전파가 늦으면 실제로는 고쳐졌는데
+  `UNRESOLVED`가 보일 수 있다. 리허설에서 이게 나오면 발표 대본에서 10번 전에 대기 시간을 넣고, 그래도 남으면
+  `INDETERMINATE`를 "사람 확인 대상"으로 설명한다. 자동 실패로 말하지 않는다.
+- Bedrock 호출은 결정적이지 않다. 5번의 patch 내용이 리허설과 다를 수 있다. PR diff를 그 자리에서 읽는다.
+- Deployment Worker의 GitHub run 재조회는 Event를 신뢰하지 않고 `run_id`로 다시 읽는다. apply 완료 후 상태가
+  바뀌기까지 수십 초가 걸릴 수 있다.
+
+### 4-3. 실패했을 때 말할 것
+
+- PR이 안 열리면: `DEPLOYMENT_RUNTIME_JSON` 미설정 또는 token 만료. Worker는 patch를 만들기 전에 fail-closed한다.
+- plan_hash mismatch: apply workflow가 스스로 멈춘다. 그것이 설계다(§3).
+- 검증이 `INDETERMINATE`: 사람 판단으로 넘기는 상태이지 오류가 아니다.
+
 ## 관련 문서
 
 - 데모 IaC 참조·데모 토글: `docs/M4-DEMO-IAC-REFERENCE.md`

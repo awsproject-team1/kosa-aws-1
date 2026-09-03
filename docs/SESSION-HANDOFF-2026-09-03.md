@@ -151,16 +151,16 @@ Layer 빌드+업로드는 prepare-artifact 잡에서 자동.
 | 단계 | 라우트 | 라이브 상태 |
 | --- | --- | --- |
 | 1. 관리자 로그인/온보딩 | Cognito (USER_PASSWORD_AUTH / HostedUI) | ✅ 동작. access token에 `custom:customer_id=kosa-sandbox`, Admin 그룹 주입 확인 |
-| 2. 정책 문서 **업로드** | `POST /policy-sources/uploads` → `/process` → status | ⚠️ 라우트 배선·업로드/정규화 동작. **그러나 AI 후보 추출 실행자(`record_candidate_extraction` 호출자)가 미배선**이라 Rule 후보가 안 생김 → 승인 시 `EMPTY_PROFILE` 거부. 즉 업로드로 새 Rule을 만드는 경로는 **미완**(§6 G) |
-| 3. Profile **생성/게시** | `/approve` → `POST /policy-profiles` | ⚠️ 라우트 배선됨, 위와 같은 이유로 후보 없어 게시 불가(§6 G) |
+| 2. 정책 문서 **업로드** | `POST /policy-sources/uploads` → `/process` → status | ⚠️ 라우트·업로드·정규화 동작. AI 후보 추출은 ADR-0023 authoring worker(`PolicyAuthoringWorkerFunction` + 전용 큐, 커밋 `58b902f`)로 **코드는 배선됨**. 마지막 배포(`d6ff2da`)에는 없으므로 **재배포 전까지 라이브 미검증**(§6 H) |
+| 3. Profile **생성/게시** | `/approve` → `POST /policy-profiles` | ⚠️ 라우트 배선됨. authoring worker가 만든 후보를 사람이 승인해 게시하는 경로. 재배포 후 라이브 1회 확인 필요(§6 H) |
 | 3'. Profile **선택** | `POST /assessments`의 `policy_profile_id` | ✅ 기존 fixture Profile `profile-mvp-baseline`은 선택·평가 가능(업로드 없이) |
 | 4. **정책 질문 / 자연어**(PolicyQA·라우팅) | `POST /orchestrate` | ❌ **현재 404**. 코드·라우트 커밋 완료(`af57307`)이나 마지막 배포가 그 이전(`d6ff2da`) 기준이라 스택에 라우트 없음. **재배포하면 열림**(§6 D) |
 | 5. **평가** | `POST /assessments` | ✅ 동작. 라이브 검증(§4): coverage 18/18, findings 12 |
 | 6. **finding / 리포트** | `GET /assessments/{assessmentId}` | ✅ 동작. coverage·readiness·findings·evidence 조회 |
 | 7. **개선(remediation) 선택·생성** | `POST /findings/{findingId}/remediations` | ✅ decision(TERRAFORM_PATCH/ACTUAL_SYNC/MANUAL_REVIEW/SUPPRESSED) + worker가 실제 Bedrock patch **생성**까지 라이브 동작(§4) |
-| 7'. patch → **PR / 실제 파일 변경 제안** | D write port(GitHub branch/commit/PR) | ❌ **미배선**. `RemediationPatch`는 changed_paths+digest만 담고, patch 바이트 S3 저장과 PR 생성이 없음(§6 B) |
+| 7'. patch → **PR / 실제 파일 변경 제안** | `LiveGitHubWriteTool` (branch/commit/PR) | ⚠️ #66으로 **배선됨**. patch 바이트는 `REMEDIATION_PATCH#{digest}`에 저장, Worker가 PR을 연다. 재배포 + `DEPLOYMENT_RUNTIME_JSON` 설정 후 라이브 1회 확인 필요(§6 H) |
 | 8. **승인** | `POST /deployments/{deploymentId}/approve` | ⚠️ 라우트 있으나 7'·8' 공백으로 실제 도달 불가 |
-| 8'. **실제 변경(apply)** | Deployment Worker(OIDC Terraform apply) | ❌ `DEPLOYMENT_RUNTIME_JSON` 빈값 → TERRAFORM_PATCH commit 해석 fail-closed. ACTUAL_SYNC는 GitHub 없이 가능하나 미검증(§6 C) |
+| 8'. **실제 변경(apply)** | Deployment Worker(OIDC Terraform apply) | ⚠️ `DEPLOYMENT_RUNTIME_JSON`은 #67 전까지 **설정할 통로가 없었다**. 이제 deploy Environment 값으로 넘어간다. 값은 준비됐고(§6 H) 재배포 후 미검증 |
 | 감사 이력 | `GET /audit-events` | ✅ 동작(Admin) |
 
 즉 **지금 직접 끝까지 되는 경로는**: fixture Profile 선택 → 평가 → finding/리포트 → remediation
@@ -228,6 +228,44 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   금지). 후보는 사람 승인 없이는 Profile에 못 들어간다(ADR-0015). 형식 추가 시 문서+Contract 동시 갱신.
 - **현재 우회:** 업로드 없이 fixture Profile `profile-mvp-baseline`을 assessment에 선택하면 평가/finding/
   remediation은 그대로 테스트된다. "관리자가 자기 정책 문서를 올려 Profile을 만드는" 경로만 미완이다.
+
+### H. 재배포 실행 — 값 준비 완료, 실행만 남음 (2026-09-03)
+- 마지막 배포는 `d6ff2da`. dev HEAD(`4df922e`)와 23 커밋 차이. 재배포 없이는 `/orchestrate`, authoring worker,
+  검증 Assessment 자동 생성, PR write, 다중 리소스가 라이브에 없다.
+- deploy Environment `customer-sandbox-deploy`에 추가할 값 세 개(프론트 URL 둘은 로컬 SPA 시연이라 기본값 유지):
+
+  | 종류 | 이름 | 값 |
+  | --- | --- | --- |
+  | Secret | `DEPLOYMENT_RUNTIME_JSON` | `[{"customer_id":"kosa-sandbox","repository_id":"test-s3-sandbox","repository_full_name":"awsproject-team1/test","github_token_secret_id":"kosa-governance-sandbox/m1/github-token","aws_account_id":"369676914736","aws_read_role_arn":"arn:aws:iam::369676914736:role/kosa-governance-sandbox-m1-read","aws_external_id_secret_id":"kosa-governance-sandbox/m1/aws-external-id","resource_types":["AWS::S3::Bucket"]}]` |
+  | Secret | `DEPLOYMENT_GITHUB_SECRET_ARNS` | `arn:aws:secretsmanager:us-east-1:369676914736:secret:kosa-governance-sandbox/m1/github-token-*` |
+  | Variable | `POLICY_AUTHORING_MODEL_PROFILE_JSON` | `{"model_profile_id":"policy-authoring-nova-lite-m4-v1","role":"POLICY_AUTHORING","region":"us-east-1","model_id":"amazon.nova-lite-v1:0","prompt_version":"policy-authoring/2026-09-03","rubric_version":"policy-authoring-rubric/1","golden_dataset_version":"policy-authoring-golden/0-ungated"}` |
+
+  세 값은 운영 파서(`DeploymentRuntimeConfiguration.from_json`, authoring `_model_profile()`, 템플릿
+  `AllowedPattern`)로 로컬 검증했다. 식별자만 있고 credential은 없다. 주의 두 가지:
+  - `DEPLOYMENT_GITHUB_SECRET_ARNS`는 Secrets Manager가 붙이는 6자 접미사를 모르므로 `-*` 접미사 wildcard다.
+    M1 값처럼 exact ARN을 쓰려면 `aws secretsmanager describe-secret --secret-id kosa-governance-sandbox/m1/github-token`의
+    ARN으로 바꾼다. IAM 동작은 같다.
+  - authoring Profile은 아직 Golden으로 게이트되지 않았다(`golden_dataset_version`에 `ungated` 명시, ADR-0012).
+    prompt_version은 `bedrock_extractor.PROMPT_VERSION`과 같다.
+- 실행(설정 + dispatch를 한 번에):
+  ```bash
+  gh secret set DEPLOYMENT_RUNTIME_JSON --env customer-sandbox-deploy < DEPLOYMENT_RUNTIME_JSON
+  gh secret set DEPLOYMENT_GITHUB_SECRET_ARNS --env customer-sandbox-deploy < DEPLOYMENT_GITHUB_SECRET_ARNS
+  gh variable set POLICY_AUTHORING_MODEL_PROFILE_JSON --env customer-sandbox-deploy --body "$(cat POLICY_AUTHORING_MODEL_PROFILE_JSON)"
+  gh workflow run deploy-m0-foundation.yml --ref dev \
+    -f stack_name=kosa-governance-sandbox -f project_name=kosa-governance \
+    -f environment=customer-sandbox-artifact -f stack_environment=sandbox \
+    -f artifact_approval_environment=customer-sandbox-deploy -f aws_region=us-east-1 \
+    -f role_to_assume=arn:aws:iam::369676914736:role/kosa-governance-sandbox-github-deploy \
+    -f cloudformation_execution_role_arn=arn:aws:iam::369676914736:role/kosa-governance-sandbox-foundation-cfn \
+    -f lambda_code_s3_bucket=kosa-governance-sandbox-lambda-code-369676914736 \
+    -f assessment_scope_json='{"kosa-sandbox":[{"repository_id":"test-s3-sandbox","policy_profile_id":"profile-mvp-baseline"}]}'
+  ```
+  입력값은 마지막 성공 run(33734365438)의 로그에서 그대로 가져왔다. 두 Environment 게이트를 순서대로 승인한다.
+- 재배포 뒤 확인 순서: `POST /orchestrate` 200 → `GET /deployments/{id}`에 `verification_assessment_id` →
+  remediation 후 `awsproject-team1/test`에 PR. 시연 순서는 `docs/M4-DEMO-RUNBOOK.md` §4.
+- **시연 직전 1시간 안에** GitHub App installation token을 재발급해 `kosa-governance-sandbox/m1/github-token`에
+  넣는다(§2). 만료 token이면 PR write와 commit 해석이 provider error로 실패한다.
 
 ### E. 단계4 — Subgraph 래핑 (선택적, 낮은 가치)
 - 기존 결정적 Assessment/Remediation worker를 LangGraph StateGraph node로 감싸는 형식 작업.
