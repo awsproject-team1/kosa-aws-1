@@ -1,2 +1,9 @@
 # Exact third-party pins for the Backend Lambda runtime belong in this file.
-# The framework-free bootstrap intentionally has no runtime dependencies.
+#
+# LangGraph powers the Parent Orchestrator (natural-language routing + Policy Q&A)
+# and the Assessment/Remediation/Deployment subgraphs (ADR-0012, DESIGN.md). It is
+# delivered as a Lambda Layer, not inside the function ZIP, so the deterministic
+# source build stays free of third-party wheels (see scripts/build-langgraph-layer.sh).
+# The plan_hash approval boundary hashes the Terraform show-json projection only
+# (ADR-0019 §1, packages/contracts/terraform_plan.py), so the Layer does not affect it.
+langgraph==1.2.11
