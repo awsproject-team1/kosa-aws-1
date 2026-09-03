@@ -259,9 +259,22 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
     -f role_to_assume=arn:aws:iam::369676914736:role/kosa-governance-sandbox-github-deploy \
     -f cloudformation_execution_role_arn=arn:aws:iam::369676914736:role/kosa-governance-sandbox-foundation-cfn \
     -f lambda_code_s3_bucket=kosa-governance-sandbox-lambda-code-369676914736 \
-    -f assessment_scope_json='{"kosa-sandbox":[{"repository_id":"test-s3-sandbox","policy_profile_id":"profile-mvp-baseline"}]}'
+    -f assessment_scope_json='{"kosa-sandbox":[{"repository_id":"test-s3-sandbox"}]}'
   ```
-  입력값은 마지막 성공 run(33734365438)의 로그에서 그대로 가져왔다. 두 Environment 게이트를 순서대로 승인한다.
+  두 Environment 게이트를 순서대로 승인한다.
+- **첫 dispatch(run 33763473589)는 `Validate assessment deployment configuration`에서 멈췄다:**
+  `assessment scope selector fields are invalid`. 원인은 ADR-0023 커밋 `58b902f`가 scope selector와 M1 runtime
+  target에서 `policy_profile_id`를 제거한 것이다(Profile은 고객 Catalog가 정한다). 마지막 성공 배포(`d6ff2da`)의
+  입력값과 그때 넣은 `M1_ASSESSMENT_RUNTIME_JSON`은 모두 옛 형식이라 **둘 다** 새 검증기에 걸린다(로컬에서 세 조합을
+  돌려 확인: 새 target+새 scope만 통과). 고칠 것:
+  - dispatch 입력 `assessment_scope_json`에서 `policy_profile_id` 제거(위 명령은 수정본).
+  - Secret `M1_ASSESSMENT_RUNTIME_JSON`을 `policy_profile_id` 없는 형식으로 다시 넣는다. 필드는
+    `customer_id, repository_id, commit_sha, github_repository, github_token_secret_id, aws_account_id,
+    aws_read_role_arn, aws_external_id_secret_id, s3_bucket_id`. secret 참조는 exact ARN이어야 하고
+    `M1_ASSESSMENT_SECRET_ARNS`와 집합이 정확히 같아야 한다(`aws secretsmanager describe-secret --query ARN`으로 조회).
+  - 같은 exact ARN을 `DEPLOYMENT_RUNTIME_JSON`/`DEPLOYMENT_GITHUB_SECRET_ARNS`에도 쓰면 wildcard가 필요 없다.
+  워크플로 입력이 코드 변경으로 조용히 무효화됐지만 CloudFormation 호출 전에 fail-closed로 잡혔다. 그것이 이 검증
+  단계의 목적이다.
 - 재배포 뒤 확인 순서: `POST /orchestrate` 200 → `GET /deployments/{id}`에 `verification_assessment_id` →
   remediation 후 `awsproject-team1/test`에 PR. 시연 순서는 `docs/M4-DEMO-RUNBOOK.md` §4.
 - **시연 직전 1시간 안에** GitHub App installation token을 재발급해 `kosa-governance-sandbox/m1/github-token`에
