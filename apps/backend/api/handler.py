@@ -56,6 +56,7 @@ class JobHttpHandler:
         policy_reader: object | None = None,
         orchestrations: object | None = None,
         users: object | None = None,
+        scope: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
@@ -103,6 +104,8 @@ class JobHttpHandler:
         self._orchestrations = orchestrations
         # Duck-typed user-management service: create_user/list_users/assign_profile.
         self._users = users
+        # Duck-typed scope read service: get_scope(principal).
+        self._scope = scope
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -139,6 +142,10 @@ class JobHttpHandler:
                     raise JobNotFoundError("policy source route not found")
                 sources = self._policy_sources.list_sources(principal)
                 return _response(200, {"sources": list(sources)})
+            if method == "GET" and path == "/scope":
+                if self._scope is None:
+                    raise JobNotFoundError("scope route not found")
+                return _response(200, self._scope.get_scope(principal))
             if path == "/admin/users":
                 if self._users is None:
                     raise JobNotFoundError("user management route not found")
@@ -178,6 +185,11 @@ class JobHttpHandler:
                             principal, source_id=source_id, source_version=source_version
                         ).to_dict(),
                     )
+                if method == "DELETE" and action is None:
+                    self._policy_sources.delete_source(
+                        principal, source_id=source_id, source_version=source_version
+                    )
+                    return _response(200, {"deleted": True, "source_id": source_id, "source_version": source_version})
                 if method == "POST" and action == "process":
                     if self._policy_reader is None:
                         raise JobNotFoundError("policy process route not found")

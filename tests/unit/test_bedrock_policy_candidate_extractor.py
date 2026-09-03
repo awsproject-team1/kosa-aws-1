@@ -163,11 +163,11 @@ class ResponseGateTest(unittest.TestCase):
 
     def test_a_non_json_response_is_refused(self) -> None:
         """자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다."""
-        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract("Here are the requirements I found: ...")
 
     def test_an_unexpected_top_level_key_is_refused(self) -> None:
-        with self.assertRaisesRegex(BedrockExtractionError, "response fields are invalid"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract({"requirements": [], "notes": "extra"})
 
     def test_an_evaluation_outcome_field_rejects_the_whole_response(self) -> None:
@@ -217,7 +217,7 @@ class ResponseGateTest(unittest.TestCase):
             {**VALID_REQUIREMENT, "requirement": f"Requirement number {index}."}
             for index in range(MAX_REQUIREMENTS_PER_CHUNK + 1)
         ]
-        with self.assertRaisesRegex(BedrockExtractionError, "more requirements than one chunk"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract({"requirements": entries})
 
     def test_a_shape_the_classification_invariants_reject_is_refused(self) -> None:

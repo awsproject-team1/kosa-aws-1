@@ -229,6 +229,7 @@ def _http_handler() -> JobHttpHandler:
         remediation_exceptions=_remediation_exception_components(),
         orchestrations=_orchestration_components(),
         users=_user_management_components(),
+        scope=_scope_components(),
     )
 
 
@@ -417,6 +418,13 @@ def _remediation_exception_reader() -> DynamoDbRemediationExceptionRepository:
         table_name=table_name,
         transaction_client=boto3.client("dynamodb"),
     )
+
+
+def _scope_components() -> object:
+    """Read-only assessment scope view from ASSESSMENT_SCOPE_JSON (deployment config)."""
+    from apps.backend.api.scope import ScopeApiService
+
+    return ScopeApiService(scope_json=os.environ.get("ASSESSMENT_SCOPE_JSON"))
 
 
 def _user_management_components() -> object | None:

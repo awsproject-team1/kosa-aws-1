@@ -30,11 +30,21 @@ class DynamoTable(Protocol):
 
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
 
+    def query(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def delete_item(self, **kwargs: object) -> object: ...
+
+
+class PolicySourceDeleteForbidden(ValueError):
+    """Raised when deleting a policy source is not allowed (e.g. it is approved)."""
+
 
 class S3Presigner(Protocol):
     def generate_presigned_url(
         self, ClientMethod: str, Params: dict[str, str], ExpiresIn: int
     ) -> str: ...
+
+    def delete_object(self, *, Bucket: str, Key: str) -> object: ...
 
 
 class S3ObjectReader(Protocol):
@@ -291,6 +301,39 @@ class DynamoDbPolicySourceUploadRepository:
                 break
             kwargs["ExclusiveStartKey"] = token
         return tuple(items)
+
+    def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None:
+        """Delete one unapproved policy source: S3 original + normalized + the DynamoDB record.
+
+        Refuses if the source has an approval record — an approved source may back a published
+        Profile's Rules, and deleting it would break evidence traceability. Tenant-scoped: the
+        keys are built from the caller's own customer_id.
+        """
+        pk = f"CUSTOMER#{customer_id}"
+        approval_sk = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#APPROVAL"
+        try:
+            approved = self._table.get_item(Key={"PK": pk, "SK": approval_sk}).get("Item")
+        except Exception as error:
+            raise RuntimeError("policy source delete precheck failed") from error
+        if approved is not None:
+            raise PolicySourceDeleteForbidden(
+                "an approved policy source cannot be deleted"
+            )
+        # S3 아티팩트를 먼저 지운다. 없는 객체 삭제는 S3에서 성공으로 취급되므로 UPLOAD_PENDING
+        # (원본 미업로드) 문서도 안전하게 지운다.
+        for key_fn in (original_object_key, normalized_object_key):
+            key = key_fn(customer_id=customer_id, source_id=source_id, source_version=source_version)
+            try:
+                self._presigner.delete_object(Bucket=self._bucket, Key=key)  # type: ignore[union-attr]
+            except Exception as error:
+                raise RuntimeError("policy artifact delete failed") from error
+        try:
+            self._table.delete_item(
+                Key={"PK": pk, "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}"},
+                ConditionExpression="attribute_exists(SK)",
+            )
+        except Exception as error:
+            raise RuntimeError("policy source record delete failed") from error
 
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str

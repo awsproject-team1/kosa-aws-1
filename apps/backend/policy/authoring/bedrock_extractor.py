@@ -50,8 +50,8 @@ from packages.contracts.policy_authoring import (
 #: 항상 같은 경계로 나뉜다. 한 chunk의 출력(requirement마다 원문·요약·근거 문자열)이 모델의
 #: maxTokens 안에 들어가도록 작게 잡는다. 40이면 한국어 정책 문서에서 응답이 잘려
 #: (`Unterminated string`) JSON 파싱이 실패한다.
-UNITS_PER_CHUNK = 8
-CHUNK_OVERLAP_UNITS = 2
+UNITS_PER_CHUNK = 6
+CHUNK_OVERLAP_UNITS = 1
 
 #: 한 문서 전체가 만들 수 있는 후보 수의 상한. 모델이 문장마다 후보를 만들어도 저장 계층의
 #: 상한 안에 머문다.
@@ -200,8 +200,21 @@ class BedrockPolicyCandidateExtractor:
             raise ValueError("units must not be empty")
 
         merged: dict[str, ExtractedRequirement] = {}
-        for chunk in _chunks(units, self._units_per_chunk, self._chunk_overlap):
-            for requirement in self._extract_chunk(chunk, catalog):
+        chunks = list(_chunks(units, self._units_per_chunk, self._chunk_overlap))
+        failed_chunks = 0
+        for chunk in chunks:
+            try:
+                chunk_requirements = self._extract_chunk(chunk, catalog)
+            except PoisonedResponseError:
+                # 모델이 판정을 시도한 경계 위반은 청크를 건너뛰는 대신 run 전체를 실패시킨다.
+                raise
+            except BedrockExtractionError as error:
+                # 청크 단위 실패(응답 truncation, 비-JSON, 청크 상한 초과 등)는 그 청크만 버리고
+                # 나머지 청크로 계속한다. 큰 문서에서 한 청크가 잘려도 전체 추출이 죽지 않는다.
+                failed_chunks += 1
+                logging.getLogger("governance.authoring").warning("chunk skipped: %s", error)
+                continue
+            for requirement in chunk_requirements:
                 # deterministic merge: 겹치는 unit에서 같은 Requirement가 두 번 나올 수 있다.
                 # digest가 같으면 같은 것이므로 먼저 본 것을 유지한다.
                 merged.setdefault(requirement.digest, requirement)
@@ -209,6 +222,17 @@ class BedrockPolicyCandidateExtractor:
                     raise BedrockExtractionError(
                         "the model proposed more requirements than one document may carry"
                     )
+        if failed_chunks:
+            logging.getLogger("governance.authoring").info(
+                "extraction kept %d requirement(s); %d/%d chunk(s) skipped",
+                len(merged),
+                failed_chunks,
+                len(chunks),
+            )
+        if not merged and failed_chunks == len(chunks) and chunks:
+            # 모든 청크가 실패했다면 추출 자체가 신뢰할 수 없다. 빈 결과를 "후보 없음"으로
+            # 잘못 표시하지 않도록 실패시킨다.
+            raise BedrockExtractionError("every chunk failed to extract")
         # canonical order: digest 순. 모델의 출력 순서에 의존하지 않는다.
         return tuple(merged[digest] for digest in sorted(merged))
 

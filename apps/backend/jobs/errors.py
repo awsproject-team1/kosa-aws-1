@@ -74,6 +74,8 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(409, "CONFLICT", "The request conflicts with current state")
     if isinstance(error, (RepositoryError, WorkflowDispatchError)):
         return _failure(503, "EXECUTION_ERROR", "The service is temporarily unavailable")
+    if type(error).__name__ == "PolicySourceDeleteForbidden":
+        return _failure(409, "CONFLICT", "The request conflicts with current state")
     return _failure(500, "EXECUTION_ERROR", "An internal error occurred")
 
 

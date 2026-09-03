@@ -59,7 +59,7 @@ async function startLogin() {
   const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, response_type: "code", scope: "openid email", redirect_uri: REDIRECT_URI, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
   window.location.assign(`https://${COGNITO_DOMAIN}/oauth2/authorize?${q}`);
 }
-type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null };
+type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null; profile: string | null };
 function decodeJwt(token: string): Record<string, unknown> {
   const json = atob(token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"));
   return JSON.parse(decodeURIComponent(escape(json)));
@@ -80,7 +80,7 @@ async function exchangeCallback(): Promise<Session | null> {
   history.replaceState({}, "", window.location.pathname);
   const claims = decodeJwt(tok.id_token);
   const groups = Array.isArray(claims["cognito:groups"]) ? (claims["cognito:groups"] as string[]) : [];
-  return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null };
+  return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null, profile: (claims["profile"] as string) ?? null };
 }
 
 /* =========================================================================
@@ -97,10 +97,9 @@ async function putPresigned(url: string, file: File, contentType: string) {
 }
 
 /* per-user profile assignment + known profiles (client-side for the demo) */
-const assignKey = "gov.userProfiles";
 const profKey = "gov.knownProfiles";
-function loadAssignments(): Record<string, string> { try { return JSON.parse(localStorage.getItem(assignKey) ?? "{}"); } catch { return {}; } }
-function saveAssignment(email: string, pid: string) { const a = loadAssignments(); a[email] = pid; localStorage.setItem(assignKey, JSON.stringify(a)); }
+/* Per-user profile assignment now lives on the Cognito `profile` attribute (backend). Only the
+ * published-profile list is kept client-side because there is no list-profiles API yet. */
 function loadProfiles(): string[] { try { return JSON.parse(localStorage.getItem(profKey) ?? "[]"); } catch { return []; } }
 function addProfile(id: string) { const p = new Set(loadProfiles()); p.add(id); localStorage.setItem(profKey, JSON.stringify([...p])); }
 
@@ -220,22 +219,47 @@ const FORMATS = [
   { label: "XLSX", mt: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
   { label: "DOCX", mt: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
 ];
-function UploadPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
+function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
+  type Doc = { source_id: string; source_version: string; filename: string; status: string; source_format: string | null; byte_size: number | null; unit_count: number };
+  type CartItem = { rule_id: string; rule_version: string; source_id: string; source_version: string; severity: string; control_key: string };
+  const [docs, setDocs] = useState<Doc[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [mt, setMt] = useState(FORMATS[0].mt);
-  const [sess, setSess] = useState<UploadSession | null>(null);
-  const [page, setPage] = useState<CandidatePage | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [running, setRunning] = useState(false);
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<Record<string, CandidatePage>>({});
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [profileId, setProfileId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const lastFile = useRef<string>("");
-  const key = (c: Candidate) => `${c.rule_id}@${c.rule_version}`;
+  const [repos, setRepos] = useState<string[]>([]);
 
-  async function runPipeline() {
+  const refresh = async () => {
+    try { const r = await api<{ sources: Doc[] }>("/policy-sources", session.accessToken); setDocs(r.sources); }
+    catch (e) { setError((e as Error).message); }
+  };
+  const refreshScope = async () => {
+    try { const r = await api<{ repositories: { repository_id: string }[] }>("/scope", session.accessToken); setRepos(r.repositories.map(x => x.repository_id)); }
+    catch { /* scope는 부가정보이므로 실패해도 문서 화면은 유지 */ }
+  };
+  useEffect(() => { void refresh(); void refreshScope(); /* eslint-disable-next-line */ }, []);
+
+  async function deleteDoc(d: Doc) {
+    setError(null); setNotice(null);
+    if (!confirm(`문서 '${d.filename}' (${d.status})를 삭제할까요? S3 원본·정규화 아티팩트와 DynamoDB 기록이 영구 삭제됩니다.`)) return;
+    try {
+      await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}`, session.accessToken, { method: "DELETE" });
+      setNotice(`삭제됨: ${d.filename}`);
+      await refresh();
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg.includes("CONFLICT") ? "승인된 문서는 삭제할 수 없습니다(Profile이 참조 중)." : `삭제 실패: ${msg}`);
+    }
+  }
+
+  async function uploadAndExtract() {
     if (!file) { setError("파일을 선택하세요."); return; }
-    setError(null); setNotice(null); setPage(null); setSelected(new Set()); setRunning(true);
+    setError(null); setNotice(null); setRunning(true);
     obs.setPipeline([
       { key: "upload", label: "1. 원본 업로드", state: "pending" },
       { key: "normalize", label: "2. 정규화", state: "pending" },
@@ -243,124 +267,192 @@ function UploadPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
       { key: "poll", label: "4. 후보 조회", state: "pending" },
     ]);
     obs.lightNode("authoring", "pending");
-    if (lastFile.current === `${file.name}:${file.size}`) setNotice("동일한 파일입니다. 새 업로드 세션(새 source version)으로 다시 처리합니다.");
-    lastFile.current = `${file.name}:${file.size}`;
     try {
       obs.patchPipeline("upload", "active");
       const s = await api<UploadSession>("/policy-sources/uploads", session.accessToken, { method: "POST", body: JSON.stringify({ filename: file.name, declared_media_type: mt, byte_size: file.size }) });
       await putPresigned(s.upload_url, file, mt);
-      setSess(s); obs.patchPipeline("upload", "done");
+      obs.patchPipeline("upload", "done");
       obs.upsertJob({ id: "up-" + s.source_id, label: `업로드 ${file.name}`, queue: "s3", state: "done", meta: s.source_version.slice(0, 12) });
-
       obs.patchPipeline("normalize", "active");
       const doc = await api<NormalizedDoc>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/process`, session.accessToken, { method: "POST" });
       if (doc.status === "FAILED") { obs.patchPipeline("normalize", "failed"); throw new Error(`정규화 실패: ${doc.failure_code}`); }
       obs.patchPipeline("normalize", "done");
-      setNotice(`정규화 완료 · 형식 ${doc.source_format} · 단위 ${doc.units.length}개`);
-
-      obs.patchPipeline("extract", "active");
-      obs.lightNode("authoring", "active");
-      obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active" });
+      obs.patchPipeline("extract", "active"); obs.lightNode("authoring", "active");
+      obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active" });
       await api(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
       obs.patchPipeline("extract", "done");
-
       obs.patchPipeline("poll", "active");
-      // A안: 서버가 브라우저로 push하지 않으므로, DynamoDB에 남는 실행 상태(QUEUED/RUNNING/READY)를
-      // 조회해 왼쪽 패널에 그대로 비춘다. manifest가 아직 없으면 API가 일시적으로 실패(503)하는데,
-      // 이는 "아직 시작 전"이라는 정상 상태이므로 실패로 처리하지 않고 계속 기다린다.
       let result: CandidatePage | null = null;
-      const maxTries = 40; // 40 × 3s = 최대 2분
-      for (let i = 0; i < maxTries; i++) {
+      for (let i = 0; i < 40; i++) {
         await sleep(3000);
         let p: CandidatePage;
-        try {
-          p = await api<CandidatePage>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates?limit=50`, session.accessToken);
-        } catch {
-          obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active", meta: `대기 중… (${i + 1}/${maxTries})` });
-          continue; // manifest 미생성 — 계속 대기
-        }
-        obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "active", meta: `${p.status} (${i + 1}/${maxTries})` });
+        try { p = await api<CandidatePage>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates?limit=50`, session.accessToken); }
+        catch { obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active", meta: `대기 중 (${i + 1}/40)` }); continue; }
+        obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active", meta: `${p.status} (${i + 1}/40)` });
         if (p.candidates.length > 0 || (p.status !== "QUEUED" && p.status !== "RUNNING")) { result = p; break; }
       }
-      if (!result) throw new Error("후보 추출이 2분 내에 완료되지 않았습니다. 문서가 크면 더 걸릴 수 있으니 잠시 후 다시 업로드하세요.");
-      setPage(result); obs.patchPipeline("poll", "done"); obs.lightNode("authoring", "done");
-      obs.upsertJob({ id: "auth-" + s.source_id, label: "정책 후보 추출", queue: "authoring", state: "done", meta: `${result.candidates.length} 후보` });
-      setNotice(`후보 ${result.candidates.length}개 · 미지원 ${result.unsupported.length} · 검토 후 승인하세요.`);
+      if (!result) throw new Error("후보 추출이 2분 내에 완료되지 않았습니다. 잠시 후 문서 목록에서 '후보 조회'를 누르세요.");
+      obs.patchPipeline("poll", "done"); obs.lightNode("authoring", "done");
+      obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "done", meta: `${result.candidates.length} 후보` });
+      setCandidates(c => ({ ...c, [s.source_id]: result! }));
+      setOpenDoc(s.source_id);
+      setNotice(`추출 완료 · 후보 ${result.candidates.length}개. 필요한 후보를 담아 Profile로 만드세요.`);
+      await refresh();
     } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
     finally { setRunning(false); }
   }
-  function toggle(c: Candidate) { setSelected(p => { const n = new Set(p); const k = key(c); n.has(k) ? n.delete(k) : n.add(k); return n; }); }
-  async function approveAndPublish() {
-    if (!sess || !page) return;
-    if (selected.size === 0) { setError("승인할 후보를 선택하세요."); return; }
-    if (!profileId.trim()) { setError("Profile ID를 입력하세요."); return; }
-    setError(null);
+
+  async function loadCandidates(d: Doc) {
+    setError(null); setOpenDoc(d.source_id);
     try {
-      const approved = page.candidates.filter(c => selected.has(key(c))).map(c => ({ rule_id: c.rule_id, version: c.rule_version }));
-      await api(`/policy-sources/${enc(sess.source_id)}/versions/${enc(sess.source_version)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ approved_rules: approved }) });
-      await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify({ source_id: sess.source_id, source_version: sess.source_version, policy_profile_id: profileId.trim(), version: "v1" }) });
-      addProfile(profileId.trim());
-      setNotice(`Profile 게시 완료: ${profileId.trim()} — 고객(kosa-sandbox) Catalog에 저장. 'Profile·사용자 관리'에서 사용자에게 지정하세요.`);
-    } catch (e) { setError((e as Error).message); }
+      const p = await api<CandidatePage>(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/candidates?limit=50`, session.accessToken);
+      setCandidates(c => ({ ...c, [d.source_id]: p }));
+    } catch (e) { setError(`후보 조회 실패: ${(e as Error).message}`); }
   }
+
+  const inCart = (rid: string, rv: string) => cart.some(i => i.rule_id === rid && i.rule_version === rv);
+  function toggleCart(d: Doc, c: Candidate) {
+    setCart(prev => inCart(c.rule_id, c.rule_version)
+      ? prev.filter(i => !(i.rule_id === c.rule_id && i.rule_version === c.rule_version))
+      : [...prev, { rule_id: c.rule_id, rule_version: c.rule_version, source_id: d.source_id, source_version: d.source_version, severity: c.proposed_severity, control_key: c.control_key }]);
+  }
+
+  async function publishCart() {
+    if (cart.length === 0) { setError("장바구니에 후보를 담으세요."); return; }
+    if (!profileId.trim()) { setError("Profile ID를 입력하세요."); return; }
+    setError(null); setNotice(null);
+    try {
+      const bySource = new Map<string, { source_version: string; rules: { rule_id: string; version: string }[] }>();
+      for (const i of cart) {
+        const e = bySource.get(i.source_id) ?? { source_version: i.source_version, rules: [] };
+        e.rules.push({ rule_id: i.rule_id, version: i.rule_version });
+        bySource.set(i.source_id, e);
+      }
+      for (const [sid, e] of bySource) {
+        await api(`/policy-sources/${enc(sid)}/versions/${enc(e.source_version)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ approved_rules: e.rules }) });
+      }
+      const [firstSid, firstE] = [...bySource.entries()][0];
+      await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify({ source_id: firstSid, source_version: firstE.source_version, policy_profile_id: profileId.trim(), version: "v1" }) });
+      addProfile(profileId.trim());
+      setNotice(`Profile '${profileId.trim()}' 게시 완료 (${cart.length}개 rule, ${bySource.size}개 문서). '사용자 관리'에서 지정하세요.`);
+      setCart([]);
+    } catch (e) { setError(`게시 실패: ${(e as Error).message}`); }
+  }
+
   return <div className="panel">
     <div className="card">
-      <h2>정책 문서 업로드</h2>
-      <p className="hint">업로드하면 정규화 → 후보 추출 → 조회까지 자동 진행됩니다. 왼쪽 패널에서 각 단계 불빛을 볼 수 있습니다. 사람은 후보 선택과 게시만 합니다.</p>
+      <h2>정책 문서</h2>
+      <p className="hint">문서를 업로드하면 정규화·후보추출까지 자동 진행됩니다(왼쪽 패널). 이미 추출한 문서는 다시 업로드하지 않고 '후보 조회'로 재사용합니다.</p>
+      <div className="row" style={{ marginBottom: 4 }}>
+        <span className="hint">연결된 리포지토리:</span>
+        {repos.length === 0 ? <span className="hint">없음</span> : repos.map(r => <span key={r} className="badge">{r}</span>)}
+      </div>
       <div className="row">
         <label style={{ flex: 1 }}>형식<select value={mt} onChange={e => setMt(e.target.value)}>{FORMATS.map(f => <option key={f.mt} value={f.mt}>{f.label}</option>)}</select></label>
         <label style={{ flex: 2 }}>파일<input type="file" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+        <button disabled={running || !file} onClick={() => void uploadAndExtract()}>{running ? "처리 중…" : "업로드 & 자동 추출"}</button>
       </div>
-      <button disabled={running || !file} onClick={() => void runPipeline()}>{running ? "처리 중…" : "업로드 & 자동 처리"}</button>
+      <table><thead><tr><th>문서</th><th>상태</th><th>형식</th><th>단위</th><th></th></tr></thead>
+        <tbody>{docs.map(d => <tr key={`${d.source_id}:${d.source_version}`}>
+          <td>{d.filename}</td><td>{d.status}</td><td>{d.source_format ?? "-"}</td><td>{d.unit_count}</td>
+          <td style={{ display: "flex", gap: 6 }}>
+            <button className="ghost" onClick={() => void loadCandidates(d)}>후보 조회</button>
+            <button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} onClick={() => void deleteDoc(d)}>삭제</button>
+          </td>
+        </tr>)}
+          {docs.length === 0 && <tr><td colSpan={5} className="obs-empty">업로드된 문서가 없습니다.</td></tr>}</tbody></table>
     </div>
-    {page && <div className="card">
-      <h2>후보 검토 · 승인</h2>
-      <p className="hint">심각도(severity)는 Catalog가 정한 읽기 전용 값입니다. 승인할 항목만 선택하세요.</p>
-      {page.candidates.length === 0 && <p className="obs-empty">표시할 후보가 없습니다 (상태 {page.status}).</p>}
-      {page.candidates.map(c => <div key={key(c)} className="candidate">
-        <label><input type="checkbox" checked={selected.has(key(c))} onChange={() => toggle(c)} />
+
+    {openDoc && candidates[openDoc] && <div className="card">
+      <h2>후보 — 필요한 것만 장바구니에 담기</h2>
+      <p className="hint">심각도는 Catalog가 정한 읽기 전용 값입니다. 여러 문서에서 담아 하나의 Profile로 만들 수 있습니다.</p>
+      {candidates[openDoc].candidates.length === 0 && <p className="obs-empty">후보 없음 (상태 {candidates[openDoc].status}).</p>}
+      {candidates[openDoc].candidates.map(c => <div key={`${c.rule_id}@${c.rule_version}`} className="candidate">
+        <label><input type="checkbox" checked={inCart(c.rule_id, c.rule_version)} onChange={() => toggleCart(docs.find(d => d.source_id === openDoc)!, c)} />
           <span><strong>{c.rule_id}@{c.rule_version}</strong><span className="badge">{c.proposed_severity}</span><span className="badge">{c.control_key}</span><br />{c.requirement_summary}<br /><span className="hint">{c.mapping_reason}</span></span></label>
       </div>)}
+    </div>}
+
+    <div className="card">
+      <h2>Profile 장바구니 ({cart.length})</h2>
+      {cart.length === 0 ? <p className="obs-empty">담긴 후보가 없습니다. 문서에서 후보를 조회해 담으세요.</p>
+        : <table><thead><tr><th>Rule</th><th>Severity</th><th>Control</th><th>문서</th></tr></thead>
+          <tbody>{cart.map(i => <tr key={`${i.rule_id}@${i.rule_version}`}><td>{i.rule_id}@{i.rule_version}</td><td>{i.severity}</td><td>{i.control_key}</td><td>{i.source_id.slice(0, 12)}</td></tr>)}</tbody></table>}
       <div className="row" style={{ marginTop: 12 }}>
         <label style={{ flex: 1 }}>Policy Profile ID<input value={profileId} onChange={e => setProfileId(e.target.value)} placeholder="profile-internal-baseline" /></label>
-        <button disabled={selected.size === 0} onClick={() => void approveAndPublish()}>선택 {selected.size}개 승인 &amp; Profile 게시</button>
+        <button disabled={cart.length === 0} onClick={() => void publishCart()}>장바구니로 Profile 게시</button>
       </div>
-    </div>}
+    </div>
     {notice && <p className="status">{notice}</p>}
     {error && <p className="alert">{error}</p>}
   </div>;
 }
 
 /* =========================================================================
- * Admin: profiles + per-user profile assignment
+ * Admin: user registration, list, and per-user profile assignment (backend)
  * =======================================================================*/
-function ProfilesPanel() {
-  const [profiles, setProfiles] = useState<string[]>(loadProfiles());
-  const [assignments, setAssignments] = useState<Record<string, string>>(loadAssignments());
+function UsersPanel({ session }: { session: Session }) {
+  type User = { username: string; email: string; customer_id: string; profile: string | null; status: string; enabled: boolean };
+  const [users, setUsers] = useState<User[]>([]);
+  const [profiles] = useState<string[]>(loadProfiles());
   const [email, setEmail] = useState("");
-  const [pid, setPid] = useState("");
-  const [newP, setNewP] = useState("");
-  function assign() { if (!email.trim() || !pid) return; saveAssignment(email.trim(), pid); setAssignments(loadAssignments()); }
-  function register() { if (!newP.trim()) return; addProfile(newP.trim()); setProfiles(loadProfiles()); setNewP(""); }
+  const [role, setRole] = useState("User");
+  const [pw, setPw] = useState("");
+  const [assignEmail, setAssignEmail] = useState("");
+  const [assignPid, setAssignPid] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try { const r = await api<{ users: User[] }>("/admin/users", session.accessToken); setUsers(r.users); }
+    catch (e) { setError((e as Error).message); }
+  };
+  useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
+
+  async function createUser() {
+    setError(null); setNotice(null);
+    if (!email.trim() || pw.length < 8) { setError("이메일과 8자 이상 임시 비밀번호가 필요합니다."); return; }
+    try {
+      await api("/admin/users", session.accessToken, { method: "POST", body: JSON.stringify({ email: email.trim(), role, temporary_password: pw }) });
+      setNotice(`사용자 생성: ${email.trim()} (${role})`); setEmail(""); setPw("");
+      await refresh();
+    } catch (e) { setError(`생성 실패: ${(e as Error).message}`); }
+  }
+  async function assign() {
+    setError(null); setNotice(null);
+    if (!assignEmail.trim() || !assignPid) { setError("사용자와 Profile을 선택하세요."); return; }
+    try {
+      await api("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: assignEmail.trim(), policy_profile_id: assignPid }) });
+      setNotice(`${assignEmail.trim()} → ${assignPid} 지정 완료 (다음 로그인부터 적용)`);
+      await refresh();
+    } catch (e) { setError(`지정 실패: ${(e as Error).message}`); }
+  }
+
   return <div className="panel">
     <div className="card">
-      <h2>Policy Profile 목록</h2>
-      <p className="hint">게시된 Profile은 고객(kosa-sandbox) Catalog에 저장됩니다. Assessment는 생성 시 이 중 하나의 버전을 고정합니다.</p>
-      {profiles.length === 0 ? <p className="obs-empty">아직 게시된 Profile이 없습니다. '문서 업로드'에서 만드세요.</p> : <ul>{profiles.map(p => <li key={p}><code>{p}</code></li>)}</ul>}
-      <div className="row"><label style={{ flex: 1 }}>Profile ID 직접 등록<input value={newP} onChange={e => setNewP(e.target.value)} /></label><button className="ghost" onClick={register}>목록에 추가</button></div>
+      <h2>사용자 등록</h2>
+      <p className="hint">고객(kosa-sandbox) 스코프의 사용자를 생성합니다. 임시 비밀번호는 대/소문자·숫자·기호 포함 8자 이상.</p>
+      <div className="row">
+        <label style={{ flex: 2 }}>이메일<input value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" /></label>
+        <label style={{ flex: 1 }}>역할<select value={role} onChange={e => setRole(e.target.value)}><option>User</option><option>Admin</option></select></label>
+        <label style={{ flex: 2 }}>임시 비밀번호<input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="Temp!2026" /></label>
+        <button onClick={() => void createUser()}>등록</button>
+      </div>
     </div>
     <div className="card">
-      <h2>사용자별 Profile 지정</h2>
-      <p className="hint">관리자가 사용자마다 기본 Profile을 지정합니다. 해당 사용자가 로그인하면 챗봇의 Assessment 제안에 이 Profile이 적용됩니다.</p>
+      <h2>사용자 목록 · Profile 지정</h2>
       <div className="row">
-        <label style={{ flex: 1 }}>사용자 이메일<input value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" /></label>
-        <label style={{ flex: 1 }}>Profile<select value={pid} onChange={e => setPid(e.target.value)}><option value="">선택</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
-        <button onClick={assign}>지정</button>
+        <label style={{ flex: 2 }}>사용자<select value={assignEmail} onChange={e => setAssignEmail(e.target.value)}><option value="">선택</option>{users.map(u => <option key={u.username} value={u.email}>{u.email}</option>)}</select></label>
+        <label style={{ flex: 2 }}>Profile<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+        <button onClick={() => void assign()}>지정</button>
       </div>
-      <table><thead><tr><th>사용자</th><th>지정된 Profile</th></tr></thead>
-        <tbody>{Object.entries(assignments).map(([e, p]) => <tr key={e}><td>{e}</td><td><code>{p}</code></td></tr>)}
-          {Object.keys(assignments).length === 0 && <tr><td colSpan={2} className="obs-empty">지정된 사용자가 없습니다.</td></tr>}</tbody></table>
+      <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 Profile</th></tr></thead>
+        <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td><td>{u.profile ? <code>{u.profile}</code> : "-"}</td></tr>)}
+          {users.length === 0 && <tr><td colSpan={3} className="obs-empty">사용자가 없습니다.</td></tr>}</tbody></table>
+      <p className="hint">Profile 목록은 이 브라우저에서 게시한 것을 보여줍니다(백엔드 list-profiles 미구현).</p>
     </div>
+    {notice && <p className="status">{notice}</p>}
+    {error && <p className="alert">{error}</p>}
   </div>;
 }
 
@@ -387,7 +479,7 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
 /* =========================================================================
  * App
  * =======================================================================*/
-type View = "chat" | "upload" | "profiles" | "report";
+type View = "chat" | "documents" | "users" | "report";
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -397,11 +489,11 @@ function App() {
   useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
   if (!session) return <Login error={error} />;
   const isAdmin = session.groups.includes("Admin");
-  const myProfile = loadAssignments()[session.email] ?? null;
+  const myProfile = session.profile;
   const nav: { id: View; label: string; admin?: boolean }[] = [
     { id: "chat", label: "챗봇" },
-    { id: "upload", label: "문서 업로드", admin: true },
-    { id: "profiles", label: "Profile · 사용자 관리", admin: true },
+    { id: "documents", label: "정책 문서", admin: true },
+    { id: "users", label: "사용자 관리", admin: true },
   ];
   return <div className="shell">
     <ObserverPanel obs={observer.obs} />
@@ -414,11 +506,11 @@ function App() {
           {assessmentId && <button className={view === "report" ? "active" : ""} onClick={() => setView("report")}>Assessment 결과</button>}
         </nav>
         <span className="spacer" />
-        <span className="who">{session.email}{myProfile && !isAdmin ? ` · profile: ${myProfile}` : ""}</span>
+        <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
       </div>
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
-      {view === "upload" && isAdmin && <UploadPanel session={session} obs={observer} />}
-      {view === "profiles" && isAdmin && <ProfilesPanel />}
+      {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
+      {view === "users" && isAdmin && <UsersPanel session={session} />}
       {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} />}
     </div>
   </div>;

@@ -764,7 +764,17 @@ class DynamoDbPolicyApprovalRepository:
                 "ConditionalCheckFailedException",
                 "TransactionCanceledException",
             }:
+                import logging
+                reasons = getattr(error, "response", {}).get("CancellationReasons") if isinstance(getattr(error, "response", None), dict) else None
+                logging.getLogger("governance.approval").warning(
+                    "%s stale/conditional: code=%s reasons=%s", label, _error_code(error),
+                    [r.get("Code") for r in reasons] if isinstance(reasons, list) else None,
+                )
                 raise RepositoryError(f"{label} already exists or binding is stale") from None
+            import logging
+            logging.getLogger("governance.approval").error(
+                "%s: transaction failed code=%s type=%s", label, _error_code(error), type(error).__name__
+            )
             raise RepositoryError(f"{label} write failed") from None
 
     def _now_iso(self) -> str:

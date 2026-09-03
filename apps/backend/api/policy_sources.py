@@ -62,6 +62,8 @@ class PolicySourceUploadRepository(Protocol):
 
     def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]: ...
 
+    def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None: ...
+
 
 class PolicySourceApiService:
     """Issue one backend-owned upload session; client cannot select tenant storage identity."""
@@ -152,6 +154,19 @@ class PolicySourceApiService:
             raise TypeError("principal must be a Principal")
         authorize(principal, Action.MANAGE_POLICY_SOURCES)
         return self._repository.list_sources(customer_id=principal.customer_id)
+
+    def delete_source(self, principal: Principal, *, source_id: str, source_version: str) -> None:
+        """Delete one unapproved policy source (record + S3 artifacts) in the caller's partition."""
+        if not isinstance(principal, Principal):
+            raise TypeError("principal must be a Principal")
+        _non_empty(source_id, "source_id")
+        _non_empty(source_version, "source_version")
+        authorize(principal, Action.MANAGE_POLICY_SOURCES)
+        self._repository.delete_source(
+            customer_id=principal.customer_id,
+            source_id=source_id,
+            source_version=source_version,
+        )
 
     @staticmethod
     def _new(factory: Callable[[], str], name: str) -> str:
