@@ -1,0 +1,23 @@
+# Gitleaks configuration for the pull-request secret scan (.github/workflows/secret-scan.yml).
+#
+# The default rules stay in force. The allowlist below names two identifier vocabularies of the
+# Governance Control Catalog (ADR-0023) that the `generic-api-key` rule mistakes for credentials:
+#
+#   control_key="S3_BUCKET_ACL_DISABLED"            catalog control keys
+#   required_evidence=("S3.PUBLIC_ACCESS_BLOCK",)   evidence capability keys
+#
+# Both are upper-case symbolic names committed on purpose; neither is a secret. The patterns are
+# anchored to that exact shape so a real token assigned to `control_key` would still be caught.
+
+title = "kosa-aws-1"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Governance Control Catalog identifiers are symbolic names, not credentials"
+regexTarget = "line"
+regexes = [
+  '''control_key="[A-Z][A-Z0-9_]*"''',
+  '''"[A-Z][A-Z0-9]*\.[A-Z][A-Z0-9_]*"''',
+]
