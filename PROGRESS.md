@@ -300,6 +300,16 @@
 
 ## Completed
 
+- Finding→Remediation 폐루프를 실제 sandbox에서 완주하고 원래 AI-주도 설계를 복원했다. AI가 rule
+  적용성을 `OUT_OF_SCOPE`로 판정(plan 분모는 코드가 고정, ADR-0002 §Rule applicability mechanism),
+  Bedrock Remediation Agent가 finding+snapshot에서 최소 Terraform patch를 생성(`UnavailablePatchAction`
+  차단 대체), LangGraph를 Lambda Layer로 도입하고 Parent Orchestrator(`POST /orchestrate`)가 자연어를
+  PolicyQA/ASSESSMENT/REMEDIATION/DEPLOYMENT로 라우팅(판단·제안만, 실행 권한 없음, ADR-0012). remediation
+  outbox를 remediation 큐로 라우팅하는 dispatch 버그도 수정. 라이브 검증: assessment 18/18·findings 12,
+  S3-PUBLIC IAC finding → decision TERRAFORM_PATCH → worker가 실제 patch(changed_paths=[main.tf],
+  base_commit 바인딩) 생성. 상세 인수인계와 계정·토큰·선행조건은 `docs/SESSION-HANDOFF-2026-09-03.md`.
+  Secret 값은 저장소에 두지 않으며, 실제 sandbox 버킷은 E2E용 insecure 상태라 복원이 필요하다.
+
 - 고객 sandbox Terraform component test: 별도 고객-owned 테스트 repository에 최소 secure S3
   baseline, Plan/Apply workflow, canonical plan hash helper와 provider lock을 설치하고, 고객 관리자
   승인 아래 OIDC plan → protected Environment 승인 → saved-plan apply를 성공시켰다. state artifact나
