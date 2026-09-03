@@ -2,6 +2,24 @@
 
 ## Current
 
+- M3 A 조회·검증 reader를 붙여 `GET /deployments/{id}`와 `GET /deployments/{id}/verification`이
+  실제로 답하게 했다(같은 브랜치). `DynamoDbDeploymentFactsReader`는 `DEPLOYMENT#{id}` SK prefix
+  query 한 번으로 승인·거절·dispatch·EVENT item을 모두 읽고 Job과 합쳐 `DeploymentFacts`를 만든다.
+  apply 결론은 D가 재조회로 확정한 `VERIFIED` EVENT item에서만 온다 — dispatch 영수증과 예약된
+  `PENDING_VERIFICATION` item은 "실행 중"일 뿐 결론이 아니다(ADR-0019 §5·§7).
+  `DynamoDbComparisonInputReader`는 두 Assessment를 complete `ComparisonAssessment`로 만든다.
+  **`model_profile_id`/`rubric_version`은 결과에서 파생한다** — Initial Assessment는 그 pin을 item에
+  저장하지 않는 것이 규칙이고(pin은 검증 전용, ADR-0020 §3), 원본 쪽은 파생 말고 근거가 없으며,
+  양쪽을 같은 방법으로 읽어야 비교 축이 한 종류가 된다. 결과의 값은 "이 값으로 평가했다"는 사실이고
+  비교가 필요로 하는 건 그쪽이다. 한 Assessment가 Profile/rubric을 섞고 있으면 비교 전에
+  fail-closed한다. 상태 화면의 검증 판정은 검증 조회와 **같은** reader를 써서 둘이 어긋나지 않게 했다.
+- **`POST /deployments/{id}/approve`는 의도적으로 fail-closed로 남겼다.** 승인 plan reader는 plan과
+  함께 C의 readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan 요약(`refreshed`,
+  `mapped_resource_ids`, destructive 여부)을 `PlanExecutionResult`가 영속화하지 않는다.
+  `PlanReadinessInput`은 D를 producer로 지목하지만 저장 경로가 없다. 같은 이유로 상태 파생의
+  readiness도 `None`이다 — 근거 없이 `READY_FOR_APPROVAL`을 넣으면 C가 막았을 plan(예: destructive
+  변경)이 "승인 대기"로 보인다. **다음 작업은 D가 `PlanExecutionResult`에 plan 요약을 실어 plan
+  facts와 함께 저장하는 것**이고, 그게 되면 plan reader와 approve가 같이 열린다.
 - M3 A Deployment 생성 경로를 실제로 살렸다(`feature/m3-a-deployment-readers`, base=dev). 문서는
   생성이 "durable 배선 완결"이라고 적었지만, composition root가 `DeploymentApiService(sources=...)`
   를 넘기지 않아 `POST /remediations/{id}/deployments`는 프로덕션에서 항상

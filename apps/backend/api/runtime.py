@@ -37,6 +37,8 @@ from apps.backend.repositories import (
     DynamoDbPolicyApprovalRepository,
     DynamoDbRemediationExceptionRepository,
 )
+from apps.backend.repositories.comparison_input import DynamoDbComparisonInputReader
+from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
@@ -106,7 +108,7 @@ def _http_handler() -> JobHttpHandler:
             exceptions=_remediation_exception_reader(),
             now=lambda: datetime.now(UTC),
         ),
-        deployments=_deployment_components(repository),
+        deployments=_deployment_components(repository, reports),
         policy_sources=policy_sources,
         policy_approvals=_policy_approval_components(),
         # 감사 이력은 읽기 전용이고 principal의 customer partition으로만 조회한다.
@@ -118,15 +120,22 @@ def _http_handler() -> JobHttpHandler:
 
 def _deployment_components(
     workflow_repository: DynamoDbAssessmentWorkflowRepository,
+    reports: DynamoDbAssessmentReportStore,
 ) -> DeploymentApiService:
     """Wire the deployment creation and reject paths to their durable stores.
 
     Create and reject persist through the deployment record store and the Job
     store; creation also reads the remediation's stored decision and worker result
-    through the deployment source reader. The approve/get/verification reader
-    assemblers depend on D's live plan and verification data and arrive with the D
-    live adapter integration; until then those routes fail closed. The
-    RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
+    through the deployment source reader. Read and verification are assembled from
+    the deployment's own item prefix and the two immutable Assessments.
+
+    `approve` stays fail-closed: its plan reader must return C's readiness verdict
+    beside the plan, and that verdict needs D's plan summary (`refreshed`,
+    `mapped_resource_ids`, destructive changes), which `PlanExecutionResult` does not
+    persist yet. The status read reports `readiness=None` for the same reason rather
+    than guessing a verdict — see `DynamoDbDeploymentFactsReader`.
+
+    The RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
     is delivered to the Deployment Worker queue.
     """
     try:
@@ -144,11 +153,20 @@ def _deployment_components(
     approval_repository = DynamoDbDeploymentApprovalRepository(
         table_name=table_name, transaction_client=boto3.client("dynamodb")
     )
+    comparisons = DynamoDbComparisonInputReader(reports)
     return DeploymentApiService(
         approvals=DeploymentApprovalService(approval_repository),
         sources=DynamoDbDeploymentSourceReader(
             _metadata_table(), commits=_deployment_commit_resolver()
         ),
+        facts=DynamoDbDeploymentFactsReader(
+            _metadata_table(),
+            deployments=deployment_repository,
+            jobs=workflow_repository,
+            # 상태 화면의 검증 판정과 검증 조회가 같은 입력을 쓰도록 같은 reader를 넘긴다.
+            comparisons=comparisons,
+        ),
+        comparisons=comparisons,
         deployments=deployment_repository,
         jobs=workflow_repository,
         outbox_dispatcher=OutboxDispatcher(repository=workflow_repository, dispatcher=dispatcher),

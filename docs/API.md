@@ -162,19 +162,23 @@ adapter와 customer Lambda runtime composition은 아직 연결 대상이다. �
 
 ## M3 approved-apply and verification endpoints
 
-ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두 `Accepted`다. 아래 A endpoint는
-구현·배선됐다. `POST /remediations/{id}/deployments`와 `POST /deployments/{id}/reject`는 durable
-저장으로 완결 배선됐고, `POST /deployments/{id}/approve`·`GET /deployments/{id}`·
-`GET /deployments/{id}/verification`은 handler에 노출되나 D live plan·검증 데이터를 조립하는 reader
-(승인 plan reader, DeploymentFacts reader, 비교 입력 reader)가 D live adapter 통합에서 오므로 그 전에는
-fail-closed한다. `GET /audit-events`는 구현·배선됐다(아래 "Admin 감사 이력 조회" 참조).
+ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두 `Accepted`다.
+`POST /remediations/{id}/deployments`, `POST /deployments/{id}/reject`, `GET /deployments/{id}`,
+`GET /deployments/{id}/verification`은 durable 저장으로 완결 배선됐다.
+`POST /deployments/{id}/approve`만 fail-closed로 남아 있다 — 승인 plan reader는 plan과 함께 C의
+readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan 요약(`refreshed`,
+`mapped_resource_ids`, destructive 여부)을 `PlanExecutionResult`가 아직 영속화하지 않는다. 같은
+이유로 `GET /deployments/{id}`의 파생 상태는 readiness 단계를 건너뛰고 Job의 current step으로
+떨어진다. 없는 근거로 `WAITING_APPROVAL`을 표시하지 않는다.
+`GET /audit-events`는 구현·배선됐다(아래 "Admin 감사 이력 조회" 참조).
 
 | Method | Path | 상태 | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/remediations/{remediationId}/deployments` | 배선됨 | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
-| `GET` | `/deployments/{deploymentId}` | 배선됨(facts reader 대기) | plan 요약, readiness 사유, 승인 상태, apply run reference, 검증 상태 조회 |
-| `GET` | `/deployments/{deploymentId}/verification` | 배선됨(비교 입력 reader 대기) | Post-Deploy Verification의 before/after 비교 projection 조회 |
+| `GET` | `/deployments/{deploymentId}` | 배선됨 | plan 요약, 승인 상태, apply/검증 진행 상태 조회. readiness 단계는 plan 요약 영속화 전까지 표시하지 않는다 |
+| `GET` | `/deployments/{deploymentId}/verification` | 배선됨 | Post-Deploy Verification의 before/after 비교 projection 조회 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
+| `POST` | `/deployments/{deploymentId}/approve` | fail-closed | 승인 plan reader가 D의 plan 요약 영속화를 기다린다 |
 | `GET` | `/audit-events` | 배선됨 | Admin 전용 감사 이력 조회 |
 
 - `deployment_id`는 Backend가 발급한다. Client는 Deployment를 만들 때 ID, 상태, commit, plan을
@@ -206,8 +210,12 @@ fail-closed한다. `GET /audit-events`는 구현·배선됐다(아래 "Admin 감
 - 검증 결과는 원 Assessment를 덮어쓰지 않는다. Post-Deploy Verification은 `phase`,
   `source_assessment_id`, `deployment_id`를 가진 **새 `assessment_id`**로 조회된다.
 
-경로와 wire shape는 이 A endpoint 구현에서 확정됐다. D live adapter 통합 시 reader 조립기를 붙여
-approve/get/verification의 fail-closed를 해소한다.
+경로와 wire shape는 이 A endpoint 구현에서 확정됐다.
+
+비교에 쓰이는 `model_profile_id`/`rubric_version`은 두 Assessment의 **결과에서 파생한다**. Initial
+Assessment는 그 pin을 item에 저장하지 않으므로(pin은 검증 Assessment 전용 — ADR-0020 §3) 원본 쪽은
+파생 말고는 근거가 없고, 양쪽을 같은 방법으로 읽어야 비교 축이 한 종류가 된다. 한 Assessment의
+결과가 서로 다른 Profile/rubric을 섞고 있으면 비교 이전에 fail-closed한다.
 
 ### Admin 감사 이력 조회 (`GET /audit-events`)
 
