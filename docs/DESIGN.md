@@ -11,8 +11,11 @@ Customer policy upload
 → customer-scoped S3 original
 → validation + format-specific parser
 → normalized policy artifact
-→ Control/Rule review and approval
-→ version-pinned Policy Profile
+→ extraction request + Policy Authoring Queue
+→ Policy Authoring Worker (Governance Control Catalog boundary)
+→ Control/Rule review and partial approval
+→ Approved Rule Registry + version-pinned Policy Profile
+→ Assessment pins the Profile version → Policy Context
 
 Natural-language request
 → Parent Router Lambda (Policy Q&A + intent/scope proposal; sync, max 30s)
@@ -66,6 +69,14 @@ Customer Workload (EC2 / RDS / ALB / S3)
   공통 Policy Document로 정규화한다. 원본 업로드만으로 Assessment에 활성화하지 않으며, 사람이
   승인한 Source/Rule/Profile version만 Policy Context가 사용한다. 상세 경계는
   `docs/POLICY_INGESTION.md`가 정본이다.
+- Policy authoring: 정규화된 문서에서 Rule 후보를 만드는 것은 전용 큐와 전용 IAM Role을 갖는
+  Policy Authoring Worker다. 제품이 평가할 수 있는 범위는 code-owned Governance Control
+  Catalog가 정의하며, AI는 그 경계 안에서 제안만 하고 판정·심각도·점수를 만들지 않는다. 정책
+  원문을 읽는 권한과 고객 AWS 계정을 읽는 권한을 한 Role에 두지 않는다. 상세 결정은 ADR-0023이
+  정본이다.
+- Policy runtime: Assessment는 고객 partition의 **승인된** Rule만 평가한다. 어떤 Profile을 쓸 수
+  있는지는 Policy Catalog가 정하고(배포 구성이 아니다), 어떤 판본을 쓸지는 Assessment 생성 시점에
+  고정한다.
 - Async execution: Assessment, Remediation, Deployment Worker는 역할별 SQS Standard
   Queue에서 `WorkflowTask`를 받아 실행한다. GitHub Actions의 Plan/Apply 완료 Event는
   EventBridge가 Deployment Queue로 전달한다.
@@ -73,7 +84,7 @@ Customer Workload (EC2 / RDS / ALB / S3)
 
 ## Responsibility boundary
 
-Code는 Customer/AWS Account/Repository/Policy Profile 범위, Tool 권한, 출력 스키마, 점수 범위와 (도입 시) Score Anchor, Evidence reference, 상태 저장, Coverage를 검증한다. AI Evaluator는 적용 Rule, 필요한 Evidence, 판정, Severity, 0–100 점수, Rationale 및 Source Score/Risk를 선택한다. 반복 실행 편차가 목표인 ±10점을 지속적으로 넘을 때에만 고정 Anchor 집합에서 점수를 선택하도록 전환한다.
+Code는 Customer/AWS Account/Repository/Policy Profile 범위, Tool 권한, 출력 스키마, 점수 범위와 (도입 시) Score Anchor, Evidence reference, 상태 저장, Coverage를 검증한다. AI Evaluator는 승인된 Rule 하나에 대해 판정(status), 0–100 점수, Rationale, 그리고 허용된 Evidence 부분집합만 선택한다. **적용 Rule은 Profile allow-list가, Severity는 승인된 Rule이, Perspective·버전·Model Profile은 Runtime이 정하며 AI가 고르지 않는다** (`apps/backend/assessment/bedrock.py`). AWS Actual 관점은 Rule의 `required_evidence`가 가리키는 문서 경로를 모델 호출 전에 검사해 근거가 없으면 Code가 `INSUFFICIENT_EVIDENCE`를 기록한다(ADR-0023 §2). 반복 실행 편차가 목표인 ±10점을 지속적으로 넘을 때에만 고정 Anchor 집합에서 점수를 선택하도록 전환한다.
 
 Parent Orchestrator Agent는 자연어 요청의 의도와 후보 selector를 해석한다. 정책 질의는
 Parent 안에서 Policy Q&A로 처리하고, 실행 의도는 Assessment, Remediation, Deployment 중
@@ -145,7 +156,24 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
 - `TerraformDeploymentRole`: 제한된 Infrastructure write
 - 고객 AWS Account의 Read-only Role AssumeRole은 customer-role 연결마다 생성한 랜덤
   `ExternalId`를 trust policy와 요청 양쪽에서 일치시켜 confused deputy를 방지하며, 임시
-  자격증명은 만료 60초 전까지만 메모리에 재사용한다.
+  자격증명은 만료 60초 전까지만 메모리에 재사용한다. 자격증명 획득은 서비스별 read adapter가
+  공유하는 한 곳(`AssumeRoleReadSession`)에만 있다 — Resource 유형을 늘리는 것이 두 번째, 더 약한
+  자격증명 경로를 만들 수 없어야 한다.
+- Actual 상태 read는 유형별 adapter(S3/EC2/RDS/ALB)로 나뉘고 `resource_type` 분배는
+  `ResourceTypeRoutingAwsResourceTool`의 등록 목록으로만 이뤄진다. 등록되지 않은 유형은 빈 결과가
+  아니라 실패다. **Assessment Worker와 Deployment Worker는 같은 factory
+  (`build_actual_resource_tool`)로 이 도구를 만든다** — 배포 후 Actual 재조회(ADR-0020)가 평가와
+  다른 유형 집합을 읽으면 검증이 어떤 유형을 조용히 건너뛴다. `DeploymentTarget.resource_types`도
+  같은 어휘(`AWS::S3::Bucket` 형태)로 검증한다. Terraform type 이름(`aws_s3_bucket`)은 거부한다.
+- adapter는 응답을 필드 allow-list로 투영하므로 `UserData`, key 이름, tag 값, `MasterUsername`,
+  `Endpoint`처럼 평가 근거가 아닌 값은 근거 문서·모델 입력·저장 evidence 어디에도 들어가지 않는다.
+  목록은 Rule이 인용하는 필드와 정확히 같으며, 어떤 Rule도 묻지 않는 상태(MultiAZ, 백업 보존, idle
+  timeout)도 넣지 않는다. 배포는 설정에 선언된 유형의 adapter만 만들고, 고객 read Role에는 그 유형의
+  read action만 필요하다. RDS의 접근 범위 Rule은 연결된 VPC 보안 그룹의 실제 ingress가 근거이므로
+  RDS adapter가 `rds:DescribeDBInstances`와 `ec2:DescribeSecurityGroups`를 함께 사용한다.
+- 목록 조회는 continuation token을 끝까지 따라가며, 페이지 상한을 넘으면 부분 목록을 돌려주지 않고
+  실패한다. 한 리소스의 부분 응답(인스턴스가 붙인 볼륨 중 일부만 돌아온 경우)도 거부한다. 잘린
+  근거는 준수 근거와 구별되지 않는다.
 - `GitHubWorkflowEventRole`: GitHub Actions OIDC에서 Plan/Apply 완료 Event만 EventBridge에
   게시하는 최소 권한
 - 고객 관리자는 첫 배포 전에 제공된 bootstrap stack을 한 번 실행해 GitHub OIDC deployment role,
@@ -220,8 +248,9 @@ observation은 고객 경계에 두고 공개 release evidence에는 aggregate�
 - 역할 경계를 넘는 API·Schema 변경은 해당 Contract의 Producer와 Consumer Owner가 검토한다.
 - 구현체가 없지만 Contract가 확정된 의존성은 Fixture/Mock으로 병렬 개발한다.
 - 다른 역할의 기능은 작업 Branch에 직접 의존하지 않고, `dev`에 Merge된 Contract/구현을 기준으로 통합한다.
-- `fixtures/rules/`는 개발 seed다. 고객 정책 기능을 구현하는 Agent는 정적 Fixture를 운영 입력으로
-  연결하지 말고 `docs/POLICY_INGESTION.md`의 A/B/C 책임과 승인 Gate를 먼저 확인한다.
+- `fixtures/rules/`는 개발 seed이자 bootstrap 입력이다. Runtime의 정본은 고객 partition의 승인된
+  Rule이며(ADR-0023), M1 Worker는 커밋된 Registry를 읽지 않는다. M0 synthetic 경로만 기존 fixture
+  방식을 유지한다.
 
 ## Data model
 

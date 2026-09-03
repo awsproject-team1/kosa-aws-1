@@ -6,6 +6,8 @@ Rule 정의 파일은 저장소에 커밋되지만 정책 원문은 아니다 (A
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from packages.contracts import (
     AssessmentPhase,
     PolicyControl,
@@ -14,6 +16,7 @@ from packages.contracts import (
     PolicyRuleReference,
     PolicySource,
     PolicySourceKind,
+    RuleEvaluationType,
     RuleSeverity,
     SourceReference,
 )
@@ -48,7 +51,14 @@ def rule_reference_from_dict(data: object) -> PolicyRuleReference:
 
 
 def rule_from_dict(data: object) -> PolicyRule:
+    """Restore one Rule from any stored form: fixture JSON, DynamoDB item, or candidate item.
+
+    실행 의미 필드는 optional이다 — legacy fixture Rule에는 없고, authoring이 만든 Rule에는 있다.
+    복원 경로를 여기 하나로 모아 두어야, 새 필드를 추가했는데 어느 한 경로만 그것을 잃어버려
+    승인된 Rule이 Runtime에서 legacy Rule처럼 평가되는 사고가 생기지 않는다.
+    """
     fields = _require_mapping(data, "policy rule")
+    evaluation_type = fields.get("evaluation_type")
     return PolicyRule(
         rule_id=fields["rule_id"],
         version=fields["version"],
@@ -62,7 +72,38 @@ def rule_from_dict(data: object) -> PolicyRule:
             source_reference_from_dict(reference)
             for reference in _require_sequence(fields["source_references"])
         ),
+        control_key=_optional_str(fields, "control_key"),
+        control_catalog_version=_optional_str(fields, "control_catalog_version"),
+        evaluation_type=(None if evaluation_type is None else RuleEvaluationType(evaluation_type)),
+        applicability_semantics=_optional_str(fields, "applicability_semantics"),
+        required_evidence=_optional_str_tuple(fields, "required_evidence"),
+        optional_evidence=_optional_str_tuple(fields, "optional_evidence"),
+        evaluation_rubric=_optional_str(fields, "evaluation_rubric"),
+        severity_guidance=_optional_str(fields, "severity_guidance"),
+        exception_semantics=_optional_str(fields, "exception_semantics"),
+        compensating_control_semantics=_optional_str(fields, "compensating_control_semantics"),
     )
+
+
+def _optional_str(fields: Mapping[str, object], name: str) -> str | None:
+    """Read an optional string, treating an absent key and a stored null the same."""
+    value = fields.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    return value
+
+
+def _optional_str_tuple(fields: Mapping[str, object], name: str) -> tuple[str, ...]:
+    value = fields.get(name)
+    if value is None:
+        return ()
+    entries = _require_sequence(value)
+    for entry in entries:
+        if not isinstance(entry, str):
+            raise TypeError(f"{name} items must be strings")
+    return tuple(entries)  # type: ignore[arg-type]
 
 
 def profile_from_dict(data: object) -> PolicyProfile:
@@ -99,13 +140,14 @@ def remediation_scope_from_dict(data: object) -> RemediationRuleScope:
     )
 
 
-def _require_mapping(data: object, field_name: str) -> dict[str, object]:
-    if not isinstance(data, dict):
+def _require_mapping(data: object, field_name: str) -> Mapping[str, object]:
+    """Accept any mapping so DynamoDB items and committed JSON share one restore path."""
+    if not isinstance(data, Mapping):
         raise TypeError(f"{field_name} must be an object")
     return data
 
 
 def _require_sequence(data: object) -> list[object]:
-    if not isinstance(data, list):
+    if not isinstance(data, (list, tuple)):
         raise TypeError("expected a list of values")
-    return data
+    return list(data)

@@ -3,7 +3,7 @@
 import json
 from typing import Protocol
 
-from packages.contracts import WorkflowCommand, WorkflowTask
+from packages.contracts import PolicyAuthoringRequest, WorkflowCommand, WorkflowTask
 
 
 class SqsClient(Protocol):
@@ -105,3 +105,28 @@ def _require_configuration(client: SqsClient, queue_url: str) -> None:
 def _require_task(task: WorkflowTask) -> None:
     if not isinstance(task, WorkflowTask):
         raise TypeError("task must be a WorkflowTask")
+
+
+class SqsPolicyAuthoringDispatcher:
+    """Publish one policy authoring request to the authoring worker queue.
+
+    payload는 `PolicyAuthoringRequest`뿐이다 — 정책 텍스트도 S3 key도 담지 않는다. worker는
+    보호된 정규화 artifact를 자기 권한으로 다시 읽는다. 텍스트를 payload에 담으면 queue와 DLQ와
+    queue 로그가 전부 정책 원문의 사본이 된다.
+
+    이 dispatcher는 Assessment/Remediation/Deployment queue와 분리된 별도 queue를 쓴다. 같은
+    queue를 나눠 쓰면 authoring worker의 권한이 Assessment worker의 메시지에도 닿는다.
+    """
+
+    def __init__(self, client: SqsClient, *, queue_url: str) -> None:
+        _require_configuration(client, queue_url)
+        self._client = client
+        self._queue_url = queue_url
+
+    def enqueue(self, request: PolicyAuthoringRequest) -> None:
+        if not isinstance(request, PolicyAuthoringRequest):
+            raise TypeError("request must be a PolicyAuthoringRequest")
+        self._client.send_message(
+            QueueUrl=self._queue_url,
+            MessageBody=json.dumps(request.to_dict(), separators=(",", ":")),
+        )

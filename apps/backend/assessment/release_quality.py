@@ -32,6 +32,13 @@ from packages.contracts.model_profiles import ModelProfileRole
 OBSERVATION_SCHEMA_VERSION = "m4-golden-observations-v1"
 REPORT_SCHEMA_VERSION = "m4-golden-release-report-v1"
 RELEASE_PHASE = AssessmentPhase.POST_DEPLOY_VERIFICATION
+
+#: 릴리스 Golden이 요구하는 Perspective. legacy fixture Rule이 만드는 집합 그대로다.
+RELEASE_PERSPECTIVES = (
+    EvaluationPerspective.IAC,
+    EvaluationPerspective.AWS_ACTUAL,
+    EvaluationPerspective.DRIFT,
+)
 REQUIRED_REPETITIONS = 5
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
@@ -197,10 +204,13 @@ def load_release_golden_cases(
         raise GoldenReleaseQualityError(f"release Golden cases are invalid: {error}") from error
 
     coordinates = {(case.rule_id, case.case.perspective) for case in cases}
+    # 릴리스 Golden은 legacy fixture Rule을 덮으며, 그 Rule들은 정확히 이 세 Perspective를
+    # 만든다. `EvaluationPerspective` 전체로 두면 Perspective가 하나 추가될 때마다 이 릴리스
+    # 게이트가 존재하지 않는 좌표를 요구한다 — MANUAL은 승인된 MANUAL Rule에서만 생긴다.
     expected = {
         (rule.rule_id, perspective)
         for rule in manifest.rules
-        for perspective in EvaluationPerspective
+        for perspective in RELEASE_PERSPECTIVES
     }
     if coordinates != expected or len(cases) != len(expected):
         raise GoldenReleaseQualityError(
@@ -333,9 +343,11 @@ def evaluate_golden_release_quality(
             )
         )
 
+    # 이 릴리스 게이트가 덮는 Perspective만 집계한다. 사례가 없는 Perspective를 넣으면 평균의
+    # 분모가 0이 되고, 그 실패는 "품질이 나쁘다"가 아니라 "그 좌표가 애초에 없다"는 뜻이다.
     perspective_reports = tuple(
         _perspective_report(perspective, tuple(case_reports))
-        for perspective in EvaluationPerspective
+        for perspective in RELEASE_PERSPECTIVES
     )
     all_observations = tuple(observed_by_key[key] for key in sorted(observed_by_key))
     status_accuracy = _ratio(

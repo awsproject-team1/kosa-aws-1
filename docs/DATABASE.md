@@ -43,15 +43,19 @@ The primary key keeps a customer's records together while allowing entity-prefix
 | --- | --- | --- | --- |
 | Customer | `CUSTOMER#{customer_id}` | `PROFILE` | Customer metadata and configuration |
 | Repository | `CUSTOMER#{customer_id}` | `REPOSITORY#{repository_id}` | Approved GitHub repository and scope |
-| Policy profile | `CUSTOMER#{customer_id}` | `POLICY_PROFILE#{policy_profile_id}` | Allowed policy/rule boundary |
+| Policy profile (current pointer) | `CUSTOMER#{customer_id}` | `POLICY_PROFILE#{policy_profile_id}` | 새 Assessment가 고를 현재 판본. `current_version`을 함께 담고, 교체는 `expected_current_version` 조건부 write로 보호된다 |
+| Policy profile (version history) | `CUSTOMER#{customer_id}` | `POLICY_PROFILE#{policy_profile_id}#VERSION#{version}` | Immutable 판본. 판본을 고정한 Assessment가 나중에 직접 읽는다 |
 | Policy source | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}` | Policy artifact identity, version, hash |
 | Policy ingestion | `CUSTOMER#{customer_id}` | `POLICY_INGESTION#{source_id}#VERSION#{version}` | Upload validation, parser/normalization status and immutable Artifact references |
-| Policy candidate extraction | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#CANDIDATES` | C가 넘긴 후보 규칙(전체 정의)과 extractor 메타. 승인 read 경로가 읽는다. 승인 전 lifecycle |
-| Rule metadata | `CUSTOMER#{customer_id}` | `RULE#{rule_id}#VERSION#{version}` | Published Rule and source reference (candidate lifecycle is managed before publication) |
+| Policy authoring request | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#REQUEST` | 추출 요청의 durable record. `authoring_run_id`와 최초 `requested_at`을 고정해 worker 재시도가 같은 실행이 되게 한다 |
+| Policy authoring manifest | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#AUTHORING` | 한 추출 실행의 상태·개수·`result_digest`·provenance. **Review와 Approval은 `READY`만 읽는다** |
+| Policy authoring result | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#{CANDIDATE\|UNSUPPORTED\|REJECTED}#{digest}` | 결과 하나당 item 하나. key는 Requirement의 결정적 digest이므로 worker 재시도가 같은 후보를 두 번 만들지 않는다 |
+| Policy candidate extraction (legacy) | `CUSTOMER#{customer_id}` | `POLICY_SOURCE#{source_id}#VERSION#{version}#CANDIDATES` | authoring 이전 경로가 쓴 단일 item. manifest가 없는 판본에만 남아 있다 |
+| Rule metadata | `CUSTOMER#{customer_id}` | `RULE#{rule_id}#VERSION#{version}` | 승인된 Rule. `entity_type = POLICY_RULE`과 `lifecycle = APPROVED`를 명시하며, Catalog는 그 둘을 만족하는 item만 Rule로 인정한다 |
 | Golden dataset case | `CUSTOMER#{customer_id}` | `GOLDEN_CASE#{case_id}#RUBRIC#{rubric_version}` | Expected evaluation range and artifact reference |
 | Job | `CUSTOMER#{customer_id}` | `JOB#{job_id}` | Async workflow state and current step |
 | Job checkpoint | `CUSTOMER#{customer_id}` | `JOB#{job_id}#CHECKPOINT#{revision}` | Immutable resumable step, next resource, retry metadata, Artifact references |
-| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, `phase`, optional verification provenance (`source_assessment_id`/`deployment_id`) and reused-scope pin (`model_profile_id`/`rubric_version`/`policy_profile_version`); report projection exposes score and coverage |
+| Assessment | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}` | Assessment metadata, `phase`, **모든 phase가 갖는** `policy_profile_version`, optional verification provenance (`source_assessment_id`/`deployment_id`)와 verification 전용 pin(`model_profile_id`/`rubric_version`); report projection exposes score and coverage |
 | Assessment evaluation plan | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#PLAN` | Immutable planned applicable Resource × Rule × Perspective **set** (`planned_coordinates`), its count, and the completion counter |
 | Assessment result | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#RESULT#{resource_id}#RULE#{rule_id}#PERSPECTIVE#{perspective}` | IaC, Actual, or Drift Resource × Rule judgment, evidence, assessed commit, and evaluation time |
 | Finding | `CUSTOMER#{customer_id}` | `ASSESSMENT#{assessment_id}#FINDING#{finding_id}` | Actionable result, severity, and copied assessed commit/evaluation time |
@@ -92,8 +96,10 @@ global Job lookup as an authorization shortcut.
 
 M0의 `POST /assessments`는 `ASSESSMENT#{assessment_id}`, 연결된 `JOB#{job_id}`,
 `OUTBOX#JOB#{job_id}`를 DynamoDB transaction으로 함께 저장한다. Assessment 레코드는
-`repository_id`, `policy_profile_id`, `job_id`를 영속화하므로 Worker는 최소 Queue payload만으로도
-평가 selector를 복원한다. Outbox는 `GSI2PK = OUTBOX#PENDING`으로 pending 전송을 조회하며,
+`repository_id`, `policy_profile_id`, `policy_profile_version`, `job_id`를 영속화하므로 Worker는
+최소 Queue payload만으로도 평가 selector를 복원한다. 판본이 없는 record는 최신 pointer로 조용히
+대체하지 않고 실패한다 — 그렇게 대체하면 실행 도중 게시된 새 Profile이 이미 계획된 평가의 Rule
+집합을 바꾸고 그 사실이 어디에도 남지 않는다(ADR-0020 amendment). Outbox는 `GSI2PK = OUTBOX#PENDING`으로 pending 전송을 조회하며,
 API는 커밋 직후 해당 task의 SQS 전송을 즉시 시도하고 성공한 경우에만 `DISPATCHED`로 전이한다.
 SQS 또는 상태 갱신 실패는 `PENDING`으로 남아, Outbox sweeper가 다음 실행에서 at-least-once로
 재시도한다.
@@ -191,6 +197,17 @@ D PR이 각자 구현하되 같은 문장을 정본으로 인용한다.
   `DeploymentVerificationStore`가 같은 `#EVENT#{run_id}` item을 검증된 `WorkflowRunFacts`로
   `status=VERIFIED`로 확정한다. 하나라도 다르면 재시도 없이 차단한다(MANUAL_REVIEW로 파생).
   예약 item이 없으면(`run_reference` 부재) Worker는 `APPLY_COMPLETED`를 fail-closed한다.
+- **A / 검증 시작 (구현됨, ADR-0020 §1·§7):** D Worker가 run facts를 `VERIFIED`로 확정한 직후
+  `PostDeployVerificationService`가 검증 Assessment를 시작한다. 원 Assessment의 `ASSESSMENT#` item
+  (Repository·`policy_profile_id`·`policy_profile_version`), `#PLAN` item의 `planned_coordinates`,
+  결과 item의 `model_profile_id`/`rubric_version`을 읽어 scope를 pin하고, 다음 네 write를 **하나의
+  조건부 transaction**으로 쓴다(`DynamoDbPostDeployVerificationStore`): 새 `ASSESSMENT#{verification_id}`
+  item(`attribute_not_exists(SK)`, `phase=POST_DEPLOY_VERIFICATION`·`source_assessment_id`·
+  `deployment_id`·pin 3종), Deployment `JOB#{job_id}`의 다음 revision(`#revision = :expected`,
+  write-once `assessment_id`), `OUTBOX#JOB#{job_id}`의 `ASSESS_RESOURCE` task(overwrite), 그리고
+  `DEPLOYMENT#{deployment_id}`의 `verification_assessment_id`(`attribute_not_exists`). 조건 실패는
+  같은 apply 완료의 재전달이며 record의 기존 id를 돌려준다. `#PLAN` item은 검증 Assessment Worker가
+  원 계획 집합으로 만든다.
 - **live plan 경로:** `PlanRequestPort`는 승인 target의 `terraform-plan.yml`만 dispatch하고,
   exact commit과 deterministic display title로 GitHub Actions run을 재조회·완료 확인한 뒤 GitHub
   API artifact ZIP의 canonical plan/state/saved binary를 검증해 저장한다. customer secret과

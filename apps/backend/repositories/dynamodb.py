@@ -462,6 +462,8 @@ def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
         "job_id": assessment.job_id,
         "repository_id": assessment.repository_id,
         "policy_profile_id": assessment.policy_profile_id,
+        # 판본은 모든 phase가 갖는다. Runtime은 latest pointer를 따라가지 않고 이 값을 읽는다.
+        "policy_profile_version": assessment.policy_profile_version,
         "phase": assessment.phase.value,
         "status": "QUEUED",
         "GSI3PK": f"REPOSITORY#{assessment.repository_id}",
@@ -471,9 +473,9 @@ def _item_from_assessment(assessment: Assessment) -> dict[str, object]:
         item["source_assessment_id"] = assessment.source_assessment_id
     if assessment.deployment_id is not None:
         item["deployment_id"] = assessment.deployment_id
-    # Only a verification pins its evaluation scope; an Initial Assessment resolves
-    # the Model Profile from the approved Worker configuration (ADR-0020 §3).
-    for name in ("model_profile_id", "rubric_version", "policy_profile_version"):
+    # Only a verification pins the Model Profile and rubric it reuses; an Initial
+    # Assessment resolves those from the approved Worker configuration (ADR-0020 §3).
+    for name in ("model_profile_id", "rubric_version"):
         value = getattr(assessment, name)
         if value is not None:
             item[name] = value

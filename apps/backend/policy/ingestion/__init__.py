@@ -30,6 +30,11 @@ from apps.backend.policy.ingestion.pipeline import (
     normalize_upload,
     source_reference_for,
 )
+from apps.backend.policy.ingestion.storage_keys import (
+    normalized_artifact_id,
+    normalized_object_key,
+    original_object_key,
+)
 
 __all__ = [
     "ApprovalRejectedError",
@@ -47,6 +52,9 @@ __all__ = [
     "format_for_media_type",
     "normalize_text",
     "normalize_upload",
+    "normalized_artifact_id",
+    "normalized_object_key",
+    "original_object_key",
     "publish_profile",
     "source_reference_for",
     "text_sha256",

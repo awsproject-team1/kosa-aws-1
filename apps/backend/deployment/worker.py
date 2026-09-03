@@ -10,6 +10,9 @@ Command -> port (ADR-0019, canonical ports in apps/backend/deployment/ports.py):
 - PLAN_COMPLETED  -> ApplyDispatchPort.dispatch_apply (workflow_dispatch only, section 5)
 - APPLY_COMPLETED -> WorkflowRunReader.read_run then   (authoritative run facts, section 7)
                      ActualRereadPort.reread_actual    (post-apply Actual reread, ADR-0020)
+                     VerificationStarter.start_verification
+                                                       (queue the Post-Deploy Verification
+                                                        Assessment, ADR-0020 section 1/7)
 
 Two facts are never trusted as state:
 - the queue payload (WorkflowTask) - durable work is reloaded by (job_id, revision)
@@ -177,6 +180,17 @@ class DeploymentVerificationStore(Protocol):
     ) -> None: ...
 
 
+class VerificationStarter(Protocol):
+    """Create and queue the Post-Deploy Verification Assessment for one verified apply.
+
+    A 소유 경계다(ADR-0020 §7). D Worker는 run이 승인 사실과 대조되어 성공으로 확정된 뒤에만
+    이것을 호출하고, 반환값은 새 검증 Assessment의 id다. 같은 apply 완료가 재전달되면 이미
+    시작된 Assessment의 id를 돌려주어야 한다(멱등).
+    """
+
+    def start_verification(self, *, work: DeploymentWork) -> str: ...
+
+
 class DeploymentWorker:
     """Drive one stored deployment through exactly one injected D port per command."""
 
@@ -191,6 +205,7 @@ class DeploymentWorker:
         plan_store: DeploymentPlanStore,
         run_store: DeploymentRunStore,
         verification_store: DeploymentVerificationStore,
+        verification_starter: VerificationStarter,
     ) -> None:
         dependencies = (
             work_repository,
@@ -201,6 +216,7 @@ class DeploymentWorker:
             plan_store,
             run_store,
             verification_store,
+            verification_starter,
         )
         if any(dependency is None for dependency in dependencies):
             raise TypeError("all deployment worker dependencies are required")
@@ -212,6 +228,7 @@ class DeploymentWorker:
         self._plan_store = plan_store
         self._run_store = run_store
         self._verification_store = verification_store
+        self._verification_starter = verification_starter
 
     def handle(
         self, task: WorkflowTask
@@ -317,6 +334,10 @@ class DeploymentWorker:
             sync_target=work.sync_target,
         )
         self._verification_store.put_verification_if_absent(work=work, facts=facts)
+        # 마지막에 검증 Assessment를 시작한다. 이 호출이 Job revision을 올리므로, 앞 단계가
+        # 실패한 재시도는 여전히 같은 revision으로 work를 다시 읽을 수 있고, 여기까지 온 재시도는
+        # starter가 이미 시작된 Assessment id를 돌려주어 흡수된다.
+        self._verification_starter.start_verification(work=work)
         return facts
 
     @staticmethod

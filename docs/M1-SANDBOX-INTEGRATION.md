@@ -79,6 +79,48 @@ For one S3 target, the configuration JSON shape is:
 ]
 ```
 
+To evaluate more than one resource, or a type other than S3, replace `s3_bucket_id`
+with an explicit `resources` list. A target declares its resources one way or the
+other, never both:
+
+```json
+[
+  {
+    "customer_id": "<Cognito customer claim>",
+    "repository_id": "<product repository ID>",
+    "policy_profile_id": "profile-multiresource-baseline",
+    "commit_sha": "<reviewed 40-character Git commit SHA>",
+    "github_repository": "<owner>/<repository>",
+    "github_token_secret_id": "<GitHub installation-token Secret ARN>",
+    "aws_account_id": "<12-digit customer AWS account ID>",
+    "aws_read_role_arn": "<exact customer cross-account read Role ARN>",
+    "aws_external_id_secret_id": "<External ID Secret ARN>",
+    "resources": [
+      {"resource_type": "AWS::S3::Bucket", "resource_id": "<approved bucket name>"},
+      {"resource_type": "AWS::EC2::Instance", "resource_id": "<i-…>"},
+      {"resource_type": "AWS::RDS::DBInstance", "resource_id": "<DB instance identifier>"},
+      {
+        "resource_type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "resource_id": "<load balancer ARN>"
+      }
+    ]
+  }
+]
+```
+
+`resource_type` must be one of those four; a type without an Actual read adapter is
+rejected before deployment. The public Assessment API accepts only the Repository and
+Policy Profile. Its Worker expands that request over every resource in this protected
+list and stores one complete immutable evaluation plan. An internal or legacy Initial Assessment
+record may narrow evaluation by naming one approved `resource_type`/`resource_id`; a
+resource outside the list is refused at read time. The cross-account read Role therefore
+needs read permission for every configured type (for example
+`ec2:DescribeInstances`/`DescribeVolumes`/`DescribeSecurityGroups`,
+`rds:DescribeDBInstances` plus `ec2:DescribeSecurityGroups` for the ingress rules of
+attached RDS VPC security groups, and
+`elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeLoadBalancerAttributes`)
+and nothing more.
+
 `github_repository` is a canonical GitHub path identity, not a URL. The owner is
 1–39 ASCII alphanumeric characters with optional single internal hyphens. The
 repository is 1–100 ASCII letters, digits, `.`, `_`, or `-`, includes at least

@@ -209,6 +209,83 @@ class MappedResourceIdsContractTest(unittest.TestCase):
         document = {"resource_changes": [self._change(after={"bucket": None})]}
         self.assertEqual(mapped_resource_ids(document), ())
 
+    def test_projects_the_ec2_instance_id(self) -> None:
+        document = {
+            "resource_changes": [
+                self._change(
+                    resource_type="aws_instance",
+                    address="aws_instance.demo",
+                    after={"id": "i-0123456789abcdef0", "associate_public_ip_address": False},
+                )
+            ]
+        }
+        self.assertEqual(mapped_resource_ids(document), ("i-0123456789abcdef0",))
+
+    def test_a_created_ec2_instance_has_no_id_to_project(self) -> None:
+        """생성 중인 인스턴스의 `id`는 computed다. 추측하지 않는다 — Finding도 아직 없다."""
+        document = {
+            "resource_changes": [
+                self._change(
+                    resource_type="aws_instance",
+                    address="aws_instance.demo",
+                    after={"associate_public_ip_address": False},
+                )
+            ]
+        }
+        self.assertEqual(mapped_resource_ids(document), ())
+
+    def test_projects_the_rds_declared_identifier(self) -> None:
+        document = {
+            "resource_changes": [
+                self._change(
+                    resource_type="aws_db_instance",
+                    address="aws_db_instance.demo",
+                    after={"identifier": "demo-db-001", "publicly_accessible": False},
+                )
+            ]
+        }
+        self.assertEqual(mapped_resource_ids(document), ("demo-db-001",))
+
+    def test_projects_one_alb_arn_from_the_load_balancer_and_its_listener(self) -> None:
+        """리스너는 부모를 ARN으로만 지목한다. 두 리소스가 한 어휘로 모여야 한다."""
+        arn = (
+            "arn:aws:elasticloadbalancing:us-east-1:123456789012:"
+            "loadbalancer/app/demo-alb/50dc6c495c0c9188"
+        )
+        document = {
+            "resource_changes": [
+                self._change(
+                    resource_type="aws_lb",
+                    address="aws_lb.demo",
+                    after={"arn": arn, "name": "demo-alb"},
+                ),
+                self._change(
+                    resource_type="aws_lb_listener",
+                    address="aws_lb_listener.https",
+                    after={"load_balancer_arn": arn, "protocol": "HTTPS"},
+                ),
+            ]
+        }
+        self.assertEqual(mapped_resource_ids(document), (arn,))
+
+    def test_ebs_and_security_group_resources_stay_outside_the_allow_list(self) -> None:
+        """볼륨/SG id는 Finding 어휘가 아니다. 투영하면 다른 질문에 답하게 된다(fail-closed)."""
+        document = {
+            "resource_changes": [
+                self._change(
+                    resource_type="aws_ebs_volume",
+                    address="aws_ebs_volume.demo",
+                    after={"id": "vol-0123456789abcdef0", "encrypted": True},
+                ),
+                self._change(
+                    resource_type="aws_security_group",
+                    address="aws_security_group.demo",
+                    after={"id": "sg-0123456789abcdef0"},
+                ),
+            ]
+        }
+        self.assertEqual(mapped_resource_ids(document), ())
+
     def test_deduplicates_and_sorts_for_determinism(self) -> None:
         document = {
             "resource_changes": [

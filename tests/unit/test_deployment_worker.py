@@ -159,6 +159,17 @@ class RecordingStore:
         self.verifications.append(facts)
 
 
+class RecordingVerificationStarter:
+    """Records which work asked for a verification Assessment (ADR-0020 §7)."""
+
+    def __init__(self) -> None:
+        self.started: list[DeploymentWork] = []
+
+    def start_verification(self, *, work: DeploymentWork) -> str:
+        self.started.append(work)
+        return f"asm-verify-{len(self.started)}"
+
+
 def build_worker(
     *, work: DeploymentWork | None, run_facts: WorkflowRunFacts | None = None
 ) -> tuple[DeploymentWorker, RecordingStore, MockApplyDispatchPort, MockActualRereadPort]:
@@ -172,6 +183,7 @@ def build_worker(
         run_reader.register_run(run_facts)
     actual_port = MockActualRereadPort(customer_id=CUSTOMER_ID)
     store = RecordingStore()
+    store.verification_starter = RecordingVerificationStarter()
     worker = DeploymentWorker(
         work_repository=FakeWorkRepository(work),
         plan_port=plan_port,
@@ -181,6 +193,7 @@ def build_worker(
         plan_store=store,
         run_store=store,
         verification_store=store,
+        verification_starter=store.verification_starter,
     )
     return worker, store, apply_port, actual_port
 
@@ -311,6 +324,7 @@ class RunDeploymentTest(unittest.TestCase):
             plan_store=store,
             run_store=store,
             verification_store=store,
+            verification_starter=RecordingVerificationStarter(),
         )
         task = WorkflowTask(
             job_id=JOB_ID, expected_revision=0, command=WorkflowCommand.RUN_DEPLOYMENT
@@ -383,6 +397,9 @@ class VerifyApplyTest(unittest.TestCase):
         self.assertEqual(apply_port.dispatch_count, 0)  # 재dispatch 없음
         self.assertEqual(len(store.verifications), 1)
         self.assertEqual(len(actual_port.reread_calls), 1)
+        # 확정된 apply만 검증 Assessment를 시작한다 — run facts 저장 뒤, 같은 work로.
+        self.assertEqual(len(store.verification_starter.started), 1)
+        self.assertEqual(store.verification_starter.started[0].deployment_id, DEPLOYMENT_ID)
 
     def test_missing_run_reference_is_error(self) -> None:
         worker, _, _, _ = build_worker(
@@ -405,6 +422,7 @@ class VerifyApplyTest(unittest.TestCase):
             worker.handle(task)
         self.assertEqual(store.verifications, [])
         self.assertEqual(actual_port.reread_calls, [])
+        self.assertEqual(store.verification_starter.started, [])
 
     def test_wrong_plan_hash_run_is_blocked(self) -> None:
         wrong = WorkflowRunFacts(

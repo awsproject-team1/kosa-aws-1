@@ -6,6 +6,10 @@ from typing import Protocol
 
 from apps.backend.api.policy_sources import PolicySourceUploadSession
 from apps.backend.policy.ingestion.pipeline import UploadedPolicyOriginal
+from apps.backend.policy.ingestion.storage_keys import (
+    normalized_object_key,
+    original_object_key,
+)
 from packages.contracts import (
     DocumentUnitKind,
     ExtractionWarningCode,
@@ -56,8 +60,8 @@ class DynamoDbPolicySourceUploadRepository:
         source_id: str,
         source_version: str,
     ) -> PolicySourceUploadSession:
-        key = (
-            f"customers/{customer_id}/policy-sources/{source_id}/versions/{source_version}/original"
+        key = original_object_key(
+            customer_id=customer_id, source_id=source_id, source_version=source_version
         )
         item = {
             "PK": f"CUSTOMER#{customer_id}",
@@ -97,8 +101,8 @@ class DynamoDbPolicySourceUploadRepository:
         reader: object,
     ) -> tuple[UploadedPolicyOriginal, bytes]:
         """Read exact server-derived S3 bytes; clients never choose object identity."""
-        key = (
-            f"customers/{customer_id}/policy-sources/{source_id}/versions/{source_version}/original"
+        key = original_object_key(
+            customer_id=customer_id, source_id=source_id, source_version=source_version
         )
         if not hasattr(reader, "get_object"):
             raise TypeError("reader must provide get_object")
@@ -192,9 +196,10 @@ class DynamoDbPolicySourceUploadRepository:
                 )
             writer.put_object(  # type: ignore[union-attr]
                 Bucket=self._bucket,
-                Key=(
-                    f"customers/{customer_id}/policy-sources/{document.source_id}/"
-                    f"versions/{document.source_version}/normalized"
+                Key=normalized_object_key(
+                    customer_id=customer_id,
+                    source_id=document.source_id,
+                    source_version=document.source_version,
                 ),
                 Body=normalized_payload,
                 ContentType="application/json",

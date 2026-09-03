@@ -28,13 +28,17 @@ import io
 import json
 import os
 import time
+import uuid
 import zipfile
 from collections.abc import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
+from agent.runtime.actual_resource_tool_factory import (
+    ClientFactoryProvider,
+    build_actual_resource_tool,
+)
 from agent.runtime.live_deployment_ports import (
     LiveActualRereadPort,
     LiveApplyDispatchPort,
@@ -42,16 +46,25 @@ from agent.runtime.live_deployment_ports import (
     LiveWorkflowRunReader,
     PlanRunOutputs,
 )
+from apps.backend.assessment.reporting import DynamoDbAssessmentReportStore
 from apps.backend.deployment.runtime_config import (
     DeploymentRuntimeConfiguration,
     DeploymentTarget,
 )
+from apps.backend.deployment.verification import PostDeployVerificationService
 from apps.backend.deployment.worker import DeploymentWorker
+from apps.backend.jobs.outbox import OutboxDispatcher, WorkflowDispatcher
+from apps.backend.jobs.sqs import SqsWorkflowDispatcher
+from apps.backend.policy import DynamoDbPolicyCatalog, PolicyContextResolver
 from apps.backend.repositories import (
+    DynamoDbAssessmentWorkflowRepository,
     DynamoDbDeploymentPlanStore,
+    DynamoDbDeploymentRepository,
     DynamoDbDeploymentRunStore,
     DynamoDbDeploymentVerificationStore,
     DynamoDbDeploymentWorkRepository,
+    DynamoDbPostDeployVerificationStore,
+    DynamoDbVerificationSourceReader,
 )
 from packages.contracts import WorkflowCommand, WorkflowTask
 
@@ -79,6 +92,9 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
     # 설정 검증을 AWS client 생성보다 먼저 끝낸다. boto3 resource/client 생성은 region 등
     # 자체 환경을 요구하므로, 순서가 뒤집히면 "설정 누락"이 boto3의 다른 오류로 가려진다.
     table_name = _required_env("METADATA_TABLE_NAME")
+    # 검증 Assessment task는 Assessment Queue로 간다. URL이 없으면 apply는 검증 없이 끝나므로
+    # 설정 누락을 여기서 fail-closed로 잡는다.
+    assessment_queue_url = _required_env("ASSESSMENT_QUEUE_URL")
     secret_reader = _live_secret_reader()
     worker = _live_worker(
         raw_configuration,
@@ -88,7 +104,11 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         transaction_client=_boto3_client("dynamodb"),
         secret_reader=secret_reader,
         sts_client=_boto3_client("sts"),
-        s3_client_factory=_live_s3_client_factory(),
+        client_factory_provider=_live_client_factory_provider(),
+        assessment_dispatcher=SqsWorkflowDispatcher(
+            _boto3_client("sqs"), queue_url=assessment_queue_url
+        ),
+        assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
     )
     run_tasks(event, worker)
 
@@ -135,7 +155,9 @@ def _live_worker(
     transaction_client: object,
     secret_reader: Callable[[str], str],
     sts_client: object,
-    s3_client_factory: Callable[[Mapping[str, str]], object],
+    client_factory_provider: ClientFactoryProvider,
+    assessment_dispatcher: WorkflowDispatcher,
+    assessment_id_factory: Callable[[], str],
 ) -> DeploymentWorker:
     """승인된 단일 target으로 D 실행 port·store·work repository를 조립해 Worker를 만든다.
 
@@ -153,13 +175,18 @@ def _live_worker(
     def github_token() -> str:
         return secret_reader(target.github_token_secret_id)
 
-    resource_tool = AssumeRoleS3ResourceTool(
+    # Post-deploy verification re-reads Actual through the same routing tool the Assessment
+    # Worker uses. Hardwiring one service adapter here would either refuse the target's other
+    # resource types or quietly re-read only S3, and ADR-0020 compares the re-read against
+    # the Findings the deployment was supposed to fix.
+    resource_tool = build_actual_resource_tool(
         customer_id=target.customer_id,
         aws_account_id=target.aws_account_id,
         role_arn=target.aws_read_role_arn,
         external_id=secret_reader(target.aws_external_id_secret_id),
+        resource_types=target.resource_types,
+        client_factory_provider=client_factory_provider,
         sts=sts_client,
-        s3_client_factory=s3_client_factory,
     )
     plan_port = LivePlanRequestPort(
         customer_id=target.customer_id,
@@ -200,6 +227,35 @@ def _live_worker(
     verification_store = DynamoDbDeploymentVerificationStore(
         table_name=table_name, transaction_client=transaction_client
     )
+    # apply 확정 뒤 검증 Assessment를 시작하는 A 경계(ADR-0020 §7). Deployment record와 Job을
+    # 다시 읽고, 원 Assessment의 판본·plan·Model Profile을 pin한 새 Assessment와 ASSESS_RESOURCE
+    # task를 한 transaction으로 쓴다.
+    reports = DynamoDbAssessmentReportStore(table)
+    workflow_repository = DynamoDbAssessmentWorkflowRepository(
+        table, table_name=table_name, transaction_client=transaction_client
+    )
+    verification_starter = PostDeployVerificationService(
+        deployments=DynamoDbDeploymentRepository(
+            table=table, table_name=table_name, transaction_client=transaction_client
+        ),
+        jobs=workflow_repository,
+        sources=DynamoDbVerificationSourceReader(table, reports=reports),
+        context_resolvers=lambda *, customer_id: PolicyContextResolver(
+            DynamoDbPolicyCatalog(table, customer_id=customer_id)
+        ),
+        resource_types_for=lambda customer_id, repository_id: (
+            configuration.resolve(
+                customer_id=customer_id, repository_id=repository_id
+            ).resource_types
+        ),
+        store=DynamoDbPostDeployVerificationStore(
+            table_name=table_name, transaction_client=transaction_client
+        ),
+        outbox_dispatcher=OutboxDispatcher(
+            repository=workflow_repository, dispatcher=assessment_dispatcher
+        ),
+        assessment_id_factory=assessment_id_factory,
+    )
     return DeploymentWorker(
         work_repository=work_repository,
         plan_port=plan_port,
@@ -209,6 +265,7 @@ def _live_worker(
         plan_store=plan_store,
         run_store=run_store,
         verification_store=verification_store,
+        verification_starter=verification_starter,
     )
 
 
@@ -426,18 +483,22 @@ def _live_secret_reader() -> Callable[[str], str]:
     return read
 
 
-def _live_s3_client_factory() -> Callable[[Mapping[str, str]], object]:
+def _live_client_factory_provider() -> ClientFactoryProvider:
+    """Return a per-service provider of lazy, credential-taking read clients."""
     boto3 = _boto3()
 
-    def factory(credentials: Mapping[str, str]) -> object:
-        return boto3.client(
-            "s3",
-            aws_access_key_id=credentials["AccessKeyId"],
-            aws_secret_access_key=credentials["SecretAccessKey"],
-            aws_session_token=credentials["SessionToken"],
-        )
+    def provider(service: str) -> Callable[[Mapping[str, str]], object]:
+        def factory(credentials: Mapping[str, str]) -> object:
+            return boto3.client(
+                service,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
 
-    return factory
+        return factory
+
+    return provider
 
 
 def _metadata_table(table_name: str) -> object:

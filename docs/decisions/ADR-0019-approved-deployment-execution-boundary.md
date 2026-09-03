@@ -97,6 +97,19 @@ producer로 지목했지만 그 값의 산출 규칙도 저장 경로도 정해�
   S3 범위에서는 모든 항목이 `bucket`이다(bucket 리소스는 이름을 `bucket` 인자로 받고, 하위 리소스는
   같은 속성으로 부모를 참조한다). 이 값이 곧 `AwsResourceQuery(resource_type="AWS::S3::Bucket")`의
   `resource_id`이자 `Finding.resource_id`다.
+- **EC2/RDS/ALB 확장 (2026-09-03 보완).** type별 identity 속성은 그 type의
+  `AwsResourceQuery.resource_id`와 같은 값을 담는 속성으로 정한다.
+  `aws_instance` → `id`(`i-…` 인스턴스 id, 생성 중이면 computed이므로 건너뛴다 — 아직 존재하지 않는
+  리소스에는 Finding도 없다), `aws_db_instance` → `identifier`(고객이 선언하는 값이라 plan에서 알 수
+  있다. computed인 `arn`이 아니다), `aws_lb`/`aws_alb` → `arn`, `aws_lb_listener`/`aws_alb_listener`
+  → `load_balancer_arn`. ALB만 ARN을 쓰는 이유는 리스너가 부모를 ARN으로만 지목할 수 있어서다.
+  ARN을 투영하면 load balancer와 리스너가 한 어휘로 모이고, 그 값은 ELBv2 read adapter가 조회하는
+  키와도 같다.
+- **`aws_ebs_volume`/`aws_ebs_snapshot`/독립 `aws_security_group*`은 허용 목록에 넣지 않는다.**
+  그 리소스들의 plan-side identity는 볼륨/스냅샷/보안 그룹 id인데, EC2 Finding은 인스턴스를 대상으로
+  올라간다(Task 9 범위 결정: 인스턴스 read adapter가 연결된 볼륨·보안 그룹 상태를 함께 담는다).
+  그 id를 투영하면 readiness가 묻는 것과 다른 질문에 답하게 된다. 그 리소스만 바꾸는 plan은
+  readiness가 `BLOCKED`로 남는다 — fail-closed이며, 조용한 불일치가 아니라 문서화된 경계다.
 - `after`를 먼저 읽고 `before`를 그다음에 읽는다. 삭제되는 리소스도 자기 id를 밝혀야 하기 때문이다.
   값이 없거나 계산값(`after_unknown`)이면 건너뛴다 — 알 수 없는 id는 "plan이 그 Finding을 건드린다"는
   근거가 아니다.

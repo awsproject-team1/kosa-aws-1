@@ -17,9 +17,10 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 
-# The eleven fields kept from each `resource_changes[]` entry (ADR-0019 §1). Any
-# other field (for example `timestamp`, `format_version`, `terraform_version`,
-# `prior_state`) is dropped by omission, not by an exclude rule.
+# The eleven allow-listed fields of each `resource_changes[]` entry (ADR-0019 §1) are the six
+# below plus the five `_CHANGE_FIELDS` inside its nested `change` object. Any other field (for
+# example `timestamp`, `format_version`, `terraform_version`, `prior_state`) is dropped by
+# omission, not by an exclude rule.
 _TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "address",
     "mode",
@@ -135,10 +136,27 @@ def has_destructive_changes(show_json: Mapping[str, object]) -> bool:
 # field projection is one: a provider that adds a new identity-looking attribute must
 # never silently change which resource a plan is judged to touch.
 #
-# For S3 every entry is `bucket`: the bucket resource takes the name as its `bucket`
-# argument and each sub-resource references its parent by the same attribute, which is
-# exactly the value `AwsResourceQuery(resource_type="AWS::S3::Bucket").resource_id`
-# carries and therefore what `Finding.resource_id` holds.
+# The attribute per type is the one whose value equals
+# `AwsResourceQuery(resource_type=...).resource_id` for that type, which is what
+# `Finding.resource_id` holds:
+#
+# * S3 — every entry is `bucket`: the bucket resource takes the name as its `bucket`
+#   argument and each sub-resource references its parent by the same attribute.
+# * EC2 Instance — `id` is the `i-…` instance id. On a create it is computed and
+#   therefore skipped, which is correct: a resource that does not exist yet has no
+#   Finding about it.
+# * RDS DB instance — `identifier` is the customer-declared DB instance identifier and
+#   is known in the plan, unlike the computed `arn`.
+# * ALB — the load balancer ARN, because a listener can only name its parent by
+#   `load_balancer_arn`. Projecting the ARN keeps the load balancer and its listeners in
+#   one vocabulary, and it is also what the ELBv2 read adapter queries by.
+#
+# Deliberately absent: `aws_ebs_volume`, `aws_ebs_snapshot`, and standalone
+# `aws_security_group*` resources. Their plan-side identity is a volume/snapshot/security
+# group id, but EC2 Findings are raised against the instance (Task 9 scope decision), so
+# projecting those ids would answer a different question than the one readiness asks. A
+# plan that only changes those resources leaves readiness `BLOCKED` — fail-closed, and a
+# documented boundary rather than a silent mismatch.
 _RESOURCE_IDENTITY_ATTRIBUTES: dict[str, str] = {
     "aws_s3_bucket": "bucket",
     "aws_s3_bucket_acl": "bucket",
@@ -148,6 +166,13 @@ _RESOURCE_IDENTITY_ATTRIBUTES: dict[str, str] = {
     "aws_s3_bucket_public_access_block": "bucket",
     "aws_s3_bucket_server_side_encryption_configuration": "bucket",
     "aws_s3_bucket_versioning": "bucket",
+    "aws_instance": "id",
+    "aws_db_instance": "identifier",
+    "aws_lb": "arn",
+    # `aws_alb` is the provider's retained alias for the same load balancer resource.
+    "aws_alb": "arn",
+    "aws_lb_listener": "load_balancer_arn",
+    "aws_alb_listener": "load_balancer_arn",
 }
 
 

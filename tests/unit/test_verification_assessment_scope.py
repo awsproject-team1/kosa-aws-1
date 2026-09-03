@@ -219,7 +219,6 @@ class VerificationScopeValueTest(unittest.TestCase):
             deployment_id=None,
             model_profile_id=None,
             rubric_version=None,
-            policy_profile_version=None,
         )
 
         with self.assertRaisesRegex(ValueError, "requires a POST_DEPLOY_VERIFICATION assessment"):

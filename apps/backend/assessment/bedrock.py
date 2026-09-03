@@ -136,15 +136,7 @@ class BedrockStructuredEvaluator:
                     "policy_profile_id": context.policy_profile_id,
                     "version": context.policy_profile_version,
                 },
-                "rule": {
-                    "rule_id": rule.rule_id,
-                    "version": rule.version,
-                    "title": rule.title,
-                    "severity": rule.severity.value,
-                    "source_references": [
-                        reference.to_dict() for reference in rule.source_references
-                    ],
-                },
+                "rule": _rule_prompt_view(rule),
                 "allowed_evidence_references": list(allowed_evidence),
             },
             separators=(",", ":"),
@@ -158,10 +150,14 @@ _SYSTEM_PROMPT = (
     "only when its subject matches the resource under the given perspective; if the "
     "rule governs a different resource kind, attribute, or concern than what this "
     "resource exposes, it does not apply. "
+    "When the rule carries an evaluation_rubric, that rubric is the criterion; the title "
+    "alone is not. Judge only from the supplied resource_document: if it does not carry "
+    "the evidence the rule requires, return status INSUFFICIENT_EVIDENCE instead of "
+    "inferring the missing state. "
     "Return one JSON object only, with exactly status, score, rationale, and "
-    "evidence_references. status must be exactly one of "
-    + ", ".join(status.value for status in EvaluationStatus)
-    + ". Use OUT_OF_SCOPE when the rule does not apply to this resource; in that case "
+    "evidence_references. status must be exactly one of PASS, FAIL, MANUAL_REVIEW, "
+    "INSUFFICIENT_EVIDENCE, or OUT_OF_SCOPE. "
+    "Use OUT_OF_SCOPE when the rule does not apply to this resource; in that case "
     "the resource is neither compliant nor violating, so score must be 0 and the "
     "rationale must state why the rule does not apply. When the rule applies, use PASS "
     "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
@@ -169,6 +165,44 @@ _SYSTEM_PROMPT = (
     "support a judgment. score must be 0 through 100, and every evidence reference must "
     "come from allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
 )
+
+#: 모델이 돌려줄 수 없는 status. `EXECUTION_ERROR`는 "평가가 실행되지 못했다"는 Code의 사실이지
+#: 판정이 아니다. 모델이 그 값을 쓰면 Coverage 분모에 남아 재시도 대상처럼 보이고, 실제로는
+#: 모델이 판정을 회피한 것과 구별되지 않는다.
+_MODEL_FORBIDDEN_STATUSES = frozenset({EvaluationStatus.EXECUTION_ERROR})
+
+
+def _rule_prompt_view(rule: PolicyRule) -> dict[str, object]:
+    """The Rule as the model sees it: identity, severity, sources, and execution semantics.
+
+    authoring이 만든 Rule은 사람이 검토·승인한 `evaluation_rubric`·`applicability_semantics`·
+    evidence capability를 갖는다. 그것을 빼고 title만 보내면 승인된 rubric이 판정에 아무 영향을
+    주지 않는다 — 정책 → Rule → Assessment 연결이 형식에 그친다. legacy Rule
+    (`evaluation_type is None`)은 그 필드가 없으므로 이전과 같은 view가 나온다.
+    """
+    view: dict[str, object] = {
+        "rule_id": rule.rule_id,
+        "version": rule.version,
+        "title": rule.title,
+        "severity": rule.severity.value,
+        "source_references": [reference.to_dict() for reference in rule.source_references],
+    }
+    if rule.evaluation_type is not None:
+        view["evaluation_type"] = rule.evaluation_type.value
+    for name in (
+        "applicability_semantics",
+        "evaluation_rubric",
+        "exception_semantics",
+        "compensating_control_semantics",
+    ):
+        value = getattr(rule, name)
+        if value is not None:
+            view[name] = value
+    for name in ("required_evidence", "optional_evidence"):
+        value = getattr(rule, name)
+        if value:
+            view[name] = list(value)
+    return view
 
 
 def _strip_json_fence(text: str) -> str:
@@ -221,9 +255,12 @@ def _status(value: object) -> EvaluationStatus:
     if not isinstance(value, str):
         raise BedrockEvaluationError("status is invalid")
     try:
-        return EvaluationStatus(value)
+        status = EvaluationStatus(value)
     except ValueError as error:
         raise BedrockEvaluationError("status is invalid") from error
+    if status in _MODEL_FORBIDDEN_STATUSES:
+        raise BedrockEvaluationError("status is reserved for the runtime, not the model")
+    return status
 
 
 def _score(value: object) -> float:

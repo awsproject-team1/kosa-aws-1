@@ -133,11 +133,17 @@ class DynamoDbPolicyApprovalRepositoryTest(unittest.TestCase):
 
         writes = self.client.requests[0]["TransactItems"]
         assert isinstance(writes, list)
-        self.assertEqual(len(writes), 2)
+        # 판본 이력 · current pointer · audit event를 한 transaction에 쓴다. pointer만 두면
+        # version을 고정한 Assessment가 그 판본을 나중에 직접 읽을 수 없다.
+        self.assertEqual(len(writes), 3)
         profile = writes[0]["Put"]["Item"]
+        self.assertEqual(profile["SK"], {"S": "POLICY_PROFILE#profile-1#VERSION#v1"})
         self.assertNotIn("bucket", profile)
         self.assertNotIn("key", profile)
         self.assertEqual(profile["customer_id"], {"S": "cust-a"})
+        pointer = writes[1]["Put"]["Item"]
+        self.assertEqual(pointer["SK"], {"S": "POLICY_PROFILE#profile-1"})
+        self.assertEqual(pointer["current_version"], {"S": "v1"})
 
     def test_candidate_extraction_persists_candidates_and_source_under_ready_binding(self) -> None:
         self.repository.record_candidate_extraction(customer_id="cust-a", extraction=extraction())

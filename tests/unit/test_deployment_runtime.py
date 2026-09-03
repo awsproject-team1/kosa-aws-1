@@ -13,7 +13,10 @@ from apps.backend.deployment.runtime import (
     parse_tasks,
     run_tasks,
 )
-from apps.backend.deployment.runtime_config import DeploymentTarget
+from apps.backend.deployment.runtime_config import (
+    DeploymentRuntimeConfigurationError,
+    DeploymentTarget,
+)
 from apps.backend.deployment.worker import DeploymentWorker
 from packages.contracts import WorkflowCommand, WorkflowTask
 from tests.unit.test_deployment_worker import (
@@ -142,14 +145,60 @@ def _assemble_worker(targets: list[dict[str, object]]) -> DeploymentWorker:
         transaction_client=object(),
         secret_reader=lambda secret_id: "secret-value",
         sts_client=object(),
-        s3_client_factory=lambda credentials: object(),
+        client_factory_provider=lambda service: lambda credentials: object(),
+        assessment_dispatcher=_NoDispatch(),
+        assessment_id_factory=lambda: "asm-verify",
     )
+
+
+class _NoDispatch:
+    def dispatch(self, task) -> None:
+        raise AssertionError("assembly must not publish anything")
 
 
 class LiveWorkerAssemblyTest(unittest.TestCase):
     def test_assembles_a_worker_from_a_single_target(self) -> None:
         worker = _assemble_worker([_TARGET])
         self.assertIsInstance(worker, DeploymentWorker)
+
+    def test_assembles_a_worker_for_every_declared_resource_type(self) -> None:
+        """배포 후 Actual 재조회는 target이 선언한 유형 전부를 읽을 수 있어야 한다."""
+        services: list[str] = []
+        worker = _live_worker(
+            json.dumps(
+                [
+                    {
+                        **_TARGET,
+                        "resource_types": [
+                            "AWS::S3::Bucket",
+                            "AWS::EC2::Instance",
+                            "AWS::RDS::DBInstance",
+                        ],
+                    }
+                ]
+            ),
+            plan_outputs_fetcher=lambda target, deployment_id, commit_sha: None,
+            table=object(),
+            table_name="metadata",
+            transaction_client=object(),
+            secret_reader=lambda secret_id: "secret-value",
+            sts_client=object(),
+            client_factory_provider=lambda service: (
+                services.append(service) or (lambda credentials: object())
+            ),
+            assessment_dispatcher=_NoDispatch(),
+            assessment_id_factory=lambda: "asm-verify",
+        )
+
+        self.assertIsInstance(worker, DeploymentWorker)
+        # RDS adapter는 연결된 VPC 보안 그룹의 ingress를 읽으려고 EC2 client도 만든다
+        # (`_ADAPTERS`의 RDS 항목). 그래서 마지막 `ec2`는 중복이 아니라 RDS의 두 번째 client다.
+        self.assertEqual(services, ["s3", "ec2", "rds", "ec2"])
+
+    def test_rejects_a_terraform_type_name_as_a_resource_type(self) -> None:
+        """`aws_s3_bucket`은 Terraform 어휘다. Actual 재조회는 AWS resource type을 쓴다."""
+        with self.assertRaisesRegex(DeploymentRuntimeConfigurationError, "invalid"):
+            _assemble_worker([{**_TARGET, "resource_types": ["aws_s3_bucket"]}])
 
     def test_requires_exactly_one_target(self) -> None:
         second = {**_TARGET, "repository_id": "repo-002"}

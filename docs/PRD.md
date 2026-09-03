@@ -10,7 +10,7 @@ MVP의 가치는 Rule 수가 아니라 실제 AWS 환경에서 `Assessment → F
 
 - Customer-Deployed: Governance Platform은 고객 AWS Account에 배포한다.
 - AWS + Terraform에 집중한다.
-- AI는 허용된 Governance Boundary 안에서 Rule, Evidence, 판정, Severity, 점수를 선택한다.
+- AI는 허용된 Governance Boundary 안에서 판정, 점수, Rationale과 허용된 Evidence 부분집합만 선택한다. 적용 Rule은 승인된 Profile이, Severity는 승인된 Rule이 정한다.
 - 명시적 UI/API 요청은 해당 기능 Workflow로 직접 진입한다. 자연어 요청만 Parent
   Orchestrator Agent가 의도·후보 Scope를 해석한다. Parent는 Policy Q&A를 직접
   처리하고, Assessment, Remediation, Deployment Workflow 중 하나로 라우팅한다.

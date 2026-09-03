@@ -61,6 +61,13 @@ Parameters:
     Default: ""
     NoEcho: true
     ConstraintDescription: Optional approved deployment target configuration; empty leaves the TERRAFORM_PATCH deployment path fail-closed.
+  PolicyAuthoringModelProfileJson:
+    Type: String
+    Default: ""
+    Description: >-
+      Approved POLICY_AUTHORING model profile as JSON. Empty disables the authoring worker's
+      Bedrock access: the candidate extraction path then fails closed at configuration rather
+      than extracting with an unreviewed model or prompt.
   DeploymentGitHubSecretArns:
     Type: String
     Default: ""
@@ -116,6 +123,7 @@ Rules:
 Conditions:
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
   DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
+  PolicyAuthoringEnabled: !Not [!Equals [!Ref PolicyAuthoringModelProfileJson, ""]]
 
 Resources:
   MetadataTable:
@@ -369,6 +377,41 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DeploymentDlq.Arn
         maxReceiveCount: 3
+  # 정책 후보 추출은 Assessment/Remediation/Deployment와 **다른 큐**를 쓴다. 같은 큐를 나눠 쓰면
+  # authoring worker의 권한이 다른 Worker의 메시지에도 닿는다.
+  PolicyAuthoringDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-policy-authoring-dlq"
+      MessageRetentionPeriod: 1209600
+  PolicyAuthoringQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-policy-authoring"
+      VisibilityTimeout: 960
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PolicyAuthoringDlq.Arn
+        maxReceiveCount: 3
+  # DLQ에 메시지가 하나라도 남으면 그 고객의 정책은 후보가 만들어지지 않은 채로 남는다. 그것은
+  # "위반 없음"이 아니라 "아직 검토할 것이 없다"로 보이므로 조용히 지나가면 안 된다.
+  PolicyAuthoringDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-policy-authoring-dlq"
+      AlarmDescription: >-
+        A policy candidate extraction exhausted its retries. The customer's uploaded policy has
+        no reviewable candidates until this is resolved.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PolicyAuthoringDlq.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
 
   ApiRuntimeRole:
     Type: AWS::IAM::Role
@@ -403,7 +446,13 @@ Resources:
                   - !Sub "${MetadataTable.Arn}/index/*"
               - Effect: Allow
                 Action: sqs:SendMessage
-                Resource: [!GetAtt AssessmentQueue.Arn, !GetAtt RemediationQueue.Arn, !GetAtt DeploymentQueue.Arn]
+                Resource:
+                  - !GetAtt AssessmentQueue.Arn
+                  - !GetAtt RemediationQueue.Arn
+                  - !GetAtt DeploymentQueue.Arn
+                  # 후보 추출 요청만 보낸다. API는 정규화 artifact를 직접 읽지 않는다 —
+                  # 그 권한은 Authoring Worker에만 있다.
+                  - !GetAtt PolicyAuthoringQueue.Arn
               # 고객 정책 원문 업로드 세션: presigned put 발급, finalize 시 원문 read,
               # 정규화 산출물 write. tenant-scoped customers/* prefix로만 제한한다.
               - Effect: Allow
@@ -482,6 +531,52 @@ Resources:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
                   Resource: !Split [",", !Ref DeploymentGitHubSecretArns]
+          - !Ref AWS::NoValue
+
+  # Authoring 전용 Role. Assessment Worker와 권한을 분리한다 — 정책 원문을 읽는 권한과 고객
+  # AWS 계정을 읽는 권한이 같은 Role에 있으면, 한쪽의 사고가 다른 쪽 자료까지 닿는다.
+  PolicyAuthoringRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-policy-authoring-runtime"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PolicyAuthoringStateAndArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
+                Resource:
+                  - !GetAtt MetadataTable.Arn
+                  - !Sub "${MetadataTable.Arn}/index/*"
+              # 정규화 artifact **읽기 전용**. write는 정규화 단계(API runtime)의 책임이며,
+              # 추출 worker가 원문을 고쳐 쓸 수 있으면 승인된 판본과 읽은 판본이 달라질 수 있다.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${ArtifactBucket.Arn}/customers/*"
+              - Effect: Allow
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+                Resource: !GetAtt PolicyAuthoringQueue.Arn
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: "*"
+        # 승인된 authoring 모델이 설정되지 않은 배포에서는 Bedrock 권한 자체를 만들지 않는다.
+        - !If
+          - PolicyAuthoringEnabled
+          - PolicyName: PolicyAuthoringApprovedModel
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: bedrock:InvokeModel
+                  Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
           - !Ref AWS::NoValue
 
   UserPool:
@@ -619,6 +714,7 @@ Resources:
           DEPLOYMENT_QUEUE_URL: !Ref DeploymentQueue
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
+          POLICY_AUTHORING_QUEUE_URL: !Ref PolicyAuthoringQueue
           # 승인된 배포 대상의 GitHub 좌표. Deployment 생성이 TERRAFORM_PATCH의 merge commit을
           # 해석하려면 필요하다(ADR-0019 §3·§4). 비어 있으면 그 경로만 fail-closed되고,
           # ACTUAL_SYNC 배포는 GitHub read 없이 그대로 동작한다.
@@ -689,6 +785,33 @@ Resources:
       BatchSize: 1
       FunctionResponseTypes: [ReportBatchItemFailures]
 
+  # Policy Authoring Worker. 고객 정책 원문에서 Rule 후보를 만드는 유일한 실행체이며, 별도의
+  # Role과 별도의 큐를 쓴다.
+  PolicyAuthoringWorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-policy-authoring-worker"
+      Runtime: python3.12
+      Handler: apps.backend.policy.authoring.runtime.lambda_handler
+      Role: !GetAtt PolicyAuthoringRuntimeRole.Arn
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref LambdaCodeS3ObjectVersion
+      Environment:
+        Variables:
+          METADATA_TABLE_NAME: !Ref MetadataTable
+          POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
+          POLICY_AUTHORING_MODEL_PROFILE_JSON: !Ref PolicyAuthoringModelProfileJson
+  PolicyAuthoringQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt PolicyAuthoringQueue.Arn
+      FunctionName: !Ref PolicyAuthoringWorkerFunction
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
   # Remediation/Deployment Worker는 코드만 있고 이 스택에 실행체가 없었다. 큐에 task가 쌓여도
   # 소비자가 없으면 재시도만 반복하다 DLQ로 간다.
   RemediationWorkerFunction:
@@ -733,6 +856,9 @@ Resources:
           METADATA_TABLE_NAME: !Ref MetadataTable
           # 승인된 배포 대상. 비어 있으면 Worker가 fail-closed로 멈춘다(ADR-0019).
           DEPLOYMENT_RUNTIME_JSON: !Ref DeploymentRuntimeJson
+          # apply 확정 뒤 Post-Deploy Verification Assessment task를 Assessment Queue로 보낸다
+          # (ADR-0020 §7). WorkflowRuntimeRole이 이미 이 큐에 SendMessage를 갖는다.
+          ASSESSMENT_QUEUE_URL: !Ref AssessmentQueue
   DeploymentQueueEventSource:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
@@ -872,6 +998,24 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 후보 추출 요청(202)과 검토용 후보 조회. 응답에는 정규화 문서의 원문이 들어가지 않는다 —
+  # 리뷰어가 보는 문장은 모델이 쓴 재진술이다.
+  PostPolicySourceCandidatesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /policy-sources/{sourceId}/versions/{version}/candidates"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetPolicySourceCandidatesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /policy-sources/{sourceId}/versions/{version}/candidates"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   PostPolicyProfilesRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
@@ -887,6 +1031,17 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /remediation-exceptions"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 조치 흐름의 진입점(ADR-0018). handler branch만 있고 이 route가 없으면 고객은 조치를
+  # 시작할 수 없다 — API Gateway는 명시적 allow-list이므로 선언되지 않은 경로는 handler에
+  # 닿기 전에 404다.
+  PostFindingRemediationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /findings/{findingId}/remediations"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
@@ -924,22 +1079,23 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
-  # Remediation decision for one Finding. The handler reads the Finding, calls the
-  # policy gate, and persists the decision/context/Job/Outbox atomically.
-  PostFindingRemediationsRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: "POST /findings/{findingId}/remediations"
-      AuthorizationType: JWT
-      AuthorizerId: !Ref HttpApiAuthorizer
-      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
-  # Human approval gate for an approved-plan deployment (ADR-0019 §4).
+  # 사람 승인 게이트(ADR-0019 §4). 승인은 apply를 트리거하지 않고 승인 record와 dispatch
+  # outbox만 쓰지만, 이 route가 없으면 폐루프가 승인 단계에서 멈춘다.
   PostDeploymentApproveRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /deployments/{deploymentId}/approve"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # M4 A 관측·비용 조회(Admin 전용, ADR-0021 §3). live metric source가 주입되지 않은
+  # 배포에서는 handler가 404로 답하며, 그것이 "주입할 source가 없다"의 표현이다.
+  GetDeploymentObservabilityRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /deployments/{deploymentId}/observability"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
@@ -984,6 +1140,8 @@ Outputs:
   ArtifactAccessTrailArn:
     Description: ARN of the trail recording ArtifactBucket S3 data events.
     Value: !GetAtt ArtifactAccessTrail.Arn
+  PolicyAuthoringQueueUrl:
+    Value: !Ref PolicyAuthoringQueue
   AssessmentQueueUrl:
     Value: !Ref AssessmentQueue
   RemediationQueueUrl:

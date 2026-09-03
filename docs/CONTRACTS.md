@@ -56,16 +56,90 @@ M0 Assessment 기본 Profile은 `fixtures/m0/assessment_model_profile.json`의
 `assessment-nova-lite-m0-v1`이며, `us-east-1`의 `amazon.nova-lite-v1:0`을 사용한다.
 
 M1 C의 Bedrock adapter는 injected Converse client로만 호출하며, 모델에는 선택된 Resource
-Snapshot과 해당 Rule·Profile 정보만 전달한다. 모델 응답은 `status`, `score`, `rationale`,
-`evidence_references` 네 필드의 JSON으로 한정된다. Resource/Rule/Perspective/Severity/Version과
-Model Profile은 Runtime이 authoritative input에서 재구성하고, evidence는 Snapshot과 Rule이
-허용한 locator의 부분집합만 허용한다. 정책 근거의 정규형은
+Snapshot과 해당 Rule·Profile 정보만 전달한다. Rule은 identity(`rule_id`/`version`/`title`/
+`severity`/`source_references`)에 더해, authoring이 만든 Rule이면 **사람이 승인한 실행 의미**
+(`evaluation_type`, `applicability_semantics`, `evaluation_rubric`, `required_evidence`,
+`optional_evidence`, `exception_semantics`, `compensating_control_semantics`)를 함께 받는다 —
+title만 보내면 승인된 rubric이 판정에 아무 영향을 주지 않는다. legacy Rule은 이전과 같은 view다.
+모델 응답은 `status`, `score`, `rationale`, `evidence_references` 네 필드의 JSON으로 한정되고,
+`status`에 `EXECUTION_ERROR`는 올 수 없다(그 값은 Code가 기록하는 실행 실패이지 판정이 아니다).
+Resource/Rule/Perspective/Severity/Version과 Model Profile은 Runtime이 authoritative input에서
+재구성하고, evidence는 Snapshot과 Rule이 허용한 locator의 부분집합만 허용한다.
+
+**AWS Actual pre-flight gate (ADR-0023 §2).** `ActualBedrockEvaluator`는 authored Rule의
+`required_evidence`가 가리키는 Catalog binding의 `document_paths`를 projected document에서 먼저
+확인한다. 하나라도 비어 있으면 모델을 부르지 않고 Code가 `INSUFFICIENT_EVIDENCE` 결과를 만든다.
+rationale에는 빠진 경로 이름만 들어가고, evidence에는 실제로 수행한 `aws:` read locator와 Rule의
+정책 판본이 남는다. IaC hint는 authoritative가 아니므로 이 gate의 대상이 아니다. Prompt가 바뀌었으므로
+승인 Assessment Profile은 `assessment-nova-lite-m1-v3`(`assessment-three-perspective-rubric-v3`)이며,
+릴리스 전에 Golden 36 case 반복 평가를 이 Profile로 다시 실행해야 한다. 정책 근거의 정규형은
 `{source_id}@{source_version}#{locator}`이며 `SourceReference.evidence_reference`만 사용한다. AWS 실제 상태 근거는
 `aws:` namespace를 사용하므로 정책 원문 근거와 구분된다.
 
-S3 MVP의 `AWS_ACTUAL` Evidence는 C가 D의 `AwsResourceTool.READ_RESOURCE`로
-`AWS::S3::Bucket` 한 건을 조회해 구성한다. C는 query의 Customer/Account/Resource ID와 응답의
-동일성을 다시 검증하고, Resource Tool이 제공하지 않는 Write 경로는 사용하지 않는다.
+M1 `AWS_ACTUAL` Evidence는 C가 D의 `AwsResourceTool.READ_RESOURCE`로 한 리소스를 조회해 구성한다.
+C는 query의 Customer/Account/Resource Type/Resource ID와 응답의 동일성을 다시 검증하고, Resource
+Tool이 제공하지 않는 Write 경로는 사용하지 않는다.
+
+Actual 근거를 만들 수 있는 Resource 유형은 **allow-list**이며, 유형별 evidence locator namespace도
+같은 표에서 정한다 (`apps/backend/assessment/actual.py`).
+
+| Resource 유형 | Evidence locator | Read adapter |
+| --- | --- | --- |
+| `AWS::S3::Bucket` | `aws:s3:bucket/{bucket}#read-resource` | `AssumeRoleS3ResourceTool` |
+| `AWS::EC2::Instance` | `aws:ec2:instance/{i-…}#read-resource` | `AssumeRoleEc2ResourceTool` |
+| `AWS::RDS::DBInstance` | `aws:rds:db-instance/{identifier}#read-resource` | `AssumeRoleRdsResourceTool` |
+| `AWS::ElasticLoadBalancingV2::LoadBalancer` | `aws:elasticloadbalancing:loadbalancer/app/{name}/{id}#read-resource` | `AssumeRoleAlbResourceTool` |
+
+ALB의 `resource_id`는 ARN이지만 locator에는 ARN의 **resource 부분만** 넣는다. namespace와 고객
+scope가 이미 service·region·account를 고정하므로 그것을 되풀이하면 130자 문자열이 되고, 모델은
+근거가 인정되려면 그 문자열을 그대로 되돌려줘야 한다. ARN이 아닌 값이 오면 locator를 지어내지 않고
+실패한다.
+
+`PolicyContext.allows_evidence()`는 `aws:` namespace 전체를 허용하므로 locator를 type 문자열에서
+파생하면 검토되지 않은 리소스 형태도 항상 유효해 보인다. 그래서 namespace를 유형별로 등록한다.
+Loader는 생성 시 하나의 유형에 고정된다 — 평가기는 `resource_id`만 받으므로, 유형이 고정되지 않으면
+근거 문서와 Rule 집합이 서로 다른 종류의 리소스를 설명할 수 있다. 기본값도 두지 않는다.
+
+**읽을 수 있는 유형의 집합은 read adapter registry(`ACTUAL_READ_RESOURCE_TYPES`) 하나가 정한다.**
+Evidence scope 표, runtime 설정 검증, Deployment target 검증, 배포 게이트 스크립트가 모두 그 값을
+읽는다. 두 목록이 어긋나면 import 시점에 실패한다 — 읽을 수는 있는데 근거 어휘가 없는 유형(또는 그
+반대)은 절반만 배선된 유형이다.
+
+각 read adapter는 응답을 **필드 allow-list로 투영**한다. 목록은 Rule이 인용하는 필드와 정확히
+같다. 빠지면 평가가 근거 없이 판단하고, 남으면 (1) 고객 내용이 모델 입력과 저장 evidence로 흘러가며
+(2) 어떤 Rule도 묻지 않은 상태를 평가기가 판단에 반영할 수 있다. `UserData`, key 이름, tag 값,
+`MasterUsername`, `Endpoint`는 첫 번째 이유로, MultiAZ·백업 보존·idle timeout은 두 번째 이유로
+제외한다.
+
+**목록 조회는 continuation token을 끝까지 따라간다.** RDS는 기본 100건, ELBv2는 400건씩 답하므로
+첫 페이지만 읽으면 실제 고객 계정은 일상적으로 잘린다. 잘린 목록은 준수 상태와 구별되지 않고,
+배포 후 Actual 재조회가 바로 이 목록으로 "위반이 사라졌는가"를 판단한다(ADR-0020). 페이지 상한을
+넘으면 부분 목록을 돌려주지 않고 실패한다.
+
+**한 리소스의 부분 응답도 거부한다.** EC2 adapter는 인스턴스가 붙인 볼륨·보안 그룹이 응답에 모두
+있는지 대조한다. 볼륨 하나가 빠지면 남은 볼륨이 모두 암호화돼 있어 `PASS`처럼 보이지만, 암호화되지
+않은 볼륨은 그저 보이지 않았을 뿐이다. 없는 근거가 준수 근거로 읽혀서는 안 된다.
+
+RDS adapter도 DB 인스턴스에 연결된 모든 VPC 보안 그룹을 EC2
+`DescribeSecurityGroups`로 조회해 `IpPermissions`를 view에 포함한다. 그룹 ID와 연결 상태만으로는
+`RDS-ACCESS-001`이 요구하는 허용 네트워크·principal·port 범위를 판단할 수 없기 때문이다. 연결된
+그룹 중 하나라도 응답에서 빠지면 EC2 adapter와 동일하게 전체 read를 거부한다.
+
+EC2 adapter는 인스턴스에 연결된 EBS 볼륨과 보안 그룹을 인스턴스 view에 함께 담는다 — 두
+Rule(`EC2-EBS-ENCRYPT-001`, `EC2-SG-INGRESS-001`)의 근거가 그 상태에 있고, 볼륨/보안 그룹을 독립
+평가 대상으로 열면 같은 위반이 두 좌표에서 두 번 세어진다.
+
+여러 유형을 평가하는 배포는 `ResourceTypeRoutingAwsResourceTool`로 `resource_type`을 담당 adapter에
+분배한다. 등록되지 않은 유형은 빈 결과가 아니라 실패다 — 배선되지 않은 유형이 조용히 통과하면 "위반
+없음"과 구별할 수 없다. **Assessment Worker와 Deployment Worker는 같은 factory로 이 도구를 만든다.**
+한쪽만 읽을 수 있는 유형이 있으면 배포 후 검증이 그 유형을 조용히 건너뛴다.
+
+평가 대상 리소스는 배포 설정(`M1_ASSESSMENT_RUNTIME_JSON`)의 승인 목록이다. 공개 Assessment API는
+Repository와 Policy Profile만 받으며, Worker가 그 요청을 승인 목록의 모든 리소스로 확장해 하나의
+완전한 평가 계획을 저장한다. 내부 또는 레거시 Initial Assessment record가 `resource_type`/`resource_id`로
+그중 하나를 지목할 수 있고, 목록 밖의 리소스는 거부된다. 레거시 단일 `s3_bucket_id` 설정은 그대로
+유효하며 `AWS::S3::Bucket` 한 건으로 해석된다. 두 설정 방식을 동시에 선언하는 target은 거부한다 —
+"무엇을 평가할 수 있는가"에 답이 두 개가 되기 때문이다.
 
 M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule × Perspective` 수를 분모로
 사용한다. `PASS`, `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE` 결과는 완료된
@@ -139,7 +213,12 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
   항상 Source version까지 고정한다. 평가 Evidence는 `evidence_reference`
   (`{source_id}@{source_version}#{locator}`) 형식을 사용해 어떤 판본을 인용했는지 복원한다.
 - `PolicyRule`: versioned rule, severity, 적용 평가 단계, Resource 유형과 하나 이상의
-  Source Reference
+  Source Reference. authoring이 만든 Rule은 실행 의미 필드를 추가로 갖는다 — `control_key`,
+  `control_catalog_version`, `evaluation_type`, `required_evidence`/`optional_evidence`,
+  `evaluation_rubric`과 자유 텍스트 semantics. **`evaluation_type is None`이면 authoring 이전에
+  커밋된 legacy Rule**이며, 그런 Rule이 신규 필드를 일부만 갖는 상태는 금지한다 — 절반만 채워진
+  실행 의미는 어느 계약을 따르는지 알 수 없다. `judgment`/`score`/`source_score`/`anchor`는
+  정의하지 않는다.
 - `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
 - `PolicyProfile`: `rule_references`로 구성된 versioned allow-list. Repository/AWS Account 권한은
   Profile이 아니라 Backend의 JWT scope에서 강제한다.
@@ -149,9 +228,42 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 Policy Context Tool은 선택된 Profile의 Rule과 Source Reference만 전달한다. AI가
 Profile 밖의 Rule 또는 임의 Policy Source를 선택할 수 없다.
 
-Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, 비동기 Job은 승인 시점의 Profile
-version도 함께 고정한다. `PolicyContextResolver.resolve(..., expected_profile_version=...)`은
-그 사이에 Profile이 교체되면 다른 allow-list로 평가하지 않고 `PolicyNotFoundError`로 실패한다.
+Rule version이 고정돼도 Profile이 Rule 선택 경계이므로, **모든** Assessment는 생성 시점의 Profile
+version을 함께 고정한다(ADR-0020 amendment). `PolicyContextResolver.resolve(...,
+expected_profile_version=...)`은 그 판본 item을 직접 읽으므로, 실행 도중 새 Profile이 게시돼도 이미
+계획된 평가는 같은 allow-list로 끝난다. 판본이 사라졌거나 Profile 자체가 없으면
+`PolicyNotFoundError`로 실패하며, 두 경우의 메시지는 다르다 — "설정이 잘못됐다"와 "게시 이력이
+어긋났다"는 서로 다른 문제다.
+
+## Policy authoring boundary
+
+`packages/contracts/policy_authoring.py`는 **authoring 단계의 어휘만** 정의한다. Runtime 평가 결과
+(`EvaluationStatus`, `score`, `severity`)는 여기 없다. 두 어휘를 한 모듈에 두면 "이 Requirement를
+어떤 Rule로 만들 수 있는가"와 "그 Rule을 평가한 결과가 무엇인가"가 같은 값으로 표현되기 시작한다.
+`CandidateClassification`과 `EvaluationStatus` 사이에는 alias도 변환 함수도 만들지 않는다.
+
+- `CandidateClassification`: `AUTOMATABLE` / `MANUAL` / `UNSUPPORTED`. 분류마다 요구되는 모양이
+  다르다 — AUTOMATABLE은 Control·실행 유형·evidence·rubric이 필수이고, MANUAL은 MANUAL Control에
+  매핑되며 evidence를 가질 수 없고, UNSUPPORTED는 어떤 실행 의미도 갖지 않는다.
+- `GovernanceControl` / `GovernanceControlCatalog`: 제품이 평가할 수 있는 범위의 정본.
+  `automation_support`가 `AVAILABLE`/`KNOWN_UNSUPPORTED`/`MANUAL`을 구분한다.
+- `EvidenceCapabilityBinding`: **AWS와 IaC가 비대칭이다.** AWS_ACTUAL binding은 projected document의
+  실제 경로(`document_paths`)를 갖고 Runtime이 그것으로 pre-flight 판정을 한다. IAC binding은
+  `terraform_resource_types`/`terraform_attribute_names` hint만 가지며, 이는 prompt 경계와 화면
+  설명 용도의 non-authoritative 값이다.
+- `ExtractedRequirement`: LLM structured output. source ID·version·hash를 만들지 않고 locator만
+  돌려준다. 평가 결과 필드(`FORBIDDEN_EXTRACTION_FIELDS`)는 정의되지 않는다.
+- `AcceptedRequirement`: Rule로 변환한 뒤에도 원 Requirement·분류·매핑 이유·read-only
+  `proposed_severity`를 잃지 않게 둘을 함께 보존한다.
+- `RejectedRequirement` / `CandidateRejectionCode`: 거절 사유는 자유 문장이 아니라 열거값이다.
+  Artifact 자체의 무결성 실패는 후보 하나의 문제가 아니므로 `ArtifactReadFailureCode`로 분리한다.
+- `AuthoringManifest` / `AuthoringRunStatus`: 한 추출 실행의 완결 경계. Review와 Approval은
+  `READY`만 읽는다.
+- `CandidateReviewEntry`: 리뷰 화면이 받는 값. `proposed_severity`는 read-only이고 locator는 서버가
+  만든 `SourceReference`다.
+
+정책 원문은 이 어휘에 없다. 원문은 `ExtractionUnit`(추출 worker 내부 값) 안에만 존재하며 그 타입은
+직렬화를 제공하지 않는다 — 실수로 저장할 수 없게 만드는 것이 목적이다.
 Assessment/Work 레코드에 이 version을 영속화하는 것은 Backend(A)의 저장 경계다.
 
 ### Evidence reference boundary
@@ -256,8 +368,20 @@ ControlMapping)를 만든다.
 `(source_id, version)`으로 유일한지 교차 검증한다. Registry에 정의됐지만
 Profile allow-list에 없는 Rule은 어떤 Resource 유형으로도 Policy Context에 들어가지 않는다.
 
-M1 평가 대상은 S3 단독이다. EC2 Rule은 Mapping/Context 계층의 multi-type 동작을 고정하기 위해
-Registry에만 존재하며 Profile에는 포함하지 않는다 (M2 확장 대상).
+Registry는 S3·EC2·RDS·ALB 네 Resource 범위의 Rule을 담는다 (`rules.s3.json`, `rules.ec2.json`,
+`rules.rds.json`, `rules.alb.json`). Profile은 둘이다.
+
+| Policy Profile | 범위 | 비고 |
+| --- | --- | --- |
+| `profile-mvp-baseline` (`v2`) | S3 6 Rule | 승인된 MVP allow-list. 신규 유형 Rule을 넣지 않는다 |
+| `profile-multiresource-baseline` (`v1`) | S3 6 + EC2 3 + RDS 4 + ALB 2 = 15 Rule | 4종 확장 범위 |
+
+승인된 Profile에 신규 Rule을 끼워 넣지 않는 것은 `docs/POLICY_INGESTION.md`의 승인 경계를 우회하지
+않기 위해서다. 어느 Profile로 평가할지는 고객 승인 시점에 정한다.
+
+`AWS::EC2::Volume`과 `AWS::EC2::Snapshot`은 Rule의 `resource_types`에는 나타나지만 독립 평가 대상
+유형으로 열지 않는다. EC2 read adapter가 인스턴스에 연결된 볼륨 상태를 함께 담으므로 인스턴스 하나를
+읽으면 두 Rule의 근거가 모두 생기고, 별도 대상으로 열면 같은 위반이 두 좌표에서 두 번 세어진다.
 
 정책 원문은 저장소에 없으므로 (ADR-0004) `SourceReference.content_sha256`은
 `scripts/policy_source_digest.py --verify`로 원문 보유자만 검증한다. 원문 파일 매핑과 digest는
@@ -455,7 +579,7 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 | `DeploymentStatus` + `derive_deployment_status()` + `DeploymentFacts` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않고 durable 사실에서 read 시 계산 (ADR-0019 §8) |
 | `Action.START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `AuditEventType.DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 감사 event 정본 필드명은 `event_type` (ADR-0019 §4·§8) |
 | `DeploymentCommitResolver` | D | 구현됨. `TERRAFORM_PATCH`의 apply 대상(merge된 default branch commit)을 해석하는 read-only GitHub port. `None`은 "아직 merge 안 됨"이라는 값이지 오류가 아니다 (ADR-0019 §3·§4) |
-| `PlanSummary`, `mapped_resource_ids()` | D (요약) / 공용 (투영) | 구현됨. `plan_hash`가 담지 않는 readiness 세 값과, Terraform address를 Finding의 `resource_id` 어휘로 잇는 허용 목록 투영. 허용 목록 밖 type은 기여하지 않아 readiness가 `BLOCKED`가 된다 (ADR-0019 §1-a) |
+| `PlanSummary`, `mapped_resource_ids()` | D (요약) / 공용 (투영) | 구현됨. `plan_hash`가 담지 않는 readiness 세 값과, Terraform address를 Finding의 `resource_id` 어휘로 잇는 허용 목록 투영. S3 8종 + `aws_instance`/`aws_db_instance`/`aws_lb(_listener)`. 허용 목록 밖 type은 기여하지 않아 readiness가 `BLOCKED`가 된다 (ADR-0019 §1-a) |
 | `DeploymentRecord`/`DeploymentRejection` + Deployment 생성/조회/reject endpoint | A | 구현됨. 생성·reject는 durable 배선, 조회·검증조회는 facts/comparison reader 조립기 대기 (ADR-0019 §4·§8, ADR-0020 §7) |
 | `plan_verification_assessment()` + Assessment `phase`/correlation/scope-pin 영속화 + Worker phase 복원 | A | 구현됨. 검증 Assessment를 원 Assessment의 Profile version·planned 집합·Model Profile·rubric에 고정하고 fail-closed로 저장·복원 (ADR-0020 §2·§3) |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |

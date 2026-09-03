@@ -28,8 +28,19 @@ class InMemoryPolicyCatalog:
             if missing:
                 raise PolicyNotFoundError("policy profile references an unavailable rule")
 
-    def get_profile(self, policy_profile_id: str) -> PolicyProfile | None:
-        return self._profiles.get(policy_profile_id)
+    def get_profile(
+        self, policy_profile_id: str, version: str | None = None
+    ) -> PolicyProfile | None:
+        """Return the profile, refusing a version pin this catalog cannot satisfy.
+
+        메모리 Catalog는 판본 이력을 갖지 않으므로 pin이 현재 Profile과 다르면 `None`을 낸다.
+        pin을 무시하고 현재 Profile을 돌려주면, 고정된 version으로 평가한다는 계약이 여기서만
+        조용히 깨진다.
+        """
+        profile = self._profiles.get(policy_profile_id)
+        if profile is None or (version is not None and profile.version != version):
+            return None
+        return profile
 
     def get_rule(self, rule_id: str, version: str) -> PolicyRule | None:
         return self._rules.get((rule_id, version))

@@ -21,6 +21,29 @@ CUSTOMER_ID = "cust-001"
 DEPLOYMENT_ID = "dep-001"
 
 
+class PublishedProfiles:
+    """A tenant-scoped Profile reader. 게시된 Profile만 존재하고, 판본이 함께 나온다."""
+
+    def __init__(self, version: str = "v1") -> None:
+        self.version = version
+        self.customers: list[str] = []
+
+    def __call__(self, *, customer_id: str) -> "PublishedProfiles":
+        self.customers.append(customer_id)
+        return self
+
+    def get_profile(self, policy_profile_id: str, version: str | None = None):
+        from packages.contracts import PolicyProfile, PolicyRuleReference
+
+        if version is not None and version != self.version:
+            return None
+        return PolicyProfile(
+            policy_profile_id=policy_profile_id,
+            version=self.version,
+            rule_references=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
+
+
 class Repository:
     def get_job(self, customer_id, job_id):
         return None
@@ -44,7 +67,7 @@ class Dispatcher:
 
 
 class Scope:
-    def authorize(self, principal, *, repository_id, policy_profile_id):
+    def authorize(self, principal, *, repository_id):
         return None
 
 
@@ -73,6 +96,7 @@ def handler(*, wired=True):
     jobs = JobApiService(
         repository=repository,
         assessment_scope=Scope(),
+        policy_catalog_factory=PublishedProfiles(),
         outbox_dispatcher=OutboxDispatcher(repository=repository, dispatcher=Dispatcher()),
         job_id_factory=lambda: "job-001",
         assessment_id_factory=lambda: "asm-001",

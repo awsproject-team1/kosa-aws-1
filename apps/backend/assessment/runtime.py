@@ -11,13 +11,18 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
 from agent.context import AssessmentInputCollector, AwsResourceSelector, SnapshotReadRequest
-from agent.runtime import AssumeRoleS3ResourceTool, GitHubRestSnapshotTool
+from agent.runtime import AwsResourceTool, GitHubRestSnapshotTool, build_actual_resource_tool
 from apps.backend.assessment import (
+    ActualBedrockEvaluator,
+    ActualEvidenceLoader,
+    AssessmentEvaluationPlan,
+    AssessmentReportNotFoundError,
+    AssessmentReportStoreError,
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
@@ -27,10 +32,19 @@ from apps.backend.assessment import (
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
     M1RuntimeConfiguration,
-    S3ActualBedrockEvaluator,
-    S3ActualEvidenceLoader,
+    M1RuntimeConfigurationError,
 )
-from apps.backend.policy import PolicyContext, PolicyContextResolver, load_rule_registry
+from apps.backend.assessment.execution_plan import EvaluationExecutionPlanner
+from apps.backend.assessment.manual_review import ManualReviewEvaluator, governance_resource_id
+from apps.backend.assessment.runtime_config import M1AssessmentResource, M1AssessmentTarget
+from apps.backend.policy import (
+    DynamoDbPolicyCatalog,
+    NoApplicablePolicyRulesError,
+    PolicyContext,
+    PolicyContextResolver,
+    load_rule_registry,
+)
+from apps.backend.policy.control_catalog import GOVERNANCE_ASSESSMENT_RESOURCE_TYPE
 from packages.contracts import (
     AssessmentPhase,
     AwsResourceOperation,
@@ -52,6 +66,25 @@ class PlannedEvaluationReader(Protocol):
     def get_planned_evaluations(
         self, *, customer_id: str, assessment_id: str
     ) -> tuple[PlannedEvaluation, ...]: ...
+
+
+#: live Worker가 실제로 가진 runner 집합. **계획과 실행이 같은 planner를 통과한다** (ADR-0023 §8).
+#: 계획을 여기 말고 다른 곳에서 세 관점으로 하드코딩하면, IaC 전용 Rule의 AWS_ACTUAL/DRIFT 좌표가
+#: 계획에는 있고 실행에는 없어 coverage가 영원히 완료되지 않는다.
+_LIVE_PLANNER = EvaluationExecutionPlanner(
+    available_perspectives=(EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL),
+    derive_drift=True,
+)
+#: 승인된 MANUAL Rule은 governance 좌표에서 MANUAL 관점 하나만 만든다.
+_MANUAL_PLANNER = EvaluationExecutionPlanner(
+    available_perspectives=(EvaluationPerspective.MANUAL,), derive_drift=False
+)
+
+
+def _planner_for(resource_type: str) -> EvaluationExecutionPlanner:
+    if resource_type == GOVERNANCE_ASSESSMENT_RESOURCE_TYPE:
+        return _MANUAL_PLANNER
+    return _LIVE_PLANNER
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -149,17 +182,39 @@ class DynamoM1WorkRepository:
         self._model_profile = model_profile
         self._plan_reader = plan_reader
         self._targets: dict[tuple[str, int], object] = {}
-        self._work: dict[tuple[str, int], AssessmentResourceWork] = {}
+        self._works: dict[tuple[str, int], tuple[AssessmentResourceWork, ...]] = {}
 
     def get_resource_work(
         self, *, job_id: str, expected_revision: int
     ) -> AssessmentResourceWork | None:
-        """Reload once per task; the resolved work is authoritative for that revision.
+        """Return the sole work item for compatibility with ``AssessmentWorker``.
 
-        The handler resolves the runtime target before building the Worker, so the
-        Worker's own reload must not repeat the Job query and Assessment read.
+        The live composition expands a multi-resource Assessment with
+        :meth:`get_resource_works` and gives each item to a fixed repository. Calling this
+        legacy single-item method for a multi-resource Assessment is therefore an error,
+        not permission to pick whichever resource happens to be first.
         """
-        cached = self._work.get((job_id, expected_revision))
+        works = self.get_resource_works(job_id=job_id, expected_revision=expected_revision)
+        if not works:
+            return None
+        if len(works) != 1:
+            raise M1RuntimeConfigurationError(
+                "multi-resource assessment must be expanded before worker execution"
+            )
+        return works[0]
+
+    def get_resource_works(
+        self, *, job_id: str, expected_revision: int
+    ) -> tuple[AssessmentResourceWork, ...]:
+        """Reload once and expand an Assessment over its approved resource set.
+
+        Public Assessment creation deliberately accepts only repository/profile selectors;
+        resource coordinates come from the protected Worker configuration. If an older or
+        internal Initial Assessment record pins one approved resource, only it is used.
+        A verification without an explicit selector is narrowed to resource ids in the
+        source Assessment's immutable plan.
+        """
+        cached = self._works.get((job_id, expected_revision))
         if cached is not None:
             return cached
         response = self._table.query(
@@ -170,25 +225,25 @@ class DynamoM1WorkRepository:
         )
         jobs = response.get("Items", [])
         if not isinstance(jobs, list) or len(jobs) != 1:
-            return None
+            return ()
         job = jobs[0]
         if not isinstance(job, Mapping) or job.get("revision") != expected_revision:
-            return None
+            return ()
         customer_id, assessment_id = job.get("customer_id"), job.get("assessment_id")
         if not isinstance(customer_id, str) or not isinstance(assessment_id, str):
-            return None
+            return ()
         assessment = self._table.get_item(
             Key={"PK": f"CUSTOMER#{customer_id}", "SK": f"ASSESSMENT#{assessment_id}"},
             ConsistentRead=True,
         ).get("Item")
         if not isinstance(assessment, Mapping):
-            return None
+            return ()
         repository_id, profile_id = (
             assessment.get("repository_id"),
             assessment.get("policy_profile_id"),
         )
         if not isinstance(repository_id, str) or not isinstance(profile_id, str):
-            return None
+            return ()
         scope = _stored_assessment_scope(
             assessment,
             assessment_id=assessment_id,
@@ -196,37 +251,81 @@ class DynamoM1WorkRepository:
             model_profile=self._model_profile,
             plan_reader=self._plan_reader,
         )
-        target = self._configuration.resolve(
-            customer_id=customer_id,
-            repository_id=repository_id,
-            policy_profile_id=profile_id,
-        )
+        # Runtime configuration은 Repository/AWS Resource 경계만 답한다. 어떤 Profile을
+        # 쓸지는 Assessment record가 고정한 판본이 정하고, 그 Profile이 이 고객에게 존재하는지는
+        # Catalog가 판정한다.
+        target = self._configuration.resolve(customer_id=customer_id, repository_id=repository_id)
+        selector = _stored_resource_selector(assessment)
+        if scope.planned_coordinates is not None:
+            planned_resource_ids = {
+                coordinate.resource_id for coordinate in scope.planned_coordinates
+            }
+            # governance 좌표는 배포 설정의 리소스가 아니라 Repository 단위 좌표다. 승인 목록에
+            # 없다고 거부하면 MANUAL Rule을 가진 원 Assessment는 검증될 수 없다.
+            approved_resource_ids = {resource.resource_id for resource in target.resources} | {
+                governance_resource_id(repository_id)
+            }
+            if not planned_resource_ids.issubset(approved_resource_ids):
+                raise M1RuntimeConfigurationError(
+                    "verification plan contains a resource outside M1 runtime scope"
+                )
+            resources = tuple(
+                resource
+                for resource in target.resources
+                if resource.resource_id in planned_resource_ids
+            )
+        elif selector is not None:
+            resources = (target.resolve_resource(selector),)
+        else:
+            # Initial Assessments created by the public API carry no resource coordinates.
+            # The protected target is the approval boundary, so evaluate all of it rather
+            # than requiring a client-controlled selector or silently choosing one item.
+            resources = target.resources
+        if not resources:
+            raise M1RuntimeConfigurationError("assessment resolves no approved resources")
         self._targets[(job_id, expected_revision)] = target
-        work = AssessmentResourceWork(
-            customer_id=customer_id,
-            assessment_id=assessment_id,
-            job_id=job_id,
-            revision=expected_revision,
-            policy_profile_id=profile_id,
-            phase=scope.phase,
-            resource_id=target.s3_bucket_id,
-            resource_type="AWS::S3::Bucket",
-            # The live Worker runs the full perspective set, so this declares the
-            # primary evaluated perspective rather than the only one.
-            perspective=EvaluationPerspective.AWS_ACTUAL,
-            model_profile_id=self._model_profile.model_profile_id,
-            planned_coordinates=scope.planned_coordinates,
-            expected_profile_version=scope.expected_profile_version,
-            assessed_commit_sha=target.commit_sha,
+        works = tuple(
+            AssessmentResourceWork(
+                customer_id=customer_id,
+                assessment_id=assessment_id,
+                job_id=job_id,
+                revision=expected_revision,
+                policy_profile_id=profile_id,
+                phase=scope.phase,
+                resource_id=resource.resource_id,
+                resource_type=resource.resource_type,
+                # The live Worker runs the full perspective set, so this declares the
+                # primary evaluated perspective rather than the only one.
+                perspective=EvaluationPerspective.AWS_ACTUAL,
+                model_profile_id=self._model_profile.model_profile_id,
+                planned_coordinates=scope.planned_coordinates,
+                expected_profile_version=scope.expected_profile_version,
+                assessed_commit_sha=target.commit_sha,
+            )
+            for resource in resources
         )
-        self._work[(job_id, expected_revision)] = work
-        return work
+        self._works[(job_id, expected_revision)] = works
+        return works
 
     def target_for(self, *, job_id: str, expected_revision: int) -> object:
-        work = self.get_resource_work(job_id=job_id, expected_revision=expected_revision)
-        if work is None:
+        works = self.get_resource_works(job_id=job_id, expected_revision=expected_revision)
+        if not works:
             raise LookupError("M1 assessment work is missing or stale")
         return self._targets[(job_id, expected_revision)]
+
+
+class _ResolvedM1WorkRepository:
+    """Expose one already-authorized work item through the Worker repository port."""
+
+    def __init__(self, work: AssessmentResourceWork) -> None:
+        self._work = work
+
+    def get_resource_work(
+        self, *, job_id: str, expected_revision: int
+    ) -> AssessmentResourceWork | None:
+        if job_id != self._work.job_id or expected_revision != self._work.revision:
+            return None
+        return self._work
 
 
 class SyntheticS3Evaluator:
@@ -306,6 +405,19 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         worker.handle(task)
 
 
+def m1_context_resolver(table: object, *, target: M1AssessmentTarget) -> PolicyContextResolver:
+    """Resolve the live M1 Policy Context from the customer's own approved Rules.
+
+    **Runtime의 정본은 고객 partition의 승인된 Rule이다.** 커밋된 fixture Registry를 읽으면,
+    고객이 업로드·승인한 정책이 아니라 저장소에 커밋된 Rule로 평가하게 된다 — 그러면 업로드부터
+    승인까지의 경계 전체가 결과에 아무 영향을 주지 않는다. `fixtures/rules`는 bootstrap과 테스트
+    입력으로만 남는다.
+
+    Catalog는 `target.customer_id`에 묶이므로 다른 고객의 Rule은 이 resolver로 표현할 수 없다.
+    """
+    return PolicyContextResolver(DynamoDbPolicyCatalog(table, customer_id=target.customer_id))
+
+
 def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
     try:
         import boto3
@@ -326,6 +438,15 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
         target = work_repository.target_for(
             job_id=task.job_id, expected_revision=task.expected_revision
         )
+        context_resolver = m1_context_resolver(table, target=target)
+        works = work_repository.get_resource_works(
+            job_id=task.job_id, expected_revision=task.expected_revision
+        )
+        if not works:  # pragma: no cover - target_for already refused a stale Job.
+            raise RuntimeError("M1 assessment work is missing or stale")
+        works = _with_governance_work(works, context_resolver, repository_id=target.repository_id)
+        works = _with_complete_evaluation_plan(works, context_resolver)
+        _ensure_evaluation_plan(report_store, works[0])
         secrets = boto3.client("secretsmanager")
         github = GitHubRestSnapshotTool(
             customer_id=target.customer_id,
@@ -335,70 +456,233 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                 _secret_string(secrets, secret_id)
             ),
         )
-        aws = AssumeRoleS3ResourceTool(
-            customer_id=target.customer_id,
-            aws_account_id=target.aws_account_id,
-            role_arn=target.aws_read_role_arn,
+        aws = _actual_resource_tool(
+            boto3,
+            target=target,
             external_id=_secret_string(secrets, target.aws_external_id_secret_id),
-            sts=boto3.client("sts"),
-            s3_client_factory=lambda credentials: boto3.client(
-                "s3",
+        )
+        bedrock = BedrockConverseClientFactory(boto3).for_assessment(profile)
+        result_store = DynamoDbEvaluationResultStore(
+            table, table_name=table_name, transaction_client=boto3.client("dynamodb")
+        )
+        for work in works:
+            if work.resource_type == GOVERNANCE_ASSESSMENT_RESOURCE_TYPE:
+                # MANUAL Rule은 아무 도구도 부르지 않는다 — Bedrock도 AWS도 GitHub도. 좌표만
+                # 남겨 Coverage와 검증 비교가 그 통제를 알게 한다 (ADR-0023 §7).
+                AssessmentWorker(
+                    work_repository=_ResolvedM1WorkRepository(work),
+                    context_resolver=context_resolver,
+                    perspective_runners={
+                        EvaluationPerspective.MANUAL: AssessmentRunner(ManualReviewEvaluator())
+                    },
+                    model_profiles=InMemoryModelProfileRegistry((profile,)),
+                    result_store=result_store,
+                ).handle(task)
+                continue
+            # Read both approved inputs before evaluation. The collector exposes no
+            # mutation path. A single queue task may cover several protected resources,
+            # all bound to the complete plan stored before evaluation begins.
+            bundle = AssessmentInputCollector(github_tool=github, aws_tool=aws).collect(
+                SnapshotReadRequest(
+                    customer_id=target.customer_id,
+                    repository_id=target.repository_id,
+                    commit_sha=target.commit_sha,
+                    aws_account_id=target.aws_account_id,
+                    aws_selectors=(
+                        AwsResourceSelector(
+                            operation=AwsResourceOperation.READ_RESOURCE,
+                            resource_type=work.resource_type,
+                            resource_id=work.resource_id,
+                        ),
+                    ),
+                    include_iac_document=True,
+                )
+            )
+            if bundle.iac_document is None:  # pragma: no cover - request demands the body.
+                raise RuntimeError("approved IaC body is required for the IAC perspective")
+            worker = AssessmentWorker(
+                work_repository=_ResolvedM1WorkRepository(work),
+                context_resolver=context_resolver,
+                perspective_runners={
+                    EvaluationPerspective.IAC: AssessmentRunner(
+                        BedrockStructuredEvaluator(
+                            client=bedrock,
+                            perspective=EvaluationPerspective.IAC,
+                            resource_document=bundle.iac_document.to_dict(),
+                            evidence_references=bundle.iac_document.evidence_references,
+                        )
+                    ),
+                    EvaluationPerspective.AWS_ACTUAL: AssessmentRunner(
+                        ActualBedrockEvaluator(
+                            evidence_loader=ActualEvidenceLoader(
+                                tool=aws,
+                                customer_id=target.customer_id,
+                                aws_account_id=target.aws_account_id,
+                                resource_type=work.resource_type,
+                            ),
+                            client=bedrock,
+                        )
+                    ),
+                },
+                derive_drift=True,
+                model_profiles=InMemoryModelProfileRegistry((profile,)),
+                result_store=result_store,
+            )
+            worker.handle(task)
+
+
+def _with_complete_evaluation_plan(
+    works: tuple[AssessmentResourceWork, ...], context_resolver: PolicyContextResolver
+) -> tuple[AssessmentResourceWork, ...]:
+    """Give every Initial resource work the same complete immutable evaluation plan."""
+    if not works:
+        raise ValueError("works must not be empty")
+    stored_plans = {
+        work.planned_coordinates for work in works if work.planned_coordinates is not None
+    }
+    if stored_plans:
+        if len(stored_plans) != 1 or any(work.planned_coordinates is None for work in works):
+            raise RuntimeError("assessment work carries inconsistent planned coordinates")
+        return works
+    # **Perspective는 Rule마다 다르다.** IaC 전용 Rule은 IAC만, AWS 전용은 AWS_ACTUAL만, MANUAL은
+    # governance 좌표의 MANUAL만 만든다. 세 관점을 모든 Rule에 계획하면 채워질 수 없는 좌표가
+    # 생겨 coverage가 100%가 되지 않고 readiness가 영원히 null로 남는다.
+    planned = tuple(
+        PlannedEvaluation(
+            resource_id=work.resource_id,
+            rule_id=rule.rule_id,
+            perspective=perspective,
+        )
+        for work in works
+        for rule in context_resolver.resolve(
+            policy_profile_id=work.policy_profile_id,
+            phase=work.phase,
+            resource_type=work.resource_type,
+            expected_profile_version=work.expected_profile_version,
+        ).rules
+        for perspective in _planner_for(work.resource_type).perspectives_for(rule)
+    )
+    if not planned:
+        raise RuntimeError("assessment resolves no evaluable coordinates")
+    if len(set(planned)) != len(planned):
+        raise RuntimeError("multi-resource assessment plan contains duplicate coordinates")
+    return tuple(replace(work, planned_coordinates=planned) for work in works)
+
+
+def _with_governance_work(
+    works: tuple[AssessmentResourceWork, ...],
+    context_resolver: PolicyContextResolver,
+    *,
+    repository_id: str,
+) -> tuple[AssessmentResourceWork, ...]:
+    """Add the Repository-level MANUAL coordinate when the pinned Profile approves MANUAL Rules.
+
+    좌표는 `governance:{repository_id}`로 Repository 단위 안정 값이다 (ADR-0023 §7). 검증
+    Assessment는 원 계획을 그대로 재사용하므로, 계획에 governance 좌표가 있을 때만 그 work를
+    만들고 새로 resolve하지 않는다. Initial은 고정된 Profile 판본을 governance 유형으로 resolve해
+    적용 가능한 MANUAL Rule이 있을 때만 만든다 — 없으면 `NoApplicablePolicyRulesError`이며 그것은
+    오류가 아니라 "이 Profile에는 사람이 검토할 통제가 없다"는 답이다.
+    """
+    if not works:
+        raise ValueError("works must not be empty")
+    template = works[0]
+    governance_id = governance_resource_id(repository_id)
+    if any(work.resource_type == GOVERNANCE_ASSESSMENT_RESOURCE_TYPE for work in works):
+        return works
+    if template.planned_coordinates is not None:
+        planned_here = any(
+            coordinate.resource_id == governance_id for coordinate in template.planned_coordinates
+        )
+        if not planned_here:
+            return works
+    else:
+        try:
+            context_resolver.resolve(
+                policy_profile_id=template.policy_profile_id,
+                phase=template.phase,
+                resource_type=GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
+                expected_profile_version=template.expected_profile_version,
+            )
+        except NoApplicablePolicyRulesError:
+            return works
+    governance = replace(
+        template,
+        resource_id=governance_id,
+        resource_type=GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
+        perspective=EvaluationPerspective.MANUAL,
+    )
+    return (*works, governance)
+
+
+def _ensure_evaluation_plan(
+    store: DynamoDbAssessmentReportStore, work: AssessmentResourceWork
+) -> None:
+    """Create the shared plan once, accepting only an identical retry or race winner."""
+    if work.planned_coordinates is None:
+        raise RuntimeError("M1 assessment work has no complete evaluation plan")
+    plan = AssessmentEvaluationPlan(
+        customer_id=work.customer_id,
+        assessment_id=work.assessment_id,
+        planned_coordinates=work.planned_coordinates,
+    )
+    try:
+        existing = store.get_planned_evaluations(
+            customer_id=work.customer_id, assessment_id=work.assessment_id
+        )
+    except AssessmentReportNotFoundError:
+        try:
+            store.put_plan_if_absent(plan)
+            return
+        except AssessmentReportStoreError as write_error:
+            # A concurrent invocation may have won the conditional write. Read its
+            # immutable value and accept it only when this invocation derived the same set.
+            try:
+                existing = store.get_planned_evaluations(
+                    customer_id=work.customer_id, assessment_id=work.assessment_id
+                )
+            except AssessmentReportNotFoundError:
+                raise write_error from None
+    if existing != plan.planned_coordinates:
+        raise RuntimeError("stored assessment plan differs from resolved resource scope")
+
+
+def _actual_resource_tool(
+    boto3: object,
+    *,
+    target: object,
+    external_id: str,
+) -> AwsResourceTool:
+    """Build the read-only tool for exactly the resource types this target approves."""
+    return build_actual_resource_tool(
+        customer_id=target.customer_id,
+        aws_account_id=target.aws_account_id,
+        role_arn=target.aws_read_role_arn,
+        external_id=external_id,
+        resource_types=target.resource_types,
+        client_factory_provider=_client_factory_provider(boto3),
+        sts=boto3.client("sts"),
+    )
+
+
+def _client_factory_provider(boto3: object):
+    """Return a provider of lazy, credential-taking clients for one AWS service each.
+
+    The client is built when a read first needs credentials, not at wiring time, so
+    configuring a resource type costs nothing until it is actually read.
+    """
+
+    def provider(service: str):
+        def build(credentials: Mapping[str, str]) -> object:
+            return boto3.client(
+                service,
                 aws_access_key_id=credentials["AccessKeyId"],
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
-            ),
-        )
-        # Read both approved inputs before evaluation.  The collector exposes no mutation path.
-        bundle = AssessmentInputCollector(github_tool=github, aws_tool=aws).collect(
-            SnapshotReadRequest(
-                customer_id=target.customer_id,
-                repository_id=target.repository_id,
-                commit_sha=target.commit_sha,
-                aws_account_id=target.aws_account_id,
-                aws_selectors=(
-                    AwsResourceSelector(
-                        operation=AwsResourceOperation.READ_RESOURCE,
-                        resource_type="AWS::S3::Bucket",
-                        resource_id=target.s3_bucket_id,
-                    ),
-                ),
-                include_iac_document=True,
             )
-        )
-        if bundle.iac_document is None:  # pragma: no cover - the request demands the body.
-            raise RuntimeError("approved IaC body is required for the IAC perspective")
-        bedrock = BedrockConverseClientFactory(boto3).for_assessment(profile)
-        worker = AssessmentWorker(
-            work_repository=work_repository,
-            context_resolver=PolicyContextResolver(load_rule_registry(_rules_path()).catalog),
-            perspective_runners={
-                EvaluationPerspective.IAC: AssessmentRunner(
-                    BedrockStructuredEvaluator(
-                        client=bedrock,
-                        perspective=EvaluationPerspective.IAC,
-                        resource_document=bundle.iac_document.to_dict(),
-                        evidence_references=bundle.iac_document.evidence_references,
-                    )
-                ),
-                EvaluationPerspective.AWS_ACTUAL: AssessmentRunner(
-                    S3ActualBedrockEvaluator(
-                        evidence_loader=S3ActualEvidenceLoader(
-                            tool=aws,
-                            customer_id=target.customer_id,
-                            aws_account_id=target.aws_account_id,
-                        ),
-                        client=bedrock,
-                    )
-                ),
-            },
-            derive_drift=True,
-            model_profiles=InMemoryModelProfileRegistry((profile,)),
-            result_store=DynamoDbEvaluationResultStore(
-                table, table_name=table_name, transaction_client=boto3.client("dynamodb")
-            ),
-            plan_store=report_store,
-        )
-        worker.handle(task)
+
+        return build
+
+    return provider
 
 
 def _tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
@@ -467,6 +751,25 @@ def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
 
 
+def _stored_resource_selector(assessment: Mapping[str, object]) -> M1AssessmentResource | None:
+    """Read the resource an Assessment record names, if it names one.
+
+    Both coordinates are required together. A record with only one of them does not
+    identify a resource, and guessing the other would silently evaluate a different
+    resource than the one the Assessment was created for. The named pair is still checked
+    against the approved list by `M1AssessmentTarget.resolve_resource()`; this function only
+    reads it.
+    """
+    resource_type, resource_id = assessment.get("resource_type"), assessment.get("resource_id")
+    if resource_type is None and resource_id is None:
+        return None
+    if not isinstance(resource_type, str) or not resource_type.strip():
+        raise ValueError("stored Assessment resource_type is invalid")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError("stored Assessment resource_id is invalid")
+    return M1AssessmentResource(resource_type=resource_type, resource_id=resource_id)
+
+
 def _stored_assessment_scope(
     assessment: Mapping[str, object],
     *,
@@ -484,8 +787,16 @@ def _stored_assessment_scope(
     re-evaluated under a Profile that would make the comparison meaningless.
     """
     phase = _stored_assessment_phase(assessment, assessment_id=assessment_id)
+
+    # **모든 phase**가 Profile 판본을 고정한다. 없으면 최신 pointer로 조용히 대체하지 않고
+    # 실패한다 — 그렇게 대체하면 실행 도중 게시된 새 Profile이 이미 계획된 평가의 Rule 집합을
+    # 바꾸고, 그 사실이 어디에도 남지 않는다. 판본이 없는 기존 record는 backfill 대상이다.
+    expected_profile_version = assessment.get("policy_profile_version")
+    if not isinstance(expected_profile_version, str) or not expected_profile_version.strip():
+        raise ValueError("stored Assessment policy_profile_version pin is missing")
+
     if phase is not AssessmentPhase.POST_DEPLOY_VERIFICATION:
-        return _StoredScope(phase=phase)
+        return _StoredScope(phase=phase, expected_profile_version=expected_profile_version)
     for name, configured in (
         ("model_profile_id", model_profile.model_profile_id),
         ("rubric_version", model_profile.rubric_version),
@@ -495,9 +806,6 @@ def _stored_assessment_scope(
             raise ValueError(f"stored verification Assessment {name} pin is missing")
         if pinned != configured:
             raise ValueError(f"stored verification Assessment pins a different {name}")
-    expected_profile_version = assessment.get("policy_profile_version")
-    if not isinstance(expected_profile_version, str) or not expected_profile_version.strip():
-        raise ValueError("stored verification Assessment policy_profile_version pin is missing")
     if plan_reader is None:
         raise ValueError("verification Assessment requires a planned evaluation reader")
     planned = plan_reader.get_planned_evaluations(
@@ -516,6 +824,8 @@ def _stored_assessment_phase(
     assessment: Mapping[str, object], *, assessment_id: str
 ) -> AssessmentPhase:
     raw_phase = assessment.get("phase")
+    # `policy_profile_version`은 여기 없다 — 모든 phase가 갖는 값이므로 verification 전용
+    # correlation과 섞으면 Initial Assessment가 그것을 가졌다는 이유로 거부된다.
     verification_only = {
         name: assessment.get(name)
         for name in (
@@ -523,7 +833,6 @@ def _stored_assessment_phase(
             "deployment_id",
             "model_profile_id",
             "rubric_version",
-            "policy_profile_version",
         )
     }
     source_assessment_id = verification_only["source_assessment_id"]

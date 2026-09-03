@@ -11,6 +11,15 @@ from packages.contracts import (
 _SEVERITY_WEIGHTS = {"LOW": 1, "MEDIUM": 2, "HIGH": 4, "CRITICAL": 8}
 _NON_SCORING_STATUSES = frozenset({EvaluationStatus.OUT_OF_SCOPE, EvaluationStatus.EXECUTION_ERROR})
 
+#: 숫자 readiness 평균에서 제외하는 Perspective. **status 기준은 건드리지 않는다** — 기존
+#: IAC/AWS_ACTUAL 결과의 `MANUAL_REVIEW`는 지금처럼 점수에 들어간다.
+#:
+#: DRIFT는 두 Perspective의 비교이므로 평균에 넣으면 같은 사실을 두 번 세는 것이고, MANUAL은
+#: 도구가 만든 점수가 아니라 사람이 정할 판단이므로 0점이 평균을 끌어내리면 그 숫자는 "아직
+#: 검토되지 않았다"가 아니라 "위반이 있다"로 읽힌다. 두 Perspective 모두 Coverage와 plan
+#: 완료에는 그대로 포함된다.
+_NON_SCORING_PERSPECTIVES = frozenset({EvaluationPerspective.DRIFT, EvaluationPerspective.MANUAL})
+
 
 def calculate_readiness_score(
     *,
@@ -59,7 +68,7 @@ def calculate_readiness_score(
         result
         for result in results
         if result.status not in _NON_SCORING_STATUSES
-        and result.perspective is not EvaluationPerspective.DRIFT
+        and result.perspective not in _NON_SCORING_PERSPECTIVES
     )
     if not scoring_results:
         return None

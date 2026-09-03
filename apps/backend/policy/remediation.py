@@ -153,6 +153,12 @@ class RemediationPolicy:
                 finding, action=RemediationAction.SUPPRESSED, exception_id=exception.exception_id
             )
 
+        if finding.perspective is EvaluationPerspective.MANUAL:
+            # 사람이 검토해야 한다고 승인된 통제다. 지금은 `ManualReviewEvaluator`가 항상
+            # `MANUAL_REVIEW` 상태를 만들어 아래 검사에도 걸리지만, 그 상태에 기대지 않는다 —
+            # 상태 하나가 바뀌면 도구가 고칠 수 없는 것에 Patch를 합성하게 된다.
+            return self._manual(finding, ManualReviewCode.EVALUATION_REQUIRES_REVIEW)
+
         if finding.status is not _REMEDIABLE_STATUS:
             return self._manual(
                 finding,

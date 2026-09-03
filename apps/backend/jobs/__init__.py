@@ -20,6 +20,7 @@ from apps.backend.jobs.outbox import OutboxDispatcher, OutboxStatus, WorkflowOut
 from apps.backend.jobs.sqs import (
     CommandRoutingWorkflowDispatcher,
     SqsDeploymentWorkflowDispatcher,
+    SqsPolicyAuthoringDispatcher,
     SqsRemediationWorkflowDispatcher,
     SqsWorkflowDispatcher,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "RequestValidationError",
     "StaleJobRevision",
     "SqsDeploymentWorkflowDispatcher",
+    "SqsPolicyAuthoringDispatcher",
     "SqsRemediationWorkflowDispatcher",
     "SqsWorkflowDispatcher",
     "authorize_job_read",

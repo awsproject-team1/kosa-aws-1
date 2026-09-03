@@ -281,3 +281,51 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   `AssessmentEvaluationPlan`이 좌표 집합을 갖고, Worker가 그것을 PLAN item에 쓰며,
   `DynamoDbAssessmentReportStore.get_planned_evaluations()`가 비교 경계에 그 집합을 돌려준다.
   남은 것은 `phase`/`source_assessment_id`/`deployment_id` 영속화와 검증 endpoint 배선이다.
+
+## Implementation note (2026-09-03)
+
+검증 Assessment 생성 경로가 배선됐다. `DeploymentWorker._verify_apply()`는 run facts를 `VERIFIED`로
+확정한 뒤 마지막으로 `VerificationStarter.start_verification(work)`를 호출하고, A 경계
+`apps/backend/deployment/verification.py`의 `PostDeployVerificationService`가 (1) Deployment record와
+Job을 다시 읽고, (2) 원 Assessment의 Repository·Profile 판본·planned 집합·Model Profile·rubric을
+`DynamoDbVerificationSourceReader`로 모으며(Model Profile·rubric은 §3대로 결과에서 파생), (3) 고정된
+판본을 검증 phase로 다시 resolve해 `plan_verification_assessment()`로 scope를 만들고, (4) 검증
+Assessment item·다음 revision의 Job(write-once `assessment_id`)·`ASSESS_RESOURCE` outbox·record의
+`verification_assessment_id`를 **하나의 조건부 transaction**으로 쓴다
+(`DynamoDbPostDeployVerificationStore`). 같은 apply 완료의 재전달은 record의 기존 id를 돌려준다.
+Profile 판본이 바뀌었으면 §2대로 검증하지 않고 `PostDeployVerificationError`로 사람에게 남긴다.
+
+§8의 15초·45초 재조회는 아직 구현하지 않았다. 현재는 "1회차는 지연 없이 읽는다"만 성립하며, 검증
+Assessment Worker가 평가 시점에 Actual을 한 번 읽는다. 전파 지연이 관측되면 재조회 로직을 Assessment
+Worker의 AWS_ACTUAL read 앞에 추가한다 — immutable write 앞에서 끝나야 한다는 규칙은 그대로다.
+
+## Amendment (2026-09-03, ADR-0023)
+
+ADR-0023이 정책 문서에서 Rule을 만드는 경로를 붙이면서 이 ADR의 두 지점이 바뀐다. 비교의 의미와
+Finding Resolution 어휘는 그대로다.
+
+### `policy_profile_version`은 verification 전용 pin이 아니다
+
+이 ADR은 검증 Assessment가 재사용할 scope로 `model_profile_id`·`rubric_version`·
+`policy_profile_version` 셋을 pin했다. ADR-0023 이후 **`policy_profile_version`은 모든 phase가 갖는
+필수 값**이다. Initial Assessment도 생성 시점의 current Profile 판본을 고정하고, Runtime은 latest
+pointer가 아니라 그 판본을 직접 조회한다.
+
+이유는 이 ADR이 검증에 대해 말한 것과 같다 — 평가 도중 Profile이 교체되면 앞뒤 결과가 다른
+allow-list에서 나온다. 그 위험은 검증에만 있는 것이 아니라 실행 시간이 긴 모든 Assessment에 있다.
+Profile 게시가 이제 고객 승인으로 수시로 일어나므로 더욱 그렇다.
+
+따라서 verification 전용 pin은 `model_profile_id`와 `rubric_version` 둘로 줄고, 저장된 Assessment에
+`policy_profile_version`이 없으면 **모든 phase에서** fail-closed한다. 판본이 없는 기존 record는
+backfill하거나 queue를 비운 뒤 배포한다. 최신 pointer로 조용히 대체하지 않는다.
+
+### `EvaluationPerspective.MANUAL`이 비교 좌표에 들어온다
+
+승인된 MANUAL Rule은 Initial과 Post-Deploy Verification 양쪽에서 결과를 만들며, 좌표는
+`AWS::Governance::Assessment` 유형의 `governance:{repository_id}`다. Repository 단위로 안정적이므로
+이 ADR이 요구하는 planned set 일치가 그대로 성립한다.
+
+MANUAL 결과는 `MANUAL_REVIEW` 상태이므로 이 ADR의 Resolution 규칙에 따라 `INDETERMINATE`가 된다 —
+새 규칙이 아니라 기존 규칙의 적용이다. readiness 숫자 평균에서만 제외되고(`DRIFT`와 같은 이유로,
+`_NON_SCORING_PERSPECTIVES`), Coverage와 plan 완료에는 포함된다. **제외 기준은 Perspective이지
+status가 아니다** — 기존 IAC/AWS_ACTUAL 결과의 `MANUAL_REVIEW` 점수 의미는 바뀌지 않는다.

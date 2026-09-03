@@ -42,8 +42,31 @@ class Dispatcher:
         return None
 
 
+class PublishedProfiles:
+    """A tenant-scoped Profile reader. 게시된 Profile만 존재하고, 판본이 함께 나온다."""
+
+    def __init__(self, version: str = "v1") -> None:
+        self.version = version
+        self.customers: list[str] = []
+
+    def __call__(self, *, customer_id: str) -> "PublishedProfiles":
+        self.customers.append(customer_id)
+        return self
+
+    def get_profile(self, policy_profile_id: str, version: str | None = None):
+        from packages.contracts import PolicyProfile, PolicyRuleReference
+
+        if version is not None and version != self.version:
+            return None
+        return PolicyProfile(
+            policy_profile_id=policy_profile_id,
+            version=self.version,
+            rule_references=(PolicyRuleReference(rule_id="RULE-1", version="v1"),),
+        )
+
+
 class ApprovedScope:
-    def authorize(self, principal, *, repository_id: str, policy_profile_id: str) -> None:
+    def authorize(self, principal, *, repository_id: str) -> None:
         return None
 
 
@@ -105,6 +128,7 @@ class JobHttpHandlerTest(unittest.TestCase):
         service = JobApiService(
             repository=self.repository,
             assessment_scope=ApprovedScope(),
+            policy_catalog_factory=PublishedProfiles(),
             outbox_dispatcher=OutboxDispatcher(repository=self.repository, dispatcher=Dispatcher()),
             job_id_factory=lambda: "job-001",
             assessment_id_factory=lambda: "asm-001",
@@ -202,6 +226,7 @@ class JobHttpHandlerTest(unittest.TestCase):
         service = JobApiService(
             repository=self.repository,
             assessment_scope=ApprovedScope(),
+            policy_catalog_factory=PublishedProfiles(),
             outbox_dispatcher=OutboxDispatcher(repository=self.repository, dispatcher=Dispatcher()),
             job_id_factory=lambda: "job-002",
             assessment_id_factory=lambda: "asm-002",

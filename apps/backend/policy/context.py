@@ -12,10 +12,21 @@ class PolicyNotFoundError(LookupError):
     """Raised when an approved profile references a rule that is unavailable."""
 
 
+class NoApplicablePolicyRulesError(PolicyNotFoundError):
+    """The Profile exists and resolved, but no Rule applies to this phase and resource type.
+
+    Profile이 없는 것과는 다른 답이다. 전자는 설정 오류이고, 이 경우는 "이 유형에는 평가할 것이
+    없다"이므로 호출자가 그 유형의 work를 만들지 않는 것이 맞다 — 예를 들어 MANUAL Rule이
+    하나도 승인되지 않은 Profile에는 governance 좌표가 없다.
+    """
+
+
 class PolicyCatalog(Protocol):
     """Customer-scoped read interface; authorization belongs to the Backend caller."""
 
-    def get_profile(self, policy_profile_id: str) -> PolicyProfile | None: ...
+    def get_profile(
+        self, policy_profile_id: str, version: str | None = None
+    ) -> PolicyProfile | None: ...
 
     def get_rule(self, rule_id: str, version: str) -> PolicyRule | None: ...
 
@@ -103,9 +114,12 @@ class PolicyContextResolver:
             raise TypeError("phase must be an AssessmentPhase")
         if not isinstance(resource_type, str) or not resource_type.strip():
             raise ValueError("resource_type must be a non-empty string")
-        profile = self._catalog.get_profile(policy_profile_id)
+        # pin된 version이 있으면 **그 version item을 직접 읽는다.** current pointer를 읽고
+        # version을 대조하면, 그 사이에 새 Profile이 게시된 Assessment는 조용히 실패하는 것이
+        # 아니라 아예 평가되지 못한다. 판본은 immutable하므로 직접 조회가 항상 가능하다.
+        profile = self._catalog.get_profile(policy_profile_id, expected_profile_version)
         if profile is None:
-            raise PolicyNotFoundError("policy profile not found")
+            raise self._missing_profile(policy_profile_id, expected_profile_version)
         if expected_profile_version is not None and profile.version != expected_profile_version:
             raise PolicyNotFoundError(
                 "policy profile version changed since the assessment was approved"
@@ -120,13 +134,29 @@ class PolicyContextResolver:
             if phase in rule.applicable_phases and resource_type in rule.resource_types
         )
         if not applicable:
-            raise PolicyNotFoundError("no applicable policy rules")
+            raise NoApplicablePolicyRulesError("no applicable policy rules")
         return PolicyContext(
             policy_profile_id=profile.policy_profile_id,
             policy_profile_version=profile.version,
             phase=phase,
             resource_type=resource_type,
             rules=applicable,
+        )
+
+    def _missing_profile(
+        self, policy_profile_id: str, expected_profile_version: str | None
+    ) -> PolicyNotFoundError:
+        """Say which of the two failures happened: no such Profile, or a replaced version.
+
+        둘을 같은 메시지로 뭉치면 운영에서 원인을 가릴 수 없다. "Profile이 없다"는 설정 오류이고,
+        "고정한 판본이 사라졌다"는 게시 이력 문제다. 이 조회는 실패 경로에서만 한 번 더 일어난다.
+        """
+        if expected_profile_version is None:
+            return PolicyNotFoundError("policy profile not found")
+        if self._catalog.get_profile(policy_profile_id) is None:
+            return PolicyNotFoundError("policy profile not found")
+        return PolicyNotFoundError(
+            "policy profile version changed since the assessment was approved"
         )
 
     def _resolve_rule(self, rule_id: str, version: str) -> PolicyRule:

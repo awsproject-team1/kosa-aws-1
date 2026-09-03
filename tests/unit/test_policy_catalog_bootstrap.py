@@ -44,9 +44,10 @@ class PolicyCatalogBootstrapTest(unittest.TestCase):
         table = Table()
         bootstrap = DynamoDbPolicyCatalogBootstrap(table, customer_id="cust-001")
 
+        # Profile마다 판본 이력과 current pointer 두 item이 생긴다.
         self.assertEqual(
             bootstrap.publish(REGISTRY),
-            len(REGISTRY.sources) + len(REGISTRY.rules) + len(REGISTRY.profiles),
+            len(REGISTRY.sources) + len(REGISTRY.rules) + 2 * len(REGISTRY.profiles),
         )
         self.assertEqual(bootstrap.publish(REGISTRY), 0)
         rule_item = table.items[("CUSTOMER#cust-001", "RULE#S3-PUBLIC-001#VERSION#2026-08-31")]
@@ -56,6 +57,11 @@ class PolicyCatalogBootstrapTest(unittest.TestCase):
         self.assertIsNotNone(resolved)
         assert resolved is not None
         self.assertEqual(len(resolved.rule_references), 6)
+        # 고정한 판본을 직접 읽을 수 있어야 한다. pointer만 있으면 실행 중 게시된 새 Profile이
+        # 이미 계획된 평가를 완료 불가능하게 만든다.
+        pinned = catalog.get_profile("profile-mvp-baseline", resolved.version)
+        self.assertEqual(pinned, resolved)
+        self.assertIsNone(catalog.get_profile("profile-mvp-baseline", "a-version-never-published"))
         self.assertEqual(
             len(
                 PolicyContextResolver(catalog)
