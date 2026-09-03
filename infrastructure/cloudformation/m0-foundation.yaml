@@ -779,6 +779,17 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 조치 흐름의 진입점(ADR-0018). handler branch만 있고 이 route가 없으면 고객은 조치를
+  # 시작할 수 없다 — API Gateway는 명시적 allow-list이므로 선언되지 않은 경로는 handler에
+  # 닿기 전에 404다.
+  PostFindingRemediationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /findings/{findingId}/remediations"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   # M3 deployment routes. API Gateway is an explicit allow-list; handler routes
   # alone are not reachable from the customer-facing HTTP API.
   PostRemediationDeploymentsRoute:
@@ -810,6 +821,26 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /deployments/{deploymentId}/reject"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 사람 승인 게이트(ADR-0019 §4). 승인은 apply를 트리거하지 않고 승인 record와 dispatch
+  # outbox만 쓰지만, 이 route가 없으면 폐루프가 승인 단계에서 멈춘다.
+  PostDeploymentApproveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /deployments/{deploymentId}/approve"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # M4 A 관측·비용 조회(Admin 전용, ADR-0021 §3). live metric source가 주입되지 않은
+  # 배포에서는 handler가 404로 답하며, 그것이 "주입할 source가 없다"의 표현이다.
+  GetDeploymentObservabilityRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /deployments/{deploymentId}/observability"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]

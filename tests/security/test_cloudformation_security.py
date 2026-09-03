@@ -1,12 +1,104 @@
 """Semantic security checks for the canonical M0 CloudFormation template."""
 
+import ast
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 TEMPLATE_PATH = Path(__file__).parents[2] / "infrastructure/cloudformation/m0-foundation.yaml"
+
+
+HANDLER_PATH = Path(__file__).parents[2] / "apps/backend/api/handler.py"
+
+
+@dataclass(frozen=True, slots=True)
+class _HandlerRoute:
+    """One endpoint the HTTP handler dispatches on, as written in its branch condition."""
+
+    method: str
+    exact: str | None = None
+    prefix: str | None = None
+    suffix: str | None = None
+
+    def describe(self) -> str:
+        if self.exact is not None:
+            return f"{self.method} {self.exact}"
+        return f"{self.method} {self.prefix or ''}*{self.suffix or ''}"
+
+    def is_served_by(self, method: str, path: str) -> bool:
+        if method != self.method:
+            return False
+        if self.exact is not None:
+            return path == self.exact
+        if self.prefix is not None and not path.startswith(self.prefix):
+            return False
+        if self.suffix is not None:
+            return path.endswith(self.suffix)
+        # A prefix-only branch serves one path segment (`GET /deployments/{id}`). Requiring
+        # exactly one segment stops a more specific sibling route from standing in for it.
+        assert self.prefix is not None
+        return "/" not in path[len(self.prefix) :]
+
+
+def _handler_routes() -> tuple[_HandlerRoute, ...]:
+    """Extract the endpoints the handler serves from its own branch conditions.
+
+    Read from the code rather than declared in the test. A hand-kept list is exactly what
+    let three implemented endpoints ship with no API Gateway route, and the method has to be
+    paired with the path — a suffix alone is shared between unrelated endpoints
+    (`/approve` belongs to both a policy-source route and a deployment route).
+    """
+    tree = ast.parse(HANDLER_PATH.read_text(encoding="utf-8"))
+    routes: list[_HandlerRoute] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        conditions = (
+            node.test.values if isinstance(node.test, ast.BoolOp) else [node.test]  # type: ignore[attr-defined]
+        )
+        method = exact = prefix = suffix = None
+        for condition in conditions:
+            if _is_equality(condition, "method"):
+                method = condition.comparators[0].value  # type: ignore[attr-defined]
+            elif _is_equality(condition, "path"):
+                exact = condition.comparators[0].value  # type: ignore[attr-defined]
+            elif (literal := _string_method_arg(condition, "startswith")) is not None:
+                prefix = literal
+            elif (literal := _string_method_arg(condition, "endswith")) is not None:
+                suffix = literal
+        if method is not None and (exact or prefix or suffix):
+            routes.append(_HandlerRoute(method=method, exact=exact, prefix=prefix, suffix=suffix))
+    return tuple(routes)
+
+
+def _is_equality(condition: ast.expr, name: str) -> bool:
+    return (
+        isinstance(condition, ast.Compare)
+        and isinstance(condition.left, ast.Name)
+        and condition.left.id == name
+        and len(condition.ops) == 1
+        and isinstance(condition.ops[0], ast.Eq)
+        and isinstance(condition.comparators[0], ast.Constant)
+        and isinstance(condition.comparators[0].value, str)
+    )
+
+
+def _string_method_arg(condition: ast.expr, attribute: str) -> str | None:
+    if (
+        isinstance(condition, ast.Call)
+        and isinstance(condition.func, ast.Attribute)
+        and condition.func.attr == attribute
+        and isinstance(condition.func.value, ast.Name)
+        and condition.func.value.id == "path"
+        and len(condition.args) == 1
+        and isinstance(condition.args[0], ast.Constant)
+        and isinstance(condition.args[0].value, str)
+    ):
+        return condition.args[0].value
+    return None
 
 
 def _construct_intrinsic(loader: yaml.SafeLoader, _suffix: str, node: yaml.Node) -> object:
@@ -291,10 +383,13 @@ class CloudFormationSecurityTest(unittest.TestCase):
     def test_deployment_http_routes_are_explicitly_jwt_protected(self) -> None:
         """Handler branches are unreachable unless API Gateway declares each route."""
         expected = {
+            "PostFindingRemediationsRoute": "POST /findings/{findingId}/remediations",
             "PostRemediationDeploymentsRoute": "POST /remediations/{remediationId}/deployments",
             "GetDeploymentRoute": "GET /deployments/{deploymentId}",
             "GetDeploymentVerificationRoute": "GET /deployments/{deploymentId}/verification",
+            "PostDeploymentApproveRoute": "POST /deployments/{deploymentId}/approve",
             "PostDeploymentRejectRoute": "POST /deployments/{deploymentId}/reject",
+            "GetDeploymentObservabilityRoute": "GET /deployments/{deploymentId}/observability",
             # 감사 이력 조회도 같은 JWT authorizer 뒤에 있어야 한다. handler가 Admin 권한을
             # 검사하더라도, route가 authorizer 없이 선언되면 인증 없는 호출이 handler까지 닿는다.
             "GetAuditEventsRoute": "GET /audit-events",
@@ -304,6 +399,74 @@ class CloudFormationSecurityTest(unittest.TestCase):
             self.assertEqual(route["RouteKey"], route_key)
             self.assertEqual(route["AuthorizationType"], "JWT")
             self.assertEqual(route["AuthorizerId"], "HttpApiAuthorizer")
+
+    def test_every_route_the_handler_branches_on_is_declared(self) -> None:
+        """이 회귀가 없어서 세 endpoint가 route 없이 배포됐다.
+
+        위의 기대 목록은 사람이 유지하는 목록이라 handler에 branch가 추가될 때 같이 갱신되지
+        않으면 조용히 낡는다 — 실제로 `POST /findings/{id}/remediations`,
+        `POST /deployments/{id}/approve`, `GET /deployments/{id}/observability` 셋이 그렇게
+        빠졌고, 조치 흐름은 프로덕션에서 시작조차 할 수 없었다. 그래서 기대값을 handler가
+        실제로 분기하는 조건에서 **파생**한다.
+        """
+        declared = self._declared_routes()
+        handler_routes = _handler_routes()
+
+        # handler를 실제로 읽었는지 먼저 확인한다. 파싱이 아무것도 잡지 못하면 이 테스트는
+        # 통과하면서 아무것도 검사하지 않는다.
+        self.assertGreaterEqual(len(handler_routes), 14)
+
+        for route in handler_routes:
+            with self.subTest(endpoint=route.describe()):
+                self.assertTrue(
+                    any(route.is_served_by(method, path) for method, path in declared),
+                    f"handler serves {route.describe()} but no API Gateway route declares it",
+                )
+
+    def test_no_route_is_declared_that_no_handler_branch_serves(self) -> None:
+        """반대 방향도 막는다 — 선언됐지만 handler가 처리하지 않는 route는 런타임 404다.
+
+        handler→route 검사만으로는 RouteKey 오타를 잡지 못한다. 오타 난 route는 아무 branch와도
+        맞지 않아 호출이 handler까지 가고도 경로 분기에서 떨어진다.
+        """
+        handler_routes = _handler_routes()
+        # `_policy_source_path()` 같은 helper로 분기하는 경로는 AST에서 뽑히지 않으므로 제외한다.
+        # 이 셋은 handler가 문자열 비교가 아니라 전용 파서로 처리한다.
+        helper_served = {
+            "GET /policy-sources/{sourceId}/versions/{version}",
+            "POST /policy-sources/{sourceId}/versions/{version}/process",
+            "POST /policy-sources/{sourceId}/versions/{version}/approve",
+        }
+        for method, path in sorted(self._declared_routes()):
+            if f"{method} {path}" in helper_served:
+                continue
+            with self.subTest(route=f"{method} {path}"):
+                self.assertTrue(
+                    any(route.is_served_by(method, path) for route in handler_routes),
+                    f"{method} {path} is declared but no handler branch serves it",
+                )
+
+    def test_no_route_is_declared_without_the_jwt_authorizer(self) -> None:
+        """선언은 됐지만 authorizer가 빠진 route는 인증 없는 호출을 handler까지 보낸다."""
+        for name, resource in self.resources.items():
+            if resource.get("Type") != "AWS::ApiGatewayV2::Route":
+                continue
+            route = _properties(resource)
+            with self.subTest(route=name):
+                self.assertEqual(route["AuthorizationType"], "JWT")
+                self.assertEqual(route["AuthorizerId"], "HttpApiAuthorizer")
+
+    def _declared_routes(self) -> set[tuple[str, str]]:
+        routes = set()
+        for resource in self.resources.values():
+            if resource.get("Type") != "AWS::ApiGatewayV2::Route":
+                continue
+            route_key = _properties(resource)["RouteKey"]
+            if not isinstance(route_key, str) or " " not in route_key:
+                raise TypeError(f"RouteKey must be '<METHOD> <path>': {route_key!r}")
+            method, path = route_key.split(" ", 1)
+            routes.add((method, path))
+        return routes
 
     @staticmethod
     def _contains_artifact_bucket_reference(value: object) -> bool:
