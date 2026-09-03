@@ -615,6 +615,35 @@ class ActualRereadPort(Protocol):
     ) -> None: ...
 ```
 
+## M4 demo-run observability and cost boundary
+
+`packages/contracts/observability.py`는 M4 릴리스 게이트의 관측·비용 기록을 정의한다(ADR-0021
+§3). 데모 폐루프 1회 실행에 대해 표의 각 항목은 "값이 비어 있으면 미충족"으로 판정되므로, 이
+계약은 그 7개 항목을 immutable하게 묶고 값의 존재 여부로 게이트 통과를 결정한다.
+
+- `DemoRunObservability`는 `customer_id`, `deployment_id`, `captured_at`(offset-aware)과 일곱
+  metric, 그리고 민감 원문 부재 확인 플래그(`sensitive_data_absent_verified`)를 담는다.
+  `unmet_items()`는 미충족 항목을 `ObservabilityGateItem`으로 열거하고, `meets_gate`는 일곱
+  항목이 모두 충족되고 민감 원문 부재가 확인됐을 때만 True다.
+- 일곱 metric과 그 게이트 판정(ADR-0021 §3 표):
+  - `AssessmentSuccessMetric`: 계획된 평가가 있고 `EXECUTION_ERROR`가 0건이면 통과.
+  - `BedrockUsageMetric`: 역할별 호출 수·토큰·p95 지연을 기록하고 호출이 최소 하나면 통과.
+  - `QueueHealthMetric`: DLQ depth가 0이면 통과(queue age 최대값은 기록만).
+  - `JobResumptionMetric`: checkpoint 재개 횟수와 3분 재큐잉 관찰 여부를 기록(존재 기반).
+  - `PlanApplyMetric`: plan/apply 실패 0건이고 승인 없는 apply가 0건이면 통과.
+  - `AuditTrailMetric`: Remediation·Approval·Apply·Verification event가 모두 존재하면 통과.
+  - `CostMetric`: Bedrock·Lambda·저장소 비용이 기록되면 통과(상한 없음, 기준선 기록).
+- 이 계약은 CloudWatch/CloudTrail/Cost Explorer를 직접 호출하지 않는다. A의 조립 경계
+  (`DemoRunObservabilityService`, Admin 전용 `READ_OBSERVABILITY`)가 주입된 read-only source가
+  돌려준 사실만 묶고, source가 사실을 돌려주지 못하면 fail-closed한다. live metric adapter는
+  D/A 배포 통합에서 주입되며 이 저장소에서는 fixture/mock source로 병렬 검증한다(`Mockable`).
+  `agent/runtime/mock_observability_source.py`의 `MockDemoRunMetricsSource`가 그 결정적 Mock으로,
+  seed한 `DemoRunObservability`를 단일 customer scope 안에서만 돌려주고 seed 부재는 `LookupError`
+  계열로 던져 조립기의 fail-closed 경로에 걸리게 한다. D는 이 자리에 live 어댑터를 주입한다.
+- `assemble_audit_trail_metric`은 세분화된 `AuditEventType`을 게이트의 네 범주로 결정적
+  매핑한다. apply 성공과 Post-Deploy Verification은 별도 audit event가 아니라 run 재조회 사실과
+  새 Assessment 기록이므로 개수를 별도 인자로 받는다.
+
 ## Contract change review
 
 Contract 변경 PR은 변경 작성자와 해당 Contract의 Producer 및 Consumer Owner가 검토한다. Contract가 확정됐지만 구현체가 없는 경우 `Mockable` 상태로 Fixture/Mock을 사용해 병렬 개발할 수 있다.

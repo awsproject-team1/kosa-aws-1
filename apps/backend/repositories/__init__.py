@@ -2,12 +2,17 @@
 
 from apps.backend.repositories.deployment import (
     DynamoDbDeploymentApprovalRepository,
+    DynamoDbDeploymentPlanStore,
     DynamoDbDeploymentRepository,
+    DynamoDbDeploymentRunStore,
+    DynamoDbDeploymentVerificationStore,
 )
+from apps.backend.repositories.deployment_work import DynamoDbDeploymentWorkRepository
 from apps.backend.repositories.dynamodb import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbJobRepository,
 )
+from apps.backend.repositories.observability import assemble_audit_trail_metric
 from apps.backend.repositories.policy_approval import DynamoDbPolicyApprovalRepository
 from apps.backend.repositories.ports import (
     ArtifactCollisionError,
@@ -39,7 +44,11 @@ __all__ = [
     "DuplicateJobError",
     "DynamoDbAssessmentWorkflowRepository",
     "DynamoDbDeploymentApprovalRepository",
+    "DynamoDbDeploymentPlanStore",
     "DynamoDbDeploymentRepository",
+    "DynamoDbDeploymentRunStore",
+    "DynamoDbDeploymentVerificationStore",
+    "DynamoDbDeploymentWorkRepository",
     "DynamoDbPolicyApprovalRepository",
     "DynamoDbRemediationExceptionRepository",
     "DynamoDbRemediationWorkRepository",
@@ -50,4 +59,5 @@ __all__ = [
     "RevisionConflictError",
     "S3ArtifactStore",
     "StoredDataError",
+    "assemble_audit_trail_metric",
 ]

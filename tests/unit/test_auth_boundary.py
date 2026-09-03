@@ -78,8 +78,18 @@ class AuthBoundaryTest(unittest.TestCase):
                 "MANAGE_REMEDIATION_EXCEPTIONS",
                 "MANAGE_POLICY_SOURCES",
                 "PUBLISH_POLICY_PROFILE",
+                "READ_OBSERVABILITY",
             },
         )
+
+    def test_only_admin_can_read_observability(self) -> None:
+        # ADR-0021 §3: 관측·비용 기록 조회는 Admin 전용이다.
+        admin = Principal.from_verified_claims(access_claims("Admin"))
+        user = Principal.from_verified_claims(access_claims("User"))
+
+        self.assertIsNone(authorize(admin, Action.READ_OBSERVABILITY))
+        with self.assertRaises(AuthorizationDenied):
+            authorize(user, Action.READ_OBSERVABILITY)
 
 
 if __name__ == "__main__":

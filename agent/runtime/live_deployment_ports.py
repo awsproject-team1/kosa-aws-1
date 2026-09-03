@@ -27,13 +27,17 @@ from agent.runtime.github_tool import require_github_repository_full_name
 from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
+    PlanRequestPort,
     WorkflowRunReader,
 )
 from packages.contracts import (
     ApplyDispatchReceipt,
+    ArtifactReference,
+    ArtifactType,
     AwsResourceOperation,
     AwsResourceQuery,
     DeploymentApproval,
+    PlanExecutionResult,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowConclusion,
@@ -64,6 +68,116 @@ def _require_non_empty(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     return value
+
+
+class PlanRunOutputs:
+    """`terraform-plan` run이 남긴 산출물의 회수 결과(어댑터 내부 전달용).
+
+    plan workflow는 saved binary plan, canonical projection(그 SHA-256이 `plan_hash`),
+    plan 시점 state `(lineage, serial)`를 artifact로 올린다(`ci/terraform/terraform-plan.yml`).
+    이 값 묶음을 GitHub 호출 세부에서 분리해 어댑터가 scope 검증·결과 조립만 하도록 한다.
+    """
+
+    __slots__ = ("run_id", "plan_hash", "binary_sha256", "state_lineage", "state_serial")
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        plan_hash: str,
+        binary_sha256: str,
+        state_lineage: str,
+        state_serial: int,
+    ) -> None:
+        self.run_id = _require_non_empty(run_id, "run_id")
+        self.plan_hash = _require_non_empty(plan_hash, "plan_hash")
+        self.binary_sha256 = _require_non_empty(binary_sha256, "binary_sha256")
+        self.state_lineage = _require_non_empty(state_lineage, "state_lineage")
+        if isinstance(state_serial, bool) or not isinstance(state_serial, int):
+            raise TypeError("state_serial must be an integer")
+        self.state_serial = state_serial
+
+
+class LivePlanRequestPort(PlanRequestPort):
+    """승인 대상 commit에 refreshed Terraform plan을 실행하는 live 어댑터(ADR-0019 §1·§2).
+
+    D Worker가 `RUN_DEPLOYMENT`에서 호출한다. 실제 GitHub 호출(plan `workflow_dispatch`, run 완료
+    폴링, artifact 다운로드)은 주입된 `fetch_outputs` 콜백에 위임하고, 이 어댑터는 (customer_id,
+    repository_id) scope 강제와 `PlanExecutionResult` 조립·정합성만 책임진다. apply가 이 run의 saved
+    plan artifact를 내려받으므로(§1), 반환값의 `plan_run`은 이 plan run 좌표다. plan은 별도 실행이라
+    dispatch가 run_id를 즉시 주지 않으므로, `fetch_outputs`가 run을 찾아 완료를 확인한 뒤 run_id를
+    포함한 `PlanRunOutputs`를 돌려준다. write 표면은 plan `workflow_dispatch` 하나뿐이다(§6).
+    """
+
+    def __init__(
+        self,
+        *,
+        customer_id: str,
+        repository_id: str,
+        repository_full_name: str,
+        fetch_outputs: Callable[[str, str], PlanRunOutputs],
+        artifact_id_factory: Callable[[str, str], str] | None = None,
+    ) -> None:
+        self._customer_id = _require_non_empty(customer_id, "customer_id")
+        self._repository_id = _require_non_empty(repository_id, "repository_id")
+        self._repository_full_name = require_github_repository_full_name(repository_full_name)
+        if not callable(fetch_outputs):
+            raise TypeError("fetch_outputs must be callable")
+        self._fetch_outputs = fetch_outputs
+        # artifact_id는 결정적으로 유도한다(같은 배포·commit이면 같은 id). 재실행이 새 artifact
+        # 참조를 만들지 않게 하려는 것으로, 실제 저장 내용이 아니라 참조 식별자다.
+        self._artifact_id_factory = artifact_id_factory or (
+            lambda kind, deployment_id: f"{kind}-{deployment_id}"
+        )
+
+    def request_plan(
+        self, *, customer_id: str, deployment_id: str, repository_id: str, commit_sha: str
+    ) -> PlanExecutionResult:
+        if customer_id != self._customer_id or repository_id != self._repository_id:
+            raise LiveDeploymentPortError("customer_id/repository_id is outside the tool scope")
+        _require_non_empty(deployment_id, "deployment_id")
+        _require_non_empty(commit_sha, "commit_sha")
+        # GitHub 호출(dispatch → run 완료 폴링 → artifact 회수)은 콜백이 담당한다. 콜백은 이
+        # deployment/commit의 plan run을 식별해 완료를 확인하고 산출물을 돌려줘야 한다.
+        outputs = self._fetch_outputs(deployment_id, commit_sha)
+        if not isinstance(outputs, PlanRunOutputs):
+            raise LiveDeploymentPortError("fetch_outputs must return PlanRunOutputs")
+        plan_artifact = ArtifactReference(
+            artifact_id=self._artifact_id_factory("terraform-plan", deployment_id),
+            artifact_type=ArtifactType.TERRAFORM_PLAN,
+            content_sha256=outputs.plan_hash,
+            customer_id=self._customer_id,
+            repository_id=self._repository_id,
+        )
+        plan = TerraformPlan(
+            deployment_id=deployment_id,
+            commit_sha=commit_sha,
+            plan_hash=outputs.plan_hash,
+            artifact=plan_artifact,
+        )
+        binary_artifact = ArtifactReference(
+            artifact_id=self._artifact_id_factory("terraform-plan-binary", deployment_id),
+            artifact_type=ArtifactType.TERRAFORM_PLAN_BINARY,
+            content_sha256=outputs.binary_sha256,
+            customer_id=self._customer_id,
+            repository_id=self._repository_id,
+        )
+        state_version = TerraformStateVersion(
+            lineage=outputs.state_lineage, serial=outputs.state_serial
+        )
+        plan_run = WorkflowRunReference(
+            deployment_id=deployment_id,
+            repository_id=self._repository_id,
+            run_id=outputs.run_id,
+        )
+        # PlanExecutionResult.__post_init__이 binary와 plan_run의 deployment/repository scope를
+        # 다시 대조하므로, 여기서 조립한 값이 서로 어긋나면 그 시점에 fail-closed된다.
+        return PlanExecutionResult(
+            plan=plan,
+            binary_artifact=binary_artifact,
+            state_version=state_version,
+            plan_run=plan_run,
+        )
 
 
 class LiveApplyDispatchPort(ApplyDispatchPort):

@@ -55,7 +55,7 @@ Sanitized report에는 per-case/per-perspective/전체 정확도, Evidence 정�
 ### 4. Gate와 handoff 결합
 
 - **A producer:** customer runtime observation bundle과 같은 `execution_id`의 관측·비용 집계를 제공한다.
-- **D producer:** 실제 demo repository commit/deployment/artifact set 값을 제공하며 bundle에는 원문 대신 SHA-256으로 결합한다.
+- **D producer:** 실제 demo repository commit/deployment/artifact set 값을 제공하며 bundle에는 원문 대신 SHA-256으로 결합한다. 결합 로직은 `apps/backend/deployment/release_binding.py`의 `derive_release_binding()`(순수 함수, 자격 증명 없음)이며, 실제 commit/ID/artifact 값은 sandbox 실행 시점에 주입한다. 산출한 세 digest는 C parser의 `_digest`([0-9a-f]{64}) 관문과 정합한다(회귀 테스트로 고정).
 - **C consumer:** exact approved Profile/Golden fixture와 bundle을 검증하고 sanitized PASS/FAIL report를 만든다.
 - **Release reviewer:** protected run/approval과 세 digest가 가리키는 실행을 확인한다.
 

@@ -179,6 +179,12 @@ Finding → RemediationDecision → Patch → branch/commit/PR → 고객 CI
   하나라도 다르면 재시도하지 않고 `MANUAL_REVIEW`로 보낸다.
 - GitHub Actions에 DynamoDB write 권한을 주지 않는다. 외부 CI가 상태 정본을 직접 쓰면 승인
   경계 밖에서 Deployment 상태를 바꿀 수 있다.
+- **A/D 구현 경계(공유 계약, 상세는 `docs/DATABASE.md` "완료 Event 경계"):** `#EVENT#{run_id}` item은
+  `status`로 두 단계를 갖는다. A/EventBridge가 완료 Event 수신 시 `run_id`만 담아
+  `PENDING_VERIFICATION`으로 예약 write하고(재조회할 좌표 포인터일 뿐 사실 기록이 아니다), D Worker가
+  그 좌표로 run을 재조회·대조한 뒤 검증된 `WorkflowRunFacts`로 같은 item을 `VERIFIED`로 확정한다.
+  예약 item이 없으면 D는 `APPLY_COMPLETED`를 fail-closed한다. A PR과 D PR이 이 계약을 각자 구현하되
+  같은 문장을 인용한다.
 
 ### 8. Deployment 상태 기계, reject, apply 실패
 

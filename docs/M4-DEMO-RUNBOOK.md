@@ -1,7 +1,7 @@
 # M4 데모 폐루프 runbook (ADR-0019 · ADR-0020 · ADR-0021)
 
 이 runbook은 WordPress/LAMP 데모에서 폐루프 E2E를 한 번 재현하는 절차와, 그 실행에서 남겨야
-하는 관측·비용 증적을 정의한다. 데모 IaC의 위치와 위반 토글 매핑은
+하는 관측·비용 증적을 정의한다. 데모 IaC의 위치와 데모 토글 매핑은
 `docs/M4-DEMO-IAC-REFERENCE.md`가 정본이다.
 
 이 문서는 로컬 AWS 명령이나 직접 프로덕션 접근을 승인하지 않는다. apply는 데모 저장소에 설치된
@@ -31,8 +31,8 @@ Event마다 revision이 오르고, Platform은 Event를 신뢰하지 않고 `run
 
 ### 1-1. Initial Assessment (위반 상태)
 
-- 데모 저장소의 위반 토글을 켠 상태(`docs/M4-DEMO-IAC-REFERENCE.md` §3에서 데모용으로 지정한
-  조합)로 default branch에 commit한다.
+- 데모 저장소의 여섯 토글을 위반 상태(`false`)로 둔 채(`docs/M4-DEMO-IAC-REFERENCE.md` §3에서
+  데모용으로 지정한 조합) default branch에 commit한다.
 - 그 commit에 대해 Initial Assessment를 시작한다. 여섯 S3 Rule × 세 관점(IAC/AWS_ACTUAL/DRIFT)의
   Finding·Evidence·Coverage·Readiness Score를 조회한다.
 - 이 Assessment의 `assessment_id`가 이후 Post-Deploy Verification의 `source_assessment_id`가 된다.
@@ -41,7 +41,7 @@ Event마다 revision이 오르고, Platform은 Event를 신뢰하지 않고 `run
 
 - 자동 조치가 열리는 Rule(`AUTOMATIC`: S3-PUBLIC-001, S3-ACL-001, S3-TLS-001)은 Remediation이
   Terraform Patch/PR을 **제안**한다(ADR-0018, ADR-0007 read-only 원칙). Manual Review Rule
-  (`MANUAL_ONLY`: S3-POLICY-001, S3-ENCRYPT-001, S3-LOGGING-001)은 사람이 토글을 해제한다.
+  (`MANUAL_ONLY`: S3-POLICY-001, S3-ENCRYPT-001, S3-LOGGING-001)은 사람이 토글을 준수 상태(`true`)로 바꾼다.
 - 제안된 변경은 데모 저장소의 PR로 올라가고, 사람이 검토·머지해 default branch의 merge commit이
   된다. apply 대상은 이 merge commit이다(ADR-0019).
 
@@ -116,7 +116,7 @@ payload는 `deployment_id`, `commit_sha`, `plan_hash`, `run_id`, `conclusion`만
 
 ## 관련 문서
 
-- 데모 IaC 참조·위반 토글: `docs/M4-DEMO-IAC-REFERENCE.md`
+- 데모 IaC 참조·데모 토글: `docs/M4-DEMO-IAC-REFERENCE.md`
 - workflow template과 경계: `ci/terraform/README.md`
 - 릴리스 gate 첨부물: `CONTRIBUTING.md`의 "Release gate (`dev → main`)"
 - 결정: `docs/decisions/ADR-0019-approved-deployment-execution-boundary.md`,
