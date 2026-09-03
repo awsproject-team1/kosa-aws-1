@@ -47,6 +47,7 @@ from apps.backend.repositories.deployment_completion import (
     DynamoDbDeploymentCompletionStore,
 )
 from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsReader
+from apps.backend.repositories.deployment_plan import DynamoDbDeploymentPlanReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
 
@@ -175,16 +176,13 @@ def _deployment_components(
 ) -> DeploymentApiService:
     """Wire the deployment creation and reject paths to their durable stores.
 
-    Create and reject persist through the deployment record store and the Job
-    store; creation also reads the remediation's stored decision and worker result
-    through the deployment source reader. Read and verification are assembled from
-    the deployment's own item prefix and the two immutable Assessments.
-
-    `approve` stays fail-closed: its plan reader must return C's readiness verdict
-    beside the plan, and that verdict needs D's plan summary (`refreshed`,
-    `mapped_resource_ids`, destructive changes), which `PlanExecutionResult` does not
-    persist yet. The status read reports `readiness=None` for the same reason rather
-    than guessing a verdict — see `DynamoDbDeploymentFactsReader`.
+    Every deployment route is wired here. Create and reject persist through the
+    deployment record store and the Job store; creation also reads the remediation's
+    stored decision and worker result through the deployment source reader. Read and
+    verification are assembled from the deployment's own item prefix and the two
+    immutable Assessments. Approve reads the stored plan and derives C's readiness
+    verdict from D's persisted plan summary, and the status read uses that same
+    verdict so the two views cannot disagree.
 
     The RUN_DEPLOYMENT outbox reuses the workflow repository's outbox bookkeeping and
     is delivered to the Deployment Worker queue.
@@ -205,8 +203,10 @@ def _deployment_components(
         table_name=table_name, transaction_client=boto3.client("dynamodb")
     )
     comparisons = DynamoDbComparisonInputReader(reports)
+    plans = DynamoDbDeploymentPlanReader(_metadata_table(), deployments=deployment_repository)
     return DeploymentApiService(
         approvals=DeploymentApprovalService(approval_repository),
+        plans=plans,
         sources=DynamoDbDeploymentSourceReader(
             _metadata_table(), commits=_deployment_commit_resolver()
         ),
@@ -216,6 +216,9 @@ def _deployment_components(
             jobs=workflow_repository,
             # 상태 화면의 검증 판정과 검증 조회가 같은 입력을 쓰도록 같은 reader를 넘긴다.
             comparisons=comparisons,
+            # 상태 파생의 readiness도 승인이 소비하는 것과 같은 판정을 쓴다. 두 화면이
+            # 다른 근거로 계산하면 "승인 대기"와 실제 승인 가능 여부가 어긋난다.
+            readiness=plans,
         ),
         comparisons=comparisons,
         deployments=deployment_repository,

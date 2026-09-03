@@ -13,6 +13,7 @@ from packages.contracts import (
     DeploymentApproval,
     IaCSnapshot,
     PlanExecutionResult,
+    PlanSummary,
     RemediationPatch,
     TerraformPlan,
     TerraformStateVersion,
@@ -133,6 +134,44 @@ class TerraformStateVersionContractTest(unittest.TestCase):
             TerraformStateVersion(lineage="lineage-1", serial=-1)
 
 
+def _summary(**overrides: object) -> PlanSummary:
+    values: dict[str, object] = {
+        "refreshed": True,
+        "has_destructive_changes": False,
+        "mapped_resource_ids": ("bucket-public-001",),
+    }
+    values.update(overrides)
+    return PlanSummary(**values)  # type: ignore[arg-type]
+
+
+class PlanSummaryContractTest(unittest.TestCase):
+    """C readiness가 소비하는 D의 plan 요약 (ADR-0019 §1 addendum)."""
+
+    def test_serializes_the_three_readiness_facts(self) -> None:
+        self.assertEqual(
+            _summary().to_dict(),
+            {
+                "refreshed": True,
+                "has_destructive_changes": False,
+                "mapped_resource_ids": ["bucket-public-001"],
+            },
+        )
+
+    def test_rejects_non_boolean_flags(self) -> None:
+        for name in ("refreshed", "has_destructive_changes"):
+            with self.assertRaises(TypeError):
+                _summary(**{name: "true"})
+
+    def test_rejects_duplicate_resource_ids(self) -> None:
+        """중복은 "몇 개를 건드리는가"를 흐리고 저장 왕복에서 순서만 다른 값을 만든다."""
+        with self.assertRaises(ValueError):
+            _summary(mapped_resource_ids=("bucket-a", "bucket-a"))
+
+    def test_allows_an_empty_mapping(self) -> None:
+        """어떤 리소스도 매핑되지 않는 것은 정상 값이다 — readiness가 BLOCKED로 판정한다."""
+        self.assertEqual(_summary(mapped_resource_ids=()).mapped_resource_ids, ())
+
+
 class PlanExecutionResultContractTest(unittest.TestCase):
     def _plan(self, *, repository_id: str | None = None) -> TerraformPlan:
         return TerraformPlan(
@@ -176,6 +215,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
             plan=self._plan(),
             binary_artifact=self._binary(),
             state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+            summary=_summary(),
             plan_run=self._plan_run(),
         )
         payload = result.to_dict()
@@ -194,6 +234,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(repository_id="repo-001"),
                 binary_artifact=self._binary(repository_id="repo-001"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                summary=_summary(),
                 plan_run=self._plan_run(repository_id="repo-other"),
             )
 
@@ -204,6 +245,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                summary=_summary(),
                 plan_run=self._plan_run(deployment_id="dep-other"),
             )
 
@@ -213,6 +255,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(ArtifactType.TERRAFORM_PLAN),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                summary=_summary(),
                 plan_run=self._plan_run(),
             )
 
@@ -222,6 +265,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(customer_id="cust-other"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                summary=_summary(),
                 plan_run=self._plan_run(),
             )
 
@@ -231,6 +275,7 @@ class PlanExecutionResultContractTest(unittest.TestCase):
                 plan=self._plan(),
                 binary_artifact=self._binary(repository_id="repo-other"),
                 state_version=TerraformStateVersion(lineage="lineage-1", serial=3),
+                summary=_summary(),
                 plan_run=self._plan_run(),
             )
 

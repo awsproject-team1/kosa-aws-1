@@ -22,6 +22,7 @@ from packages.contracts import (
     DeploymentStatus,
     JobCurrentStep,
     JobStatus,
+    PlanSummary,
     TerraformStateVersion,
     VerificationOutcome,
     derive_deployment_status,
@@ -66,6 +67,11 @@ def _record(*, with_plan: bool = False, verification_assessment_id: str | None =
                 repository_id="repo-001",
             ),
             "state_version": TerraformStateVersion(lineage="lin-1", serial=3),
+            "plan_summary": PlanSummary(
+                refreshed=True,
+                has_destructive_changes=False,
+                mapped_resource_ids=("bucket-public-001",),
+            ),
         }
     return DeploymentRecord(
         deployment_id=DEPLOYMENT_ID,

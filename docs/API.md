@@ -165,20 +165,19 @@ adapter와 customer Lambda runtime composition은 아직 연결 대상이다. �
 ADR-0020 비교 Contract와 ADR-0019의 Deployment 생성/Apply 경계는 모두 `Accepted`다.
 `POST /remediations/{id}/deployments`, `POST /deployments/{id}/reject`, `GET /deployments/{id}`,
 `GET /deployments/{id}/verification`은 durable 저장으로 완결 배선됐다.
-`POST /deployments/{id}/approve`만 fail-closed로 남아 있다 — 승인 plan reader는 plan과 함께 C의
-readiness 판정을 돌려줘야 하는데, 그 판정에 필요한 D의 plan 요약(`refreshed`,
-`mapped_resource_ids`, destructive 여부)을 `PlanExecutionResult`가 아직 영속화하지 않는다. 같은
-이유로 `GET /deployments/{id}`의 파생 상태는 readiness 단계를 건너뛰고 Job의 current step으로
-떨어진다. 없는 근거로 `WAITING_APPROVAL`을 표시하지 않는다.
+`POST /deployments/{id}/approve`도 배선됐다 — D가 plan 요약(`refreshed`, `mapped_resource_ids`,
+destructive 여부)을 plan facts와 함께 저장하므로(ADR-0019 §1-a) 승인 plan reader가 저장된 plan과
+C의 readiness 판정을 함께 돌려준다. `GET /deployments/{id}`의 readiness도 같은 reader의 같은 판정을
+쓰므로 "승인 대기" 표시와 실제 승인 가능 여부가 어긋나지 않는다.
 `GET /audit-events`는 구현·배선됐다(아래 "Admin 감사 이력 조회" 참조).
 
 | Method | Path | 상태 | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/remediations/{remediationId}/deployments` | 배선됨 | 승인된 IaC commit으로 Deployment를 만들고 `RUN_DEPLOYMENT`를 발행 |
-| `GET` | `/deployments/{deploymentId}` | 배선됨 | plan 요약, 승인 상태, apply/검증 진행 상태 조회. readiness 단계는 plan 요약 영속화 전까지 표시하지 않는다 |
+| `GET` | `/deployments/{deploymentId}` | 배선됨 | plan 요약, readiness 사유, 승인 상태, apply/검증 진행 상태 조회 |
 | `GET` | `/deployments/{deploymentId}/verification` | 배선됨 | Post-Deploy Verification의 before/after 비교 projection 조회 |
 | `POST` | `/deployments/{deploymentId}/reject` | 배선됨 | Admin 전용 배포 거절, Job `CANCELLED` 전이 |
-| `POST` | `/deployments/{deploymentId}/approve` | fail-closed | 승인 plan reader가 D의 plan 요약 영속화를 기다린다 |
+| `POST` | `/deployments/{deploymentId}/approve` | 배선됨 | 저장된 plan과 파생 readiness로 승인. 요청의 `commit_sha`/`plan_hash`가 저장된 plan과 다르면 거절 |
 | `GET` | `/deployments/{deploymentId}/observability` | 배선됨(live source 대기) | Admin 전용 데모 폐루프 관측·비용 기록 조회 (ADR-0021 §3). live metric source가 주입되지 않은 배포에서는 route가 없다(404) |
 | `GET` | `/audit-events` | 배선됨 | Admin 전용 감사 이력 조회 |
 

@@ -8,8 +8,9 @@ all four call the *same* projection here, the value cannot drift between roles.
 
 The projection is defined as an allow-list, not an exclude-list: a new Terraform
 or provider output field must never silently enter the hash and break
-reproducibility. `has_destructive_changes` is derived from the same projected
-changes so the destructive-change gate reads exactly what was hashed.
+reproducibility. `has_destructive_changes` and `mapped_resource_ids` are derived
+from the same projected changes, so both readiness gates read exactly what was
+hashed rather than a second view of the plan.
 """
 
 import hashlib
@@ -127,6 +128,69 @@ def has_destructive_changes(show_json: Mapping[str, object]) -> bool:
             if len(replace_paths) > 0:
                 return True
     return False
+
+
+# Terraform resource type → the projected attribute carrying the AWS resource id
+# that Findings use (ADR-0019 §1 addendum). An allow-list, for the same reason the
+# field projection is one: a provider that adds a new identity-looking attribute must
+# never silently change which resource a plan is judged to touch.
+#
+# For S3 every entry is `bucket`: the bucket resource takes the name as its `bucket`
+# argument and each sub-resource references its parent by the same attribute, which is
+# exactly the value `AwsResourceQuery(resource_type="AWS::S3::Bucket").resource_id`
+# carries and therefore what `Finding.resource_id` holds.
+_RESOURCE_IDENTITY_ATTRIBUTES: dict[str, str] = {
+    "aws_s3_bucket": "bucket",
+    "aws_s3_bucket_acl": "bucket",
+    "aws_s3_bucket_logging": "bucket",
+    "aws_s3_bucket_ownership_controls": "bucket",
+    "aws_s3_bucket_policy": "bucket",
+    "aws_s3_bucket_public_access_block": "bucket",
+    "aws_s3_bucket_server_side_encryption_configuration": "bucket",
+    "aws_s3_bucket_versioning": "bucket",
+}
+
+
+def mapped_resource_ids(show_json: Mapping[str, object]) -> tuple[str, ...]:
+    """Return the AWS resource ids this plan touches, in the Finding vocabulary.
+
+    `PlanReadinessInput.mapped_resource_ids` answers one question: does this plan
+    actually change the resource the Finding is about? Answering it needs the plan's
+    Terraform addresses translated into the ids Findings carry (for S3, the bucket
+    name), because the two vocabularies do not otherwise meet.
+
+    A resource type outside the allow-list contributes nothing. That is deliberate and
+    fail-closed: an unmapped finding resource makes readiness `BLOCKED` rather than
+    approving a plan whose relevance we could not establish. Adding a resource type is
+    a documented change made alongside the Rule that needs it.
+
+    `after` is read first and `before` second so a destroyed resource still names
+    itself. A value that is absent or computed (`after_unknown`) is skipped rather than
+    guessed — an unknown id is not evidence that the plan touches the finding.
+    """
+    identifiers: set[str] = set()
+    for entry in project_plan_changes(show_json):
+        attribute = _RESOURCE_IDENTITY_ATTRIBUTES.get(_resource_type(entry))
+        if attribute is None:
+            continue
+        change = entry["change"]
+        assert isinstance(change, dict)
+        for state in ("after", "before"):
+            value = change.get(state)
+            if not isinstance(value, Mapping):
+                continue
+            candidate = value.get(attribute)
+            if isinstance(candidate, str) and candidate.strip():
+                identifiers.add(candidate)
+                break
+    return tuple(sorted(identifiers))
+
+
+def _resource_type(entry: Mapping[str, object]) -> str:
+    resource_type = entry.get("type")
+    if not isinstance(resource_type, str) or not resource_type:
+        raise PlanProjectionError("each resource change must carry a non-empty type")
+    return resource_type
 
 
 def _address_sort_key(entry: Mapping[str, object]) -> str:

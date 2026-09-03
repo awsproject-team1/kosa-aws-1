@@ -141,9 +141,12 @@ A/D는 이 key/field 경계 밖에 검증 결과를 쓰지 않는다. live plan 
   artifact를 내려받는다), `remediation_id`, `source_assessment_id`, 그리고 검증 후의
   `verification_assessment_id`를 보관한다. `serial` 단독으로는 state 재생성을 잡지 못하므로 두 값을
   쌍으로 둔다.
-- plan facts(`plan_hash`·plan/binary artifact·state·`plan_run`)는 D Worker가 `PLAN_COMPLETED`에서
-  `DeploymentPlanStore`로 `DEPLOYMENT#{deployment_id}` item에 conditional update(`attribute_not_exists
-  (plan_hash)`)로 채운다. 같은 revision의 재시도는 흡수되고(멱등), 다른 plan은 덮어쓰지 못한다.
+- plan facts(`plan_hash`·plan/binary artifact·state·`plan_run`·`plan_summary`)는 D Worker가
+  `PLAN_COMPLETED`에서 `DeploymentPlanStore`로 `DEPLOYMENT#{deployment_id}` item에 conditional
+  update(`attribute_not_exists(plan_hash)`)로 채운다. `plan_summary`는 C readiness가 요구하는
+  `refreshed`/`has_destructive_changes`/`mapped_resource_ids` 세 값이며, 승인이 plan보다 나중
+  invocation에서 일어나므로 durable해야 한다(ADR-0019 §1-a). readiness 판정 자체는 저장하지 않고
+  이 요약과 Worker context에서 read 시 파생한다 — `DeploymentStatus`와 같은 원칙이다. 같은 revision의 재시도는 흡수되고(멱등), 다른 plan은 덮어쓰지 못한다.
   D Worker의 authoritative work는 이 item과 `JOB#{job_id}`(revision)·approval item을 합성해 만든다.
 - **`DeploymentStatus`는 이 item에 저장하지 않는다.** 배포 생애주기 위치는 `JobStatus`와
   `JobCurrentStep`에 이미 저장돼 있고, 표현 값은 read 시 `derive_deployment_status()`로 계산한다.

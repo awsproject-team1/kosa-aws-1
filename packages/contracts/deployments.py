@@ -213,6 +213,45 @@ class WorkflowRunReference:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PlanSummary:
+    """D's bounded description of what a refreshed plan does (ADR-0019 §1 addendum).
+
+    C's readiness evaluator needs three facts about a plan that its `plan_hash` does not
+    carry: whether it was refreshed, whether it destroys or replaces anything, and which
+    AWS resources it touches. All three are properties of the plan D produced, so D is
+    the only role that can state them — and they have to be durable, because approval
+    happens in a later invocation than plan.
+
+    `has_destructive_changes` and `mapped_resource_ids` are derived from the same
+    canonical projection whose digest is `plan_hash`, using the shared functions in
+    `packages.contracts.terraform_plan`. Deriving them anywhere else would let the
+    approval gate read a different view of the plan than the one that was hashed.
+    """
+
+    refreshed: bool
+    has_destructive_changes: bool
+    mapped_resource_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("refreshed", "has_destructive_changes"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool")
+        if not isinstance(self.mapped_resource_ids, tuple):
+            raise TypeError("mapped_resource_ids must be a tuple")
+        for resource_id in self.mapped_resource_ids:
+            require_non_empty_string(resource_id, "mapped_resource_ids item")
+        if len(set(self.mapped_resource_ids)) != len(self.mapped_resource_ids):
+            raise ValueError("mapped_resource_ids must not contain duplicates")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "refreshed": self.refreshed,
+            "has_destructive_changes": self.has_destructive_changes,
+            "mapped_resource_ids": list(self.mapped_resource_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PlanExecutionResult:
     """D's `PlanRequestPort` output: the hashed plan, its saved binary, and state.
 
@@ -234,10 +273,13 @@ class PlanExecutionResult:
     binary_artifact: ArtifactReference
     state_version: TerraformStateVersion
     plan_run: WorkflowRunReference
+    summary: PlanSummary
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, TerraformPlan):
             raise TypeError("plan must be a TerraformPlan")
+        if not isinstance(self.summary, PlanSummary):
+            raise TypeError("summary must be a PlanSummary")
         if not isinstance(self.binary_artifact, ArtifactReference):
             raise TypeError("binary_artifact must be an ArtifactReference")
         if self.binary_artifact.artifact_type is not ArtifactType.TERRAFORM_PLAN_BINARY:
@@ -269,6 +311,7 @@ class PlanExecutionResult:
             "binary_artifact": self.binary_artifact.to_dict(),
             "state_version": self.state_version.to_dict(),
             "plan_run": self.plan_run.to_dict(),
+            "summary": self.summary.to_dict(),
         }
 
 

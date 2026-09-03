@@ -2,6 +2,31 @@
 
 ## Current
 
+- **`POST /deployments/{id}/approve`를 열었다** — M3 폐루프의 사람 승인 게이트다. 막고 있던 건
+  결정 하나였고, ADR-0019에 §1-a 보완으로 확정했다: `plan_hash`는 "이 plan이 무엇인가"를 고정하지만
+  C readiness가 묻는 세 가지(refresh 여부, 파괴적 변경, **그 plan이 건드리는 AWS 리소스**)를 담지
+  않는다. `PlanReadinessInput`은 D를 producer로 지목했지만 산출 규칙도 저장 경로도 없었다.
+  - `PlanSummary`(`refreshed`/`has_destructive_changes`/`mapped_resource_ids`)를
+    `PlanExecutionResult`에 싣고 plan facts와 함께 저장한다. 승인은 plan보다 나중 invocation이라
+    durable해야 한다.
+  - **`mapped_resource_ids`는 resource type별 identity 속성의 허용 목록으로 투영한다.** Terraform
+    address와 Finding의 `resource_id`는 다른 어휘라 잇는 규칙이 필요했다. 허용 목록인 이유는 plan
+    투영과 같다 — provider가 identity처럼 보이는 필드를 늘렸다고 "이 plan이 어느 리소스를 건드리는가"의
+    답이 조용히 바뀌면 안 된다. S3 범위에서는 모두 `bucket`이고, 그 값이 곧 `Finding.resource_id`다.
+    허용 목록 밖 type은 아무것도 기여하지 않아 readiness가 `BLOCKED`가 된다(fail-closed — 관련성을
+    확인하지 못한 plan을 승인 가능으로 표시하지 않는다). `after` → `before` 순으로 읽어 삭제되는
+    리소스도 자기 id를 밝히고, 계산값은 추측하지 않고 건너뛴다.
+  - **어댑터는 회수한 canonical 바이트로 `plan_hash`를 다시 계산해 대조한 뒤에만 요약을 만든다.**
+    승인 게이트는 hash를 재검증하지 요약을 재검증하지 않으므로, 요약이 다른 plan을 설명하면 그 뒤로는
+    아무도 잡지 못한다.
+  - `DynamoDbDeploymentPlanReader`가 저장된 plan + 요약 + Worker context로 readiness를 read 시
+    파생한다. **판정은 저장하지 않는다** — 낡은 `READY_FOR_APPROVAL`은 C가 막았을 plan을 승인
+    가능으로 보여준다. 상태 조회의 readiness도 같은 reader의 같은 판정을 써서 "승인 대기" 표시와
+    실제 승인 가능 여부가 어긋나지 않는다.
+  - `refreshed`의 근거는 "어느 workflow가 돌았는가"다. terraform 플래그를 사후에 관측할 방법은
+    없고, 승인 대상 plan은 refreshed saved plan을 만드는 승인 template이 만든 것이며 apply 직전
+    재검증이 run의 workflow path를 대조한다.
+  **이로써 Deployment API 다섯 route가 모두 durable 배선을 갖췄다**(생성·조회·검증조회·승인·거절).
 - M4 A 관측·비용 조회를 HTTP 경계에 붙였다(`GET /deployments/{id}/observability`, Admin 전용).
   `DemoRunObservabilityService`는 정의만 있고 route가 없었다. live CloudWatch/CloudTrail/Cost
   Explorer adapter는 아직 없으므로 composition root는 source를 `None`으로 두고 route는 404로
@@ -735,7 +760,7 @@
 - [x] **A — Platform/Backend:** Remediation/Deployment API, Job 재개, Approval 상태 전이와 Audit Log *(B policy gate, customer exception registration/read, canonical decision/context/Job/Outbox/audit transaction, 200/202 public response, authoritative revision work reader, Admin `GET /audit-events` 감사 이력 조회까지 구현 완료; customer runtime wiring 대기)*
 - [x] **B — Policy/Governance Boundary:** Remediation 허용 범위·예외·Manual Review 정책 제공 *(Rule version 단위 허용 범위 Registry, 만료되는 고객 예외, 조치 유형·Manual Review 사유 판정 구현 완료. 예외 등록·저장 API는 A, Patch 생성 연결은 D)*
 - [x] **C — AI Evaluation & Agent Orchestration:** Finding 근거 기반 Remediation Context, C-owned revision-bound Remediation Worker, Deployment Readiness 평가 *(duplicate strategy 제거, stored decision command matrix와 injected Patch/Sync ports, stale/mismatch fail-closed 검증 완료)*
-- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트와 destructive 판정은 ADR-0019 `Accepted`로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR·Terraform plan SDK adapter와 customer runtime 배선)*
+- [ ] **D — Remediation/GitHub/Deployment:** Patch/Diff, GitHub PR, OIDC Terraform Plan, `commit_sha`/`plan_hash` 생성 *(`plan_hash`의 대상 바이트, destructive 판정, `mapped_resource_ids` 투영은 ADR-0019 §1·§1-a로 확정돼 `packages/contracts/terraform_plan.py`에 공용 함수로 구현됨. `PlanSummary` 영속화로 승인 경로도 열렸다. GitHub write 제안 경계(`ProposedPullRequest`)까지 완료. 남은 조각은 live GitHub branch/commit/PR adapter와 Remediation Worker customer runtime 배선)*
 - [ ] **Shared:** Approval Contract/보안 Review, Patch/Plan Integration Test
 
 **Dependencies:** D의 Plan 결과와 C의 Readiness 결과는 A의 Approval/Deployment 상태에 바인딩한다.

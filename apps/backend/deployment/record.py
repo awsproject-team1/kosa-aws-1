@@ -14,6 +14,7 @@ from packages.contracts import (
     ArtifactReference,
     ArtifactType,
     DeploymentRejectionReason,
+    PlanSummary,
     TerraformStateVersion,
 )
 from packages.contracts._validation import (
@@ -48,6 +49,7 @@ class DeploymentRecord:
     plan_artifact: ArtifactReference | None = None
     binary_artifact: ArtifactReference | None = None
     state_version: TerraformStateVersion | None = None
+    plan_summary: PlanSummary | None = None
     verification_assessment_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -65,7 +67,13 @@ class DeploymentRecord:
         require_optional_non_empty_string(
             self.verification_assessment_id, "verification_assessment_id"
         )
-        plan_fields = (self.plan_hash, self.plan_artifact, self.binary_artifact, self.state_version)
+        plan_fields = (
+            self.plan_hash,
+            self.plan_artifact,
+            self.binary_artifact,
+            self.state_version,
+            self.plan_summary,
+        )
         if any(value is not None for value in plan_fields) and not all(
             value is not None for value in plan_fields
         ):
@@ -88,6 +96,8 @@ class DeploymentRecord:
             self.state_version, TerraformStateVersion
         ):
             raise TypeError("state_version must be a TerraformStateVersion")
+        if self.plan_summary is not None and not isinstance(self.plan_summary, PlanSummary):
+            raise TypeError("plan_summary must be a PlanSummary")
 
     def _require_artifact_scope(self, artifact: ArtifactReference, name: str) -> None:
         # An artifact must belong to the deployment's own customer and repository;
@@ -118,6 +128,7 @@ class DeploymentRecord:
                 None if self.binary_artifact is None else self.binary_artifact.to_dict()
             ),
             "state_version": None if self.state_version is None else self.state_version.to_dict(),
+            "plan_summary": None if self.plan_summary is None else self.plan_summary.to_dict(),
             "verification_assessment_id": self.verification_assessment_id,
         }
 
