@@ -455,6 +455,7 @@ ADR-0020이 `Accepted`가 되면서 C-owned Contract는 `packages/contracts/`에
 | `DeploymentStatus` + `derive_deployment_status()` + `DeploymentFacts` | A | 구현됨. Deployment 생애주기 위치의 **표현 타입과 파생 함수**. 저장하지 않고 durable 사실에서 read 시 계산 (ADR-0019 §8) |
 | `Action.START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `AuditEventType.DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED` | A | 구현됨. 감사 event 정본 필드명은 `event_type` (ADR-0019 §4·§8) |
 | `DeploymentCommitResolver` | D | 구현됨. `TERRAFORM_PATCH`의 apply 대상(merge된 default branch commit)을 해석하는 read-only GitHub port. `None`은 "아직 merge 안 됨"이라는 값이지 오류가 아니다 (ADR-0019 §3·§4) |
+| `PlanSummary`, `mapped_resource_ids()` | D (요약) / 공용 (투영) | 구현됨. `plan_hash`가 담지 않는 readiness 세 값과, Terraform address를 Finding의 `resource_id` 어휘로 잇는 허용 목록 투영. 허용 목록 밖 type은 기여하지 않아 readiness가 `BLOCKED`가 된다 (ADR-0019 §1-a) |
 | `DeploymentRecord`/`DeploymentRejection` + Deployment 생성/조회/reject endpoint | A | 구현됨. 생성·reject는 durable 배선, 조회·검증조회는 facts/comparison reader 조립기 대기 (ADR-0019 §4·§8, ADR-0020 §7) |
 | `plan_verification_assessment()` + Assessment `phase`/correlation/scope-pin 영속화 + Worker phase 복원 | A | 구현됨. 검증 Assessment를 원 Assessment의 Profile version·planned 집합·Model Profile·rubric에 고정하고 fail-closed로 저장·복원 (ADR-0020 §2·§3) |
 | `FindingResolution` | C | 구현됨. Finding 해소 여부의 5개 값 (ADR-0020 §4) |

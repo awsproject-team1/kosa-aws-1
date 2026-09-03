@@ -25,6 +25,7 @@ from packages.contracts import (
     DeploymentApproval,
     JobStatus,
     PlanExecutionResult,
+    PlanSummary,
     TerraformStateVersion,
     WorkflowCommand,
     WorkflowRunFacts,
@@ -463,6 +464,7 @@ class DynamoDbDeploymentPlanStore:
                 ":binary_artifact": result.binary_artifact.to_dict(),
                 ":state_version": result.state_version.to_dict(),
                 ":plan_run": result.plan_run.to_dict(),
+                ":plan_summary": result.summary.to_dict(),
             }
         )
         try:
@@ -480,7 +482,8 @@ class DynamoDbDeploymentPlanStore:
                             "UpdateExpression": (
                                 "SET plan_hash = :plan_hash, plan_artifact = :plan_artifact, "
                                 "binary_artifact = :binary_artifact, "
-                                "state_version = :state_version, plan_run = :plan_run"
+                                "state_version = :state_version, plan_run = :plan_run, "
+                                "plan_summary = :plan_summary"
                             ),
                             # 배포가 존재하고(PK/SK) 아직 plan이 없을 때만 채운다. 재시도가 같은
                             # 값을 다시 쓰려 하면 조건 실패가 나지만, 그건 이미 저장됐다는 뜻이라
@@ -709,6 +712,11 @@ def _record_from_item(item: Mapping[str, object]) -> DeploymentRecord:
             if item.get("state_version") is None
             else _state_version_from(item.get("state_version"))
         )
+        plan_summary = (
+            None
+            if item.get("plan_summary") is None
+            else _plan_summary_from(item.get("plan_summary"))
+        )
         return DeploymentRecord(
             deployment_id=_text(item, "deployment_id"),
             customer_id=_text(item, "customer_id"),
@@ -721,6 +729,7 @@ def _record_from_item(item: Mapping[str, object]) -> DeploymentRecord:
             plan_artifact=plan_artifact,
             binary_artifact=binary_artifact,
             state_version=state_version,
+            plan_summary=plan_summary,
             verification_assessment_id=_optional_text(item, "verification_assessment_id"),
         )
     except (TypeError, ValueError, KeyError):
@@ -739,6 +748,18 @@ def _artifact_from(value: object, expected: ArtifactType) -> ArtifactReference:
     if artifact.artifact_type is not expected:
         raise ValueError("stored artifact type does not match the expected type")
     return artifact
+
+
+def _plan_summary_from(value: object) -> PlanSummary:
+    data = _mapping(value)
+    resource_ids = data.get("mapped_resource_ids")
+    if not isinstance(resource_ids, list):
+        raise StoredDataError("stored plan summary mapped_resource_ids is invalid")
+    return PlanSummary(
+        refreshed=bool(data["refreshed"]),
+        has_destructive_changes=bool(data["has_destructive_changes"]),
+        mapped_resource_ids=tuple(str(resource_id) for resource_id in resource_ids),
+    )
 
 
 def _state_version_from(value: object) -> TerraformStateVersion:

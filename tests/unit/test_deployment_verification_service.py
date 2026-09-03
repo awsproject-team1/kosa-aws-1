@@ -16,6 +16,7 @@ from packages.contracts import (
     EvaluationResult,
     EvaluationStatus,
     PlannedEvaluation,
+    PlanSummary,
     ReadinessScore,
     TerraformStateVersion,
 )
@@ -124,6 +125,11 @@ def _record(*, verification_assessment_id: str | None) -> DeploymentRecord:
             repository_id="repo-001",
         ),
         state_version=TerraformStateVersion(lineage="lineage-1", serial=1),
+        plan_summary=PlanSummary(
+            refreshed=True,
+            has_destructive_changes=False,
+            mapped_resource_ids=("bucket-public-001",),
+        ),
         verification_assessment_id=verification_assessment_id,
     )
 

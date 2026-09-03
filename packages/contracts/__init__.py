@@ -41,6 +41,7 @@ from packages.contracts.deployments import (
     DeploymentStatus,
     IaCSnapshot,
     PlanExecutionResult,
+    PlanSummary,
     RemediationPatch,
     TerraformPlan,
     TerraformStateVersion,
@@ -125,6 +126,7 @@ from packages.contracts.terraform_plan import (
     canonical_plan_bytes,
     compute_plan_hash,
     has_destructive_changes,
+    mapped_resource_ids,
     project_plan_changes,
 )
 
@@ -194,6 +196,7 @@ __all__ = [
     "PlanExecutionResult",
     "PlanProjectionError",
     "PlanReadinessInput",
+    "PlanSummary",
     "PlannedEvaluation",
     "QueueHealthMetric",
     "ReadinessScore",
@@ -230,6 +233,7 @@ __all__ = [
     "compute_plan_hash",
     "derive_deployment_status",
     "has_destructive_changes",
+    "mapped_resource_ids",
     "project_plan_changes",
     "require_non_empty_string",
     "require_offset_aware_timestamp",

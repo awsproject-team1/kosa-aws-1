@@ -14,6 +14,7 @@ from packages.contracts import (
     ArtifactReference,
     ArtifactType,
     JobCurrentStep,
+    PlanSummary,
     TerraformStateVersion,
     WorkflowCommand,
     WorkflowTask,
@@ -85,6 +86,11 @@ def _record(**overrides: object) -> DeploymentRecord:
             repository_id=REPO,
         ),
         "state_version": TerraformStateVersion(lineage="lineage-1", serial=3),
+        "plan_summary": PlanSummary(
+            refreshed=True,
+            has_destructive_changes=False,
+            mapped_resource_ids=("bucket-public-001",),
+        ),
         "source_assessment_id": "asm-001",
     }
     base.update(overrides)

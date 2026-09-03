@@ -30,6 +30,7 @@ from packages.contracts import (
     ArtifactType,
     DeploymentApproval,
     PlanExecutionResult,
+    PlanSummary,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowCommand,
@@ -52,6 +53,7 @@ SERIAL = 7
 APPLY_WORKFLOW = ".github/workflows/terraform-apply.yml"
 RUN_ID = "run-777"
 PLAN_RUN_ID = "plan-run-555"
+RESOURCE_ID = "bucket-public-001"
 
 
 def build_plan() -> TerraformPlan:
@@ -85,12 +87,23 @@ def build_plan_run() -> WorkflowRunReference:
     )
 
 
+def build_plan_summary(**overrides: object) -> PlanSummary:
+    values: dict[str, object] = {
+        "refreshed": True,
+        "has_destructive_changes": False,
+        "mapped_resource_ids": (RESOURCE_ID,),
+    }
+    values.update(overrides)
+    return PlanSummary(**values)  # type: ignore[arg-type]
+
+
 def build_plan_result() -> PlanExecutionResult:
     return PlanExecutionResult(
         plan=build_plan(),
         binary_artifact=build_binary(),
         state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
         plan_run=build_plan_run(),
+        summary=build_plan_summary(),
     )
 
 
@@ -280,6 +293,7 @@ class RunDeploymentTest(unittest.TestCase):
                     customer_id=CUSTOMER_ID,
                 ),
                 state_version=TerraformStateVersion(lineage=LINEAGE, serial=SERIAL),
+                summary=build_plan_summary(),
                 plan_run=WorkflowRunReference(
                     deployment_id=DEPLOYMENT_ID,
                     repository_id="repo-other",

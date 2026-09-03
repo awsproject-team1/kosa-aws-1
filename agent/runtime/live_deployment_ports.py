@@ -38,11 +38,16 @@ from packages.contracts import (
     AwsResourceQuery,
     DeploymentApproval,
     PlanExecutionResult,
+    PlanProjectionError,
+    PlanSummary,
     TerraformPlan,
     TerraformStateVersion,
     WorkflowConclusion,
     WorkflowRunFacts,
     WorkflowRunReference,
+    compute_plan_hash,
+    has_destructive_changes,
+    mapped_resource_ids,
 )
 from packages.contracts.remediation import RemediationSyncTarget
 
@@ -76,9 +81,21 @@ class PlanRunOutputs:
     plan workflow는 saved binary plan, canonical projection(그 SHA-256이 `plan_hash`),
     plan 시점 state `(lineage, serial)`를 artifact로 올린다(`ci/terraform/terraform-plan.yml`).
     이 값 묶음을 GitHub 호출 세부에서 분리해 어댑터가 scope 검증·결과 조립만 하도록 한다.
+
+    `canonical_changes`는 회수한 `plan.canonical.json`의 내용 그대로다. 어댑터가 이 값에서
+    readiness 요약을 파생하고 그 digest가 `plan_hash`와 일치하는지 대조하므로, 요약은 항상
+    hash된 바로 그 바이트에서 나온다.
     """
 
-    __slots__ = ("run_id", "plan_hash", "binary_sha256", "state_lineage", "state_serial")
+    __slots__ = (
+        "run_id",
+        "plan_hash",
+        "binary_sha256",
+        "state_lineage",
+        "state_serial",
+        "canonical_changes",
+        "refreshed",
+    )
 
     def __init__(
         self,
@@ -88,6 +105,8 @@ class PlanRunOutputs:
         binary_sha256: str,
         state_lineage: str,
         state_serial: int,
+        canonical_changes: Sequence[Mapping[str, object]],
+        refreshed: bool,
     ) -> None:
         self.run_id = _require_non_empty(run_id, "run_id")
         self.plan_hash = _require_non_empty(plan_hash, "plan_hash")
@@ -96,6 +115,14 @@ class PlanRunOutputs:
         if isinstance(state_serial, bool) or not isinstance(state_serial, int):
             raise TypeError("state_serial must be an integer")
         self.state_serial = state_serial
+        if isinstance(canonical_changes, (str, bytes)) or not isinstance(
+            canonical_changes, Sequence
+        ):
+            raise TypeError("canonical_changes must be a list of resource changes")
+        self.canonical_changes = list(canonical_changes)
+        if not isinstance(refreshed, bool):
+            raise TypeError("refreshed must be a bool")
+        self.refreshed = refreshed
 
 
 class LivePlanRequestPort(PlanRequestPort):
@@ -177,6 +204,28 @@ class LivePlanRequestPort(PlanRequestPort):
             binary_artifact=binary_artifact,
             state_version=state_version,
             plan_run=plan_run,
+            summary=self._summary(outputs),
+        )
+
+    def _summary(self, outputs: PlanRunOutputs) -> PlanSummary:
+        """Derive the readiness summary from the same bytes that produced `plan_hash`.
+
+        The digest is re-computed from the recovered canonical changes and compared with
+        the run's reported `plan_hash`. Without that check the summary could describe a
+        different plan than the one being approved — the approval gate re-verifies the
+        hash, not the summary, so a mismatched summary would never be caught later.
+        """
+        document = {"resource_changes": outputs.canonical_changes}
+        try:
+            recomputed = compute_plan_hash(document)
+        except PlanProjectionError as error:
+            raise LiveDeploymentPortError("recovered canonical plan is not projectable") from error
+        if recomputed != outputs.plan_hash:
+            raise LiveDeploymentPortError("recovered canonical plan does not match plan_hash")
+        return PlanSummary(
+            refreshed=outputs.refreshed,
+            has_destructive_changes=has_destructive_changes(document),
+            mapped_resource_ids=mapped_resource_ids(document),
         )
 
 
