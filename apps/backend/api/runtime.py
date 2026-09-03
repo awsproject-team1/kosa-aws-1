@@ -215,6 +215,7 @@ def _http_handler() -> JobHttpHandler:
         audit_events=AuditEventApiService(events=DynamoDbAuditEventRepository(_metadata_table())),
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
+        orchestrations=_orchestration_components(),
     )
 
 
@@ -319,6 +320,46 @@ def _remediation_components(
 
 def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _orchestration_components() -> object | None:
+    """Wire POST /orchestrate to the LangGraph Parent Orchestrator (ADR-0012).
+
+    The Parent classifies one natural-language message into a Policy Q&A answer or a
+    workflow proposal; it starts no work. LangGraph and its dependencies live in a Lambda
+    Layer, so the import is deferred to here and the whole route is disabled (returns
+    None) when the Layer is absent, rather than failing the module import for every route.
+    """
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    try:
+        from agent.agents.parent_orchestrator import ParentOrchestrator
+        from apps.backend.api.orchestration import OrchestrationApiService
+    except ImportError:
+        # LangGraph Layer not attached to this function; leave the route unavailable
+        # instead of breaking unrelated routes at import time.
+        return None
+    profile = _parent_model_profile()
+    client = boto3.client("bedrock-runtime", region_name=profile.region)
+    return OrchestrationApiService(router=ParentOrchestrator(client=client), model_profile=profile)
+
+
+def _parent_model_profile() -> object:
+    from packages.contracts import ModelProfile, ModelProfileRole
+
+    raw = (Path(__file__).parents[3] / "fixtures" / "m1" / "parent_model_profile.json").read_text()
+    data = json.loads(raw)
+    return ModelProfile(
+        model_profile_id=data["model_profile_id"],
+        role=ModelProfileRole(data["role"]),
+        region=data["region"],
+        model_id=data["model_id"],
+        prompt_version=data["prompt_version"],
+        rubric_version=data["rubric_version"],
+        golden_dataset_version=data["golden_dataset_version"],
+    )
 
 
 def _remediation_exception_components() -> RemediationExceptionApiService:

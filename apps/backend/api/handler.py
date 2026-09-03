@@ -29,6 +29,7 @@ from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize
 from packages.contracts import (
     ApiErrorResponse,
     DeploymentRejectionReason,
+    OrchestrationRequest,
     PolicyRuleReference,
     PolicySourceUploadRequest,
     RemediationExceptionReason,
@@ -50,6 +51,7 @@ class JobHttpHandler:
         audit_events: AuditEventApiService | None = None,
         observability: DemoRunObservabilityService | None = None,
         policy_reader: object | None = None,
+        orchestrations: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
@@ -87,6 +89,9 @@ class JobHttpHandler:
         self._policy_approvals = policy_approvals
         self._audit_events = audit_events
         self._policy_reader = policy_reader
+        # Duck-typed to avoid importing the LangGraph-backed service (and its Layer-only
+        # dependency) into the handler module; only .orchestrate(principal, request) is used.
+        self._orchestrations = orchestrations
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -100,6 +105,15 @@ class JobHttpHandler:
                     raise RequestValidationError("assessment body is invalid") from error
                 response = self._service.create_assessment(principal, request)
                 return _response(202, response.to_dict())
+            if method == "POST" and path == "/orchestrate":
+                if self._orchestrations is None:
+                    raise JobNotFoundError("orchestrate route not found")
+                try:
+                    orchestration_request = _orchestration_request(event.get("body"))
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("orchestrate body is invalid") from error
+                decision = self._orchestrations.orchestrate(principal, orchestration_request)
+                return _response(200, decision.to_dict())
             if method == "POST" and path == "/policy-sources/uploads":
                 if self._policy_sources is None:
                     raise JobNotFoundError("policy source route not found")
@@ -349,6 +363,15 @@ def _assessment_request(raw_body: object) -> AssessmentRequest:
         repository_id=_non_empty_string(body["repository_id"], "repository_id"),
         policy_profile_id=_non_empty_string(body["policy_profile_id"], "policy_profile_id"),
     )
+
+
+def _orchestration_request(raw_body: object) -> OrchestrationRequest:
+    if not isinstance(raw_body, str):
+        raise ValueError("body must be a JSON string")
+    body = _mapping(json.loads(raw_body))
+    if set(body) != {"message"}:
+        raise ValueError("orchestrate body fields are invalid")
+    return OrchestrationRequest(message=_non_empty_string(body["message"], "message"))
 
 
 def _remediation_exception_request(raw_body: object) -> RemediationExceptionRequest:
