@@ -2,6 +2,39 @@
 
 ## Current
 
+- **SPA 콘솔을 관측성 중심으로 재설계하고, 라이브 sandbox에서 문서 관리·사용자 관리·평가/게시
+  폐루프를 시연 가능한 상태로 굳혔다** (PR #72, branch `feature/console-redesign-and-authoring-hardening`,
+  base `dev`). 정책 authoring 견고화와 신규 콘솔 API를 함께 포함한다. 라이브 배포·검증까지 완료.
+  - Authoring 견고화: Bedrock extractor가 ```json code fence를 제거하고, chunk 크기를 낮춰
+    (`UNITS_PER_CHUNK=6`, overlap 1, maxTokens 8192) 잘림을 줄이며, 필드 스키마·분류 규칙을 명시한
+    system prompt로 재작성. fail-soft — 잘못된 requirement/chunk는 건너뛰고 실행을 이어가되, 금지된
+    evaluation-outcome 필드(`PoisonedResponseError`)는 그 chunk를 중단, 모든 chunk 실패 시에만 전체 실패.
+    `finalize_upload`/`document_from_item`의 Decimal-vs-int 버그도 수정.
+  - 신규 콘솔 API: `GET /policy-sources`(문서 목록), `DELETE /policy-sources/{sid}/versions/{ver}`
+    (미승인만 삭제, 승인 문서는 409로 거부 — Profile evidence 보호), `GET /scope`,
+    `POST/GET /admin/users`, `POST /admin/users/profile`(사용자별 Profile을 Cognito 표준 `profile`
+    속성에 저장). 신규 `Action.MANAGE_USERS`(Admin 전용). `docs/API.md`·`docs/CONTRACTS.md` 동기화.
+  - 콘솔 UX: 왼쪽 관측 패널에 LangGraph/Queue-Jobs에 더해 삭제 진행상황, "연결된 고객사 리소스"
+    (repository_id + GitHub repo + AWS 계정), "사용자·지정 Profile"을 상시 표시. 다중 문서 후보를
+    한 장바구니로 담아 단일 Profile 게시.
+  - 발표용 "실제 연결" 노출: `/scope`가 `ASSESSMENT_SCOPE_JSON`의 비밀 아닌 연결 정보
+    (`github_repository`, `aws_account_id`)를 함께 반환하도록 확장하고, 콘솔 좌측에 표시. secret 참조
+    (role ARN·secret id)는 계속 미노출. `EnvironmentAssessmentScope`는 이 두 필드는 허용하되
+    `policy_profile_id`·미지 필드는 fail-closed 유지.
+  - 버그 수정 2건: (1) 삭제 시 "Failed to fetch"는 HttpApi CORS `AllowMethods`에 DELETE가 빠져
+    preflight가 막힌 것 — IaC와 라이브 API에 DELETE 추가. (2) 승인 문서 삭제가 "요청 실패 (409)"로
+    떴던 건 프론트가 중첩 오류 봉투 `{"error":{"code":...}}`를 최상위에서만 읽던 버그 — `error.code`를
+    읽도록 수정해 "승인된 문서는 삭제할 수 없습니다" 안내로 표시.
+  - 라이브 인프라: api role에 `dynamodb:ConditionCheckItem`(cart 게시 approve 트랜잭션의 500 원인),
+    `DeleteItem`, `s3:DeleteObject`(policy-sources), Cognito Admin 5종, `bedrock:InvokeModel` 추가.
+    `USER_POOL_ID` env 추가. API Gateway에 신규 8개 route 등록. `ASSESSMENT_SCOPE_JSON`에
+    `github_repository=awsproject-team1/test`, `aws_account_id=369676914736` 반영.
+  - 검증: unit 1200 / contract 236 / security 105 통과, ruff·frontend build 통과. 라이브 E2E —
+    문서 목록/삭제(미승인 200·승인 409)·`/scope`(연결정보 포함)·사용자 생성/목록/Profile 지정·
+    approve+publish(cart) 성공, profile `profile-internal-baseline@v1` 게시. 프론트는 CloudFront
+    `E1BENIQUOV74AI`(`https://dfur2d0d1329n.cloudfront.net`)에 배포·무효화. 정책 원문·secret은
+    저장소·문서에 넣지 않는다.
+
 - **Golden 릴리스 게이트의 입력을 만드는 producer가 없었다.** ADR-0022는 C consumer(`release_quality.py`,
   `evaluate_m4_golden_release_gate.py`)와 D 결합(`release_binding.py`)을 구현했지만, §4의 "A producer" —
   customer runtime에서 Post-Deploy 18 Case를 5회 돌려 `m4-golden-observations-v1` bundle을 내보내는 쪽 —
