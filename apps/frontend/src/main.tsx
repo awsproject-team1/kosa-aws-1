@@ -90,7 +90,11 @@ async function exchangeCallback(): Promise<Session | null> {
  * =======================================================================*/
 async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), Authorization: `Bearer ${token}`, ...init?.headers } });
-  if (!res.ok) { const d = await res.json().catch(() => null) as { code?: string } | null; throw new Error(d?.code ? `${res.status} ${d.code}` : `요청 실패 (${res.status})`); }
+  if (!res.ok) {
+    const d = await res.json().catch(() => null) as { code?: string; error?: { code?: string } } | null;
+    const code = d?.error?.code ?? d?.code;
+    throw new Error(code ? `${res.status} ${code}` : `요청 실패 (${res.status})`);
+  }
   return res.json() as Promise<T>;
 }
 async function putPresigned(url: string, file: File, contentType: string) {
