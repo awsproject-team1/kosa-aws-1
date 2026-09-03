@@ -1,6 +1,27 @@
 """Runtime adapters and tool boundaries used by agent graphs."""
 
-from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
+from agent.runtime.actual_resource_tool_factory import (
+    ACTUAL_READ_RESOURCE_TYPES,
+    aws_service_for,
+    build_actual_resource_tool,
+)
+from agent.runtime.assume_role_alb_resource_tool import (
+    ALB_RESOURCE_TYPE,
+    AssumeRoleAlbResourceTool,
+)
+from agent.runtime.assume_role_ec2_resource_tool import (
+    EC2_INSTANCE_RESOURCE_TYPE,
+    AssumeRoleEc2ResourceTool,
+)
+from agent.runtime.assume_role_rds_resource_tool import (
+    RDS_INSTANCE_RESOURCE_TYPE,
+    AssumeRoleRdsResourceTool,
+)
+from agent.runtime.assume_role_s3_resource_tool import (
+    S3_RESOURCE_TYPE,
+    AssumeRoleS3ResourceTool,
+)
+from agent.runtime.assume_role_session import AssumeRoleReadSession
 from agent.runtime.aws_resource_tool import (
     AwsResourceNotFoundError,
     AwsResourceScopeError,
@@ -56,6 +77,7 @@ from agent.runtime.mock_observability_source import (
     ObservabilitySourceError,
     ObservabilitySourceScopeError,
 )
+from agent.runtime.resource_type_routing_tool import ResourceTypeRoutingAwsResourceTool
 from apps.backend.deployment.ports import (
     ActualRereadPort,
     ApplyDispatchPort,
@@ -64,16 +86,23 @@ from apps.backend.deployment.ports import (
 )
 
 __all__ = [
+    "ACTUAL_READ_RESOURCE_TYPES",
     "ActualRereadPort",
+    "ALB_RESOURCE_TYPE",
     "ApplyDispatchPort",
     "AwsResourceNotFoundError",
     "AwsResourceScopeError",
     "AwsResourceTool",
     "AwsResourceToolError",
     "AwsResourceView",
+    "AssumeRoleAlbResourceTool",
+    "AssumeRoleEc2ResourceTool",
+    "AssumeRoleRdsResourceTool",
+    "AssumeRoleReadSession",
     "AssumeRoleS3ResourceTool",
     "DeploymentPortError",
     "DeploymentPortScopeError",
+    "EC2_INSTANCE_RESOURCE_TYPE",
     "GitHubSnapshotNotFoundError",
     "GitHubRestSnapshotTool",
     "GitHubTool",
@@ -104,7 +133,12 @@ __all__ = [
     "ObservabilitySourceScopeError",
     "PlanRequestPort",
     "ProposedPullRequest",
+    "RDS_INSTANCE_RESOURCE_TYPE",
+    "ResourceTypeRoutingAwsResourceTool",
+    "S3_RESOURCE_TYPE",
     "WorkflowRunReader",
+    "aws_service_for",
+    "build_actual_resource_tool",
     "derive_head_branch",
     "require_patch_scope",
     "require_read_operation",

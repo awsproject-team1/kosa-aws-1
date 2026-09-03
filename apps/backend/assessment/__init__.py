@@ -1,5 +1,13 @@
 """Assessment worker boundary."""
 
+from apps.backend.assessment.actual import (
+    SUPPORTED_ACTUAL_RESOURCE_TYPES,
+    ActualEvidence,
+    ActualEvidenceError,
+    ActualEvidenceLoader,
+    actual_evidence_reference,
+)
+from apps.backend.assessment.actual_evaluator import ActualBedrockEvaluator
 from apps.backend.assessment.bedrock import BedrockEvaluationError, BedrockStructuredEvaluator
 from apps.backend.assessment.bedrock_runtime import BedrockConverseClientFactory
 from apps.backend.assessment.comparison import (
@@ -46,12 +54,11 @@ from apps.backend.assessment.results import (
 )
 from apps.backend.assessment.runner import AssessmentRunner, EvaluationContractError
 from apps.backend.assessment.runtime_config import (
+    M1AssessmentResource,
     M1AssessmentTarget,
     M1RuntimeConfiguration,
     M1RuntimeConfigurationError,
 )
-from apps.backend.assessment.s3 import S3ActualEvidence, S3ActualEvidenceLoader, S3EvidenceError
-from apps.backend.assessment.s3_evaluator import S3ActualBedrockEvaluator
 from apps.backend.assessment.verification import (
     VerificationAssessmentScope,
     VerificationRejectionCode,
@@ -67,6 +74,11 @@ from apps.backend.assessment.worker import (
 )
 
 __all__ = [
+    "ActualBedrockEvaluator",
+    "ActualEvidence",
+    "ActualEvidenceError",
+    "ActualEvidenceLoader",
+    "actual_evidence_reference",
     "Assessment",
     "AssessmentCoverage",
     "AssessmentEvaluationPlan",
@@ -105,6 +117,7 @@ __all__ = [
     "load_release_golden_cases",
     "render_golden_release_markdown",
     "InMemoryModelProfileRegistry",
+    "M1AssessmentResource",
     "M1AssessmentTarget",
     "M1RuntimeConfiguration",
     "M1RuntimeConfigurationError",
@@ -113,10 +126,7 @@ __all__ = [
     "ModelProfileNotFoundError",
     "PlannedEvaluation",
     "plan_verification_assessment",
-    "S3ActualEvidence",
-    "S3ActualEvidenceLoader",
-    "S3ActualBedrockEvaluator",
-    "S3EvidenceError",
+    "SUPPORTED_ACTUAL_RESOURCE_TYPES",
     "VerificationAssessmentScope",
     "VerificationRejectionCode",
     "VerificationScopeError",

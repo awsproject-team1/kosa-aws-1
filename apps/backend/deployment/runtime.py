@@ -34,7 +34,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from agent.runtime.assume_role_s3_resource_tool import AssumeRoleS3ResourceTool
+from agent.runtime.actual_resource_tool_factory import (
+    ClientFactoryProvider,
+    build_actual_resource_tool,
+)
 from agent.runtime.live_deployment_ports import (
     LiveActualRereadPort,
     LiveApplyDispatchPort,
@@ -88,7 +91,7 @@ def lambda_handler(event: Mapping[str, object], context: object) -> None:
         transaction_client=_boto3_client("dynamodb"),
         secret_reader=secret_reader,
         sts_client=_boto3_client("sts"),
-        s3_client_factory=_live_s3_client_factory(),
+        client_factory_provider=_live_client_factory_provider(),
     )
     run_tasks(event, worker)
 
@@ -135,7 +138,7 @@ def _live_worker(
     transaction_client: object,
     secret_reader: Callable[[str], str],
     sts_client: object,
-    s3_client_factory: Callable[[Mapping[str, str]], object],
+    client_factory_provider: ClientFactoryProvider,
 ) -> DeploymentWorker:
     """승인된 단일 target으로 D 실행 port·store·work repository를 조립해 Worker를 만든다.
 
@@ -153,13 +156,18 @@ def _live_worker(
     def github_token() -> str:
         return secret_reader(target.github_token_secret_id)
 
-    resource_tool = AssumeRoleS3ResourceTool(
+    # Post-deploy verification re-reads Actual through the same routing tool the Assessment
+    # Worker uses. Hardwiring one service adapter here would either refuse the target's other
+    # resource types or quietly re-read only S3, and ADR-0020 compares the re-read against
+    # the Findings the deployment was supposed to fix.
+    resource_tool = build_actual_resource_tool(
         customer_id=target.customer_id,
         aws_account_id=target.aws_account_id,
         role_arn=target.aws_read_role_arn,
         external_id=secret_reader(target.aws_external_id_secret_id),
+        resource_types=target.resource_types,
+        client_factory_provider=client_factory_provider,
         sts=sts_client,
-        s3_client_factory=s3_client_factory,
     )
     plan_port = LivePlanRequestPort(
         customer_id=target.customer_id,
@@ -426,18 +434,22 @@ def _live_secret_reader() -> Callable[[str], str]:
     return read
 
 
-def _live_s3_client_factory() -> Callable[[Mapping[str, str]], object]:
+def _live_client_factory_provider() -> ClientFactoryProvider:
+    """Return a per-service provider of lazy, credential-taking read clients."""
     boto3 = _boto3()
 
-    def factory(credentials: Mapping[str, str]) -> object:
-        return boto3.client(
-            "s3",
-            aws_access_key_id=credentials["AccessKeyId"],
-            aws_secret_access_key=credentials["SecretAccessKey"],
-            aws_session_token=credentials["SessionToken"],
-        )
+    def provider(service: str) -> Callable[[Mapping[str, str]], object]:
+        def factory(credentials: Mapping[str, str]) -> object:
+            return boto3.client(
+                service,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
 
-    return factory
+        return factory
+
+    return provider
 
 
 def _metadata_table(table_name: str) -> object:

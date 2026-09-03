@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Protocol
 
 from agent.context import AssessmentInputCollector, AwsResourceSelector, SnapshotReadRequest
-from agent.runtime import AssumeRoleS3ResourceTool, GitHubRestSnapshotTool
+from agent.runtime import AwsResourceTool, GitHubRestSnapshotTool, build_actual_resource_tool
 from apps.backend.assessment import (
+    ActualBedrockEvaluator,
+    ActualEvidenceLoader,
     AssessmentResourceWork,
     AssessmentRunner,
     AssessmentWorker,
@@ -27,9 +29,8 @@ from apps.backend.assessment import (
     DynamoDbEvaluationResultStore,
     InMemoryModelProfileRegistry,
     M1RuntimeConfiguration,
-    S3ActualBedrockEvaluator,
-    S3ActualEvidenceLoader,
 )
+from apps.backend.assessment.runtime_config import M1AssessmentResource
 from apps.backend.policy import PolicyContext, PolicyContextResolver, load_rule_registry
 from packages.contracts import (
     AssessmentPhase,
@@ -201,6 +202,7 @@ class DynamoM1WorkRepository:
             repository_id=repository_id,
             policy_profile_id=profile_id,
         )
+        resource = target.resolve_resource(_stored_resource_selector(assessment))
         self._targets[(job_id, expected_revision)] = target
         work = AssessmentResourceWork(
             customer_id=customer_id,
@@ -209,8 +211,8 @@ class DynamoM1WorkRepository:
             revision=expected_revision,
             policy_profile_id=profile_id,
             phase=scope.phase,
-            resource_id=target.s3_bucket_id,
-            resource_type="AWS::S3::Bucket",
+            resource_id=resource.resource_id,
+            resource_type=resource.resource_type,
             # The live Worker runs the full perspective set, so this declares the
             # primary evaluated perspective rather than the only one.
             perspective=EvaluationPerspective.AWS_ACTUAL,
@@ -326,6 +328,11 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
         target = work_repository.target_for(
             job_id=task.job_id, expected_revision=task.expected_revision
         )
+        work = work_repository.get_resource_work(
+            job_id=task.job_id, expected_revision=task.expected_revision
+        )
+        if work is None:  # pragma: no cover - target_for already refused a stale Job.
+            raise RuntimeError("M1 assessment work is missing or stale")
         secrets = boto3.client("secretsmanager")
         github = GitHubRestSnapshotTool(
             customer_id=target.customer_id,
@@ -335,18 +342,10 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                 _secret_string(secrets, secret_id)
             ),
         )
-        aws = AssumeRoleS3ResourceTool(
-            customer_id=target.customer_id,
-            aws_account_id=target.aws_account_id,
-            role_arn=target.aws_read_role_arn,
+        aws = _actual_resource_tool(
+            boto3,
+            target=target,
             external_id=_secret_string(secrets, target.aws_external_id_secret_id),
-            sts=boto3.client("sts"),
-            s3_client_factory=lambda credentials: boto3.client(
-                "s3",
-                aws_access_key_id=credentials["AccessKeyId"],
-                aws_secret_access_key=credentials["SecretAccessKey"],
-                aws_session_token=credentials["SessionToken"],
-            ),
         )
         # Read both approved inputs before evaluation.  The collector exposes no mutation path.
         bundle = AssessmentInputCollector(github_tool=github, aws_tool=aws).collect(
@@ -358,8 +357,8 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                 aws_selectors=(
                     AwsResourceSelector(
                         operation=AwsResourceOperation.READ_RESOURCE,
-                        resource_type="AWS::S3::Bucket",
-                        resource_id=target.s3_bucket_id,
+                        resource_type=work.resource_type,
+                        resource_id=work.resource_id,
                     ),
                 ),
                 include_iac_document=True,
@@ -381,11 +380,12 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                     )
                 ),
                 EvaluationPerspective.AWS_ACTUAL: AssessmentRunner(
-                    S3ActualBedrockEvaluator(
-                        evidence_loader=S3ActualEvidenceLoader(
+                    ActualBedrockEvaluator(
+                        evidence_loader=ActualEvidenceLoader(
                             tool=aws,
                             customer_id=target.customer_id,
                             aws_account_id=target.aws_account_id,
+                            resource_type=work.resource_type,
                         ),
                         client=bedrock,
                     )
@@ -399,6 +399,45 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
             plan_store=report_store,
         )
         worker.handle(task)
+
+
+def _actual_resource_tool(
+    boto3: object,
+    *,
+    target: object,
+    external_id: str,
+) -> AwsResourceTool:
+    """Build the read-only tool for exactly the resource types this target approves."""
+    return build_actual_resource_tool(
+        customer_id=target.customer_id,
+        aws_account_id=target.aws_account_id,
+        role_arn=target.aws_read_role_arn,
+        external_id=external_id,
+        resource_types=target.resource_types,
+        client_factory_provider=_client_factory_provider(boto3),
+        sts=boto3.client("sts"),
+    )
+
+
+def _client_factory_provider(boto3: object):
+    """Return a provider of lazy, credential-taking clients for one AWS service each.
+
+    The client is built when a read first needs credentials, not at wiring time, so
+    configuring a resource type costs nothing until it is actually read.
+    """
+
+    def provider(service: str):
+        def build(credentials: Mapping[str, str]) -> object:
+            return boto3.client(
+                service,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
+
+        return build
+
+    return provider
 
 
 def _tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
@@ -465,6 +504,25 @@ def _fixture_path(name: str) -> Path:
 
 def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _stored_resource_selector(assessment: Mapping[str, object]) -> M1AssessmentResource | None:
+    """Read the resource an Assessment record names, if it names one.
+
+    Both coordinates are required together. A record with only one of them does not
+    identify a resource, and guessing the other would silently evaluate a different
+    resource than the one the Assessment was created for. The named pair is still checked
+    against the approved list by `M1AssessmentTarget.resolve_resource()`; this function only
+    reads it.
+    """
+    resource_type, resource_id = assessment.get("resource_type"), assessment.get("resource_id")
+    if resource_type is None and resource_id is None:
+        return None
+    if not isinstance(resource_type, str) or not resource_type.strip():
+        raise ValueError("stored Assessment resource_type is invalid")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError("stored Assessment resource_id is invalid")
+    return M1AssessmentResource(resource_type=resource_type, resource_id=resource_id)
 
 
 def _stored_assessment_scope(

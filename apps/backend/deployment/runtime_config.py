@@ -16,6 +16,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
 from agent.runtime.github_tool import require_github_repository_full_name
 
 
@@ -55,6 +56,16 @@ class DeploymentTarget:
         for resource_type in self.resource_types:
             if not isinstance(resource_type, str) or not resource_type.strip():
                 raise ValueError("resource_types item must be a non-empty string")
+            # These values become `AwsResourceQuery.resource_type` for the post-deploy Actual
+            # re-read, so they are AWS resource types (`AWS::S3::Bucket`), not Terraform type
+            # names (`aws_s3_bucket`). Accepting a free string let the two vocabularies mix,
+            # and the re-read then failed — or silently covered nothing — after apply.
+            if resource_type not in ACTUAL_READ_RESOURCE_TYPES:
+                raise ValueError(
+                    f"resource_types item {resource_type!r} has no Actual read adapter"
+                )
+        if len(set(self.resource_types)) != len(self.resource_types):
+            raise ValueError("resource_types must not repeat a resource type")
 
 
 class DeploymentRuntimeConfiguration:

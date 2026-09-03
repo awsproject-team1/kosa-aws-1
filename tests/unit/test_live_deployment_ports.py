@@ -346,7 +346,7 @@ class ActualRereadTest(unittest.TestCase):
             customer_id=CUSTOMER_ID,
             aws_account_id=AWS_ACCOUNT_ID,
             resource_tool=tool or _FakeResourceTool(),
-            resource_types=("aws_s3_bucket", "aws_iam_role"),
+            resource_types=("AWS::S3::Bucket", "AWS::RDS::DBInstance"),
             publish=publish,
         )
 
@@ -361,7 +361,7 @@ class ActualRereadTest(unittest.TestCase):
             customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID, sync_target=self._sync_target()
         )
         self.assertIsNone(result)
-        self.assertEqual(tool.lists, ["aws_s3_bucket", "aws_iam_role"])
+        self.assertEqual(tool.lists, ["AWS::S3::Bucket", "AWS::RDS::DBInstance"])
 
     def test_reread_publishes_reread_views(self) -> None:
         tool = _FakeResourceTool()
@@ -370,7 +370,7 @@ class ActualRereadTest(unittest.TestCase):
         port.reread_actual(
             customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID, sync_target=self._sync_target()
         )
-        self.assertEqual(tool.lists, ["aws_s3_bucket", "aws_iam_role"])
+        self.assertEqual(tool.lists, ["AWS::S3::Bucket", "AWS::RDS::DBInstance"])
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][0], DEPLOYMENT_ID)
         # 두 resource type에서 각각 하나씩, 재조회된 view가 콜백으로 넘어간다.

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
 from time import time
 from typing import Protocol
 
+from agent.runtime.assume_role_session import AssumeRoleReadSession, error_code, paginate
 from agent.runtime.aws_resource_tool import (
     AwsResourceNotFoundError,
     AwsResourceTool,
@@ -17,13 +17,15 @@ from agent.runtime.aws_resource_tool import (
 )
 from packages.contracts import AwsResourceOperation, AwsResourceQuery
 
+S3_RESOURCE_TYPE = "AWS::S3::Bucket"
+
 
 class StsClient(Protocol):
     def assume_role(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
 class S3Client(Protocol):
-    def list_buckets(self) -> Mapping[str, object]: ...
+    def list_buckets(self, **kwargs: object) -> Mapping[str, object]: ...
 
     def get_public_access_block(self, **kwargs: object) -> Mapping[str, object]: ...
 
@@ -49,18 +51,16 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
         for name, value in (
             ("customer_id", customer_id),
             ("aws_account_id", aws_account_id),
-            ("role_arn", role_arn),
-            ("external_id", external_id),
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
-        if sts is None or not callable(s3_client_factory) or not callable(clock):
-            raise TypeError("sts, s3_client_factory, and clock are required")
+        if not callable(s3_client_factory):
+            raise TypeError("s3_client_factory is required")
         self._customer_id, self._aws_account_id = customer_id, aws_account_id
-        self._role_arn, self._sts, self._s3_client_factory = role_arn, sts, s3_client_factory
-        self._external_id, self._clock = external_id, clock
-        self._cached_credentials: Mapping[str, str] | None = None
-        self._credentials_expire_at: float | None = None
+        self._s3_client_factory = s3_client_factory
+        self._session = AssumeRoleReadSession(
+            role_arn=role_arn, external_id=external_id, sts=sts, clock=clock
+        )
 
     def read_resource(self, query: AwsResourceQuery) -> AwsResourceView:
         query = require_read_operation(query, AwsResourceOperation.READ_RESOURCE)
@@ -76,15 +76,15 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
                 "ServerSideEncryptionConfiguration", {}
             )
         except Exception as error:
-            if _code(error) == "NoSuchBucket":
+            if error_code(error) == "NoSuchBucket":
                 raise AwsResourceNotFoundError("S3 bucket state was not found") from None
             raise AwsResourceToolError("S3 bucket read failed") from None
         try:
             policy = s3.get_bucket_policy_status(Bucket=bucket).get("PolicyStatus", {})
         except Exception as error:
-            if _code(error) == "NoSuchBucketPolicy":
+            if error_code(error) == "NoSuchBucketPolicy":
                 policy = {}
-            elif _code(error) == "NoSuchBucket":
+            elif error_code(error) == "NoSuchBucket":
                 raise AwsResourceNotFoundError("S3 bucket state was not found") from None
             else:
                 raise AwsResourceToolError("S3 bucket read failed") from None
@@ -100,14 +100,18 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
         require_scope(query, customer_id=self._customer_id, aws_account_id=self._aws_account_id)
         self._require_s3(query)
         try:
-            buckets = self._s3().list_buckets().get("Buckets", [])
+            buckets = paginate(
+                self._s3().list_buckets,
+                items_key="Buckets",
+                token_argument="ContinuationToken",
+            )
+        except AwsResourceToolError:
+            raise
         except Exception:
             raise AwsResourceToolError("S3 bucket list failed") from None
-        if not isinstance(buckets, list):
-            raise AwsResourceToolError("S3 bucket list is invalid")
         views = []
         for bucket in buckets:
-            name = bucket.get("Name") if isinstance(bucket, Mapping) else None
+            name = bucket.get("Name")
             if not isinstance(name, str) or not name:
                 raise AwsResourceToolError("S3 bucket list is invalid")
             views.append(
@@ -124,50 +128,9 @@ class AssumeRoleS3ResourceTool(AwsResourceTool):
         return tuple(views)
 
     def _s3(self) -> S3Client:
-        try:
-            if self._cached_credentials is None or not self._credentials_are_valid():
-                response = self._sts.assume_role(
-                    RoleArn=self._role_arn,
-                    RoleSessionName="governance-read",
-                    ExternalId=self._external_id,
-                )
-                values = response.get("Credentials")
-                if not isinstance(values, Mapping):
-                    raise ValueError
-                required = {
-                    name: values[name]
-                    for name in ("AccessKeyId", "SecretAccessKey", "SessionToken")
-                }
-                if not all(isinstance(value, str) and value for value in required.values()):
-                    raise ValueError
-                self._cached_credentials = required
-                self._credentials_expire_at = _expiration_epoch(values.get("Expiration"))
-            return self._s3_client_factory(self._cached_credentials)
-        except Exception:
-            raise AwsResourceToolError("AWS read role assumption failed") from None
-
-    def _credentials_are_valid(self) -> bool:
-        return (
-            self._credentials_expire_at is not None
-            and self._credentials_expire_at > self._clock() + 60
-        )
+        return self._s3_client_factory(self._session.credentials())
 
     @staticmethod
     def _require_s3(query: AwsResourceQuery) -> None:
-        if query.resource_type != "AWS::S3::Bucket":
+        if query.resource_type != S3_RESOURCE_TYPE:
             raise AwsResourceToolError("S3 adapter supports only AWS::S3::Bucket")
-
-
-def _code(error: Exception) -> str | None:
-    response = getattr(error, "response", None)
-    details = response.get("Error") if isinstance(response, Mapping) else None
-    value = details.get("Code") if isinstance(details, Mapping) else None
-    return value if isinstance(value, str) else None
-
-
-def _expiration_epoch(value: object) -> float | None:
-    if isinstance(value, datetime):
-        return value.timestamp()
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    return None

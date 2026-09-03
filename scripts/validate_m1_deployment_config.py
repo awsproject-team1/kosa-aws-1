@@ -3,6 +3,11 @@
 
 The workflow passes only references and selector metadata to this process. Error
 messages intentionally identify fields, never protected values.
+
+Run it as a module so the repository root is on the import path — this gate reads the
+resource-type allow-list from `agent.runtime`, which is the single source for it:
+
+    python -m scripts.validate_m1_deployment_config
 """
 
 from __future__ import annotations
@@ -14,10 +19,11 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
 from agent.runtime.github_tool import require_github_repository_full_name
 
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
-TARGET_FIELDS = frozenset(
+COMMON_TARGET_FIELDS = frozenset(
     {
         "customer_id",
         "repository_id",
@@ -28,9 +34,17 @@ TARGET_FIELDS = frozenset(
         "aws_account_id",
         "aws_read_role_arn",
         "aws_external_id_secret_id",
-        "s3_bucket_id",
     }
 )
+#: A target declares the evaluated resources one of two ways and never both: the legacy
+#: single bucket, or an explicit `(resource_type, resource_id)` list. Accepting both at once
+#: would leave two answers to "what may this deployment evaluate?".
+LEGACY_RESOURCE_FIELD = "s3_bucket_id"
+RESOURCE_LIST_FIELD = "resources"
+RESOURCE_FIELDS = frozenset({"resource_type", "resource_id"})
+#: Resource types the Worker has an Actual read adapter for. Imported, not restated: a
+#: hand-copied list would let this gate accept a type the Worker cannot read.
+SUPPORTED_RESOURCE_TYPES = frozenset(ACTUAL_READ_RESOURCE_TYPES)
 SCOPE_FIELDS = frozenset({"repository_id", "policy_profile_id"})
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
@@ -188,9 +202,11 @@ def _targets(raw: str) -> tuple[dict[str, str], ...]:
         raise DeploymentConfigurationError("M1_ASSESSMENT_RUNTIME_JSON must be a non-empty array")
     targets: list[dict[str, str]] = []
     for value in parsed:
-        if not isinstance(value, dict) or set(value) != TARGET_FIELDS:
+        if not isinstance(value, dict):
             raise DeploymentConfigurationError("M1 runtime target fields are invalid")
-        targets.append({name: _required(value.get(name), name) for name in TARGET_FIELDS})
+        target = {name: _required(value.get(name), name) for name in _target_field_names(value)}
+        _validate_resources(value)
+        targets.append(target)
     selectors = {
         (target["customer_id"], target["repository_id"], target["policy_profile_id"])
         for target in targets
@@ -198,6 +214,38 @@ def _targets(raw: str) -> tuple[dict[str, str], ...]:
     if len(selectors) != len(targets):
         raise DeploymentConfigurationError("M1 runtime selectors must be unique")
     return tuple(targets)
+
+
+def _target_field_names(value: Mapping[str, object]) -> frozenset[str]:
+    """Return the string fields to require, refusing a target that declares resources twice."""
+    provided = set(value)
+    if provided == COMMON_TARGET_FIELDS | {LEGACY_RESOURCE_FIELD}:
+        return COMMON_TARGET_FIELDS | {LEGACY_RESOURCE_FIELD}
+    if provided == COMMON_TARGET_FIELDS | {RESOURCE_LIST_FIELD}:
+        return COMMON_TARGET_FIELDS
+    raise DeploymentConfigurationError("M1 runtime target fields are invalid")
+
+
+def _validate_resources(value: Mapping[str, object]) -> None:
+    """Validate the explicit resource list, if the target uses one."""
+    if RESOURCE_LIST_FIELD not in value:
+        return
+    resources = value[RESOURCE_LIST_FIELD]
+    if not isinstance(resources, list) or not resources:
+        raise DeploymentConfigurationError("M1 runtime target resources must be a non-empty array")
+    coordinates: set[tuple[str, str]] = set()
+    for resource in resources:
+        if not isinstance(resource, dict) or set(resource) != RESOURCE_FIELDS:
+            raise DeploymentConfigurationError("M1 runtime resource fields are invalid")
+        resource_type = _required(resource.get("resource_type"), "resource_type")
+        resource_id = _required(resource.get("resource_id"), "resource_id")
+        if resource_type not in SUPPORTED_RESOURCE_TYPES:
+            raise DeploymentConfigurationError(
+                "M1 runtime resource_type has no Actual read adapter"
+            )
+        coordinates.add((resource_type, resource_id))
+    if len(coordinates) != len(resources):
+        raise DeploymentConfigurationError("M1 runtime resources must be unique")
 
 
 def _json(raw: object, field_name: str) -> object:
