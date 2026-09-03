@@ -1,0 +1,90 @@
+[
+  {
+    "rule_id": "RDS-PUBLIC-001",
+    "version": "2026-09-03",
+    "title": "RDS 인스턴스를 퍼블릭 액세스로 노출하지 않는다",
+    "severity": "CRITICAL",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::RDS::DBInstance"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/4.1-A",
+        "content_sha256": "92e7cf57d0cfae3bd2c1c3aff2d8150da769fcbf76354a67c4b2b6d7d4a74e5c"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.2",
+        "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+      }
+    ]
+  },
+  {
+    "rule_id": "RDS-ACCESS-001",
+    "version": "2026-09-03",
+    "title": "RDS 접근을 필요한 네트워크와 주체로만 제한한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::RDS::DBInstance"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/4.2-A",
+        "content_sha256": "5248d2861ae409da906a8b55c0cf54fbe12dfdef46e40f2169d65f9d93770273"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ]
+  },
+  {
+    "rule_id": "RDS-ENCRYPT-001",
+    "version": "2026-09-03",
+    "title": "RDS 저장 데이터를 암호화한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::RDS::DBInstance"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/4.2-D",
+        "content_sha256": "b3252367db3463bf9f91c72a41815c9ae032068cb4bf7b28c3824cca7773516c"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ]
+  },
+  {
+    "rule_id": "RDS-LOGGING-001",
+    "version": "2026-09-03",
+    "title": "RDS 데이터베이스 액세스 로그를 활성화한다",
+    "severity": "MEDIUM",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::RDS::DBInstance"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/7.1-K",
+        "content_sha256": "d7a91b4f3e8e814c42b48c0571c138817f3f68bebb34b1d78d4f7eefe8d45f40"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ]
+  }
+]

@@ -10,5 +10,26 @@
       {"rule_id": "S3-TLS-001", "version": "2026-08-31"},
       {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
     ]
+  },
+  {
+    "policy_profile_id": "profile-multiresource-baseline",
+    "version": "v1",
+    "rule_references": [
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"},
+      {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
+      {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
+      {"rule_id": "S3-ENCRYPT-001", "version": "2026-08-31"},
+      {"rule_id": "S3-TLS-001", "version": "2026-08-31"},
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-EBS-ENCRYPT-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-PUBLIC-IP-001", "version": "2026-09-03"},
+      {"rule_id": "EC2-SG-INGRESS-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-PUBLIC-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-ACCESS-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-ENCRYPT-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-LOGGING-001", "version": "2026-09-03"},
+      {"rule_id": "ALB-HTTPS-001", "version": "2026-09-03"},
+      {"rule_id": "ALB-LOGGING-001", "version": "2026-09-03"}
+    ]
   }
 ]

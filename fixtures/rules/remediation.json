@@ -38,5 +38,45 @@
     "rule_id": "EC2-SNAPSHOT-PUBLIC-001",
     "version": "2026-08-31",
     "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "EC2-PUBLIC-IP-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "EC2-SG-INGRESS-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "RDS-PUBLIC-001",
+    "version": "2026-09-03",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "RDS-ACCESS-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "RDS-ENCRYPT-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "RDS-LOGGING-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ALB-HTTPS-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ALB-LOGGING-001",
+    "version": "2026-09-03",
+    "eligibility": "MANUAL_ONLY"
   }
 ]

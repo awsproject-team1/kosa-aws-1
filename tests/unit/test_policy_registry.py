@@ -17,6 +17,9 @@ REGISTRY_PATH = Path(__file__).parents[2] / "fixtures" / "rules"
 PROFILE_ID = "profile-mvp-baseline"
 S3 = "AWS::S3::Bucket"
 EC2 = "AWS::EC2::Instance"
+RDS = "AWS::RDS::DBInstance"
+ALB = "AWS::ElasticLoadBalancingV2::LoadBalancer"
+MULTIRESOURCE_PROFILE_ID = "profile-multiresource-baseline"
 
 
 def _write_registry(directory: Path, **overrides: object) -> Path:
@@ -272,21 +275,30 @@ class ProfileAllowListTest(unittest.TestCase):
         self.assertFalse(context.allows_evidence(None))
 
     def test_registered_ec2_rules_stay_out_of_the_approved_profile(self) -> None:
-        """M1 평가 대상은 S3 단독이다. EC2 Rule은 Registry에만 있고 Profile에는 없다."""
+        """승인된 `profile-mvp-baseline`은 S3 allow-list다. 신규 type Rule을 끼워 넣지 않는다."""
         profile = self.registry.catalog.get_profile(PROFILE_ID)
         assert profile is not None
         profile_rule_ids = {reference.rule_id for reference in profile.rule_references}
 
         self.assertTrue(any(rule.rule_id.startswith("EC2-") for rule in self.registry.rules))
-        self.assertFalse({rule_id for rule_id in profile_rule_ids if rule_id.startswith("EC2-")})
+        self.assertFalse(
+            {
+                rule_id
+                for rule_id in profile_rule_ids
+                if rule_id.startswith(("EC2-", "RDS-", "ALB-"))
+            }
+        )
 
-        with self.assertRaisesRegex(PolicyNotFoundError, "no applicable policy rules"):
-            self.resolver.resolve(
-                policy_profile_id=PROFILE_ID, phase=AssessmentPhase.INITIAL, resource_type=EC2
-            )
+        for resource_type in (EC2, RDS, ALB):
+            with self.assertRaisesRegex(PolicyNotFoundError, "no applicable policy rules"):
+                self.resolver.resolve(
+                    policy_profile_id=PROFILE_ID,
+                    phase=AssessmentPhase.INITIAL,
+                    resource_type=resource_type,
+                )
 
     def test_resolver_filters_by_resource_type_for_a_profile_that_allows_ec2(self) -> None:
-        """Mapping/Context 계층 자체는 multi-type에서 동작한다 (M2 EC2 확장 대비)."""
+        """Mapping/Context 계층은 multi-type에서 type별로만 Rule을 넘긴다."""
         catalog = self.registry.catalog
         ec2_rule = catalog.get_rule("EC2-EBS-ENCRYPT-001", "2026-08-31")
         assert ec2_rule is not None
@@ -298,7 +310,12 @@ class ProfileAllowListTest(unittest.TestCase):
             policy_profile_id="profile-mixed", phase=AssessmentPhase.INITIAL, resource_type=EC2
         )
 
-        self.assertEqual([rule.rule_id for rule in context.rules], ["EC2-EBS-ENCRYPT-001"])
+        self.assertEqual(
+            [rule.rule_id for rule in context.rules],
+            ["EC2-EBS-ENCRYPT-001", "EC2-PUBLIC-IP-001", "EC2-SG-INGRESS-001"],
+        )
+        # Snapshot 전용 Rule은 Instance Context에 들어오지 않는다.
+        self.assertNotIn("EC2-SNAPSHOT-PUBLIC-001", [rule.rule_id for rule in context.rules])
 
     def _profile_with_all_rules(self):
         from apps.backend.policy import InMemoryPolicyCatalog
@@ -315,6 +332,110 @@ class ProfileAllowListTest(unittest.TestCase):
         return InMemoryPolicyCatalog(profiles=(profile,), rules=self.registry.rules)
 
 
+class MultiResourceProfileTest(unittest.TestCase):
+    """`profile-multiresource-baseline`이 S3/EC2/RDS/ALB 4종을 실제로 해석한다."""
+
+    def setUp(self) -> None:
+        self.registry = load_rule_registry(REGISTRY_PATH)
+        self.resolver = PolicyContextResolver(self.registry.catalog)
+
+    def _rule_ids(self, resource_type: str, phase: AssessmentPhase) -> list[str]:
+        context = self.resolver.resolve(
+            policy_profile_id=MULTIRESOURCE_PROFILE_ID,
+            phase=phase,
+            resource_type=resource_type,
+        )
+        return [rule.rule_id for rule in context.rules]
+
+    def test_resolves_each_resource_type_to_only_its_own_rules(self) -> None:
+        expected = {
+            S3: [
+                "S3-PUBLIC-001",
+                "S3-ACL-001",
+                "S3-POLICY-001",
+                "S3-ENCRYPT-001",
+                "S3-TLS-001",
+                "S3-LOGGING-001",
+            ],
+            EC2: ["EC2-EBS-ENCRYPT-001", "EC2-PUBLIC-IP-001", "EC2-SG-INGRESS-001"],
+            # 한 줄에 모으면 secret scanner가 Rule ID 목록을 generic API key로 오탐한다
+            # ("ACCESS" 키워드 + 인접 문자열). Rule ID는 공개 식별자다 (AGENTS.md).
+            RDS: [
+                "RDS-PUBLIC-001",
+                "RDS-ACCESS-001",
+                "RDS-ENCRYPT-001",
+                "RDS-LOGGING-001",
+            ],
+            ALB: ["ALB-HTTPS-001", "ALB-LOGGING-001"],
+        }
+
+        for resource_type, rule_ids in expected.items():
+            with self.subTest(resource_type=resource_type):
+                self.assertEqual(self._rule_ids(resource_type, AssessmentPhase.INITIAL), rule_ids)
+
+    def test_every_profile_rule_is_reachable_from_some_resource_type(self) -> None:
+        """Profile에 넣었지만 어떤 target type으로도 해석되지 않는 Rule은 평가되지 않는다."""
+        profile = self.registry.catalog.get_profile(MULTIRESOURCE_PROFILE_ID)
+        assert profile is not None
+        declared = {reference.rule_id for reference in profile.rule_references}
+
+        reachable = {
+            rule_id
+            for resource_type in (S3, EC2, RDS, ALB)
+            for rule_id in self._rule_ids(resource_type, AssessmentPhase.INITIAL)
+        }
+
+        self.assertEqual(declared, reachable)
+
+    def test_new_rules_apply_to_the_deployment_and_verification_phases(self) -> None:
+        """조치 후 재평가가 원 Assessment와 같은 Rule 집합을 얻어야 비교가 성립한다."""
+        for phase in (
+            AssessmentPhase.DEPLOYMENT_READINESS,
+            AssessmentPhase.POST_DEPLOY_VERIFICATION,
+        ):
+            for resource_type in (EC2, RDS, ALB):
+                with self.subTest(phase=phase, resource_type=resource_type):
+                    self.assertEqual(
+                        self._rule_ids(resource_type, phase),
+                        self._rule_ids(resource_type, AssessmentPhase.INITIAL),
+                    )
+
+    def test_every_registered_rule_carries_a_remediation_eligibility(self) -> None:
+        """허용 범위 미등록 Rule은 조용히 MANUAL_REVIEW로 떨어진다. 등록을 강제한다."""
+        for rule in self.registry.rules:
+            with self.subTest(rule_id=rule.rule_id):
+                self.assertIsNotNone(
+                    self.registry.remediation.eligibility(
+                        rule_id=rule.rule_id, version=rule.version
+                    )
+                )
+
+    def test_every_registered_rule_implements_at_least_one_control(self) -> None:
+        """Control에 매핑되지 않은 Rule은 Coverage 설명에 나타나지 않는다."""
+        for rule in self.registry.rules:
+            with self.subTest(rule_id=rule.rule_id):
+                self.assertTrue(
+                    self.registry.controls.controls_for_rule(
+                        rule_id=rule.rule_id, version=rule.version
+                    )
+                )
+
+    def test_context_allows_the_actual_evidence_namespace_of_every_type(self) -> None:
+        for resource_type, locator in (
+            (S3, "aws:s3:bucket/demo-bucket#read-resource"),
+            (EC2, "aws:ec2:instance/i-0123456789abcdef0#read-resource"),
+            (RDS, "aws:rds:db-instance/demo-db#read-resource"),
+            (ALB, "aws:elasticloadbalancing:loadbalancer/app/demo/abc#read-resource"),
+        ):
+            with self.subTest(resource_type=resource_type):
+                context = self.resolver.resolve(
+                    policy_profile_id=MULTIRESOURCE_PROFILE_ID,
+                    phase=AssessmentPhase.INITIAL,
+                    resource_type=resource_type,
+                )
+                self.assertTrue(context.allows_evidence(locator))
+
+
 class ControlMappingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = load_rule_registry(REGISTRY_PATH)
@@ -329,11 +450,12 @@ class ControlMappingTest(unittest.TestCase):
         )
 
     def test_expands_a_control_to_its_resource_types(self) -> None:
+        """암호화 통제는 네 Resource 범위 전체에 걸친다. 확장은 통제 단위로 관측된다."""
         resource_types = self.registry.controls.resource_types_for_control(
             "ISMS-P-2.7.1", catalog=self.registry.catalog
         )
 
-        self.assertEqual(resource_types, (S3, EC2, "AWS::EC2::Volume"))
+        self.assertEqual(resource_types, (S3, EC2, "AWS::EC2::Volume", RDS, ALB))
 
     def test_reports_the_controls_a_resolved_context_covers(self) -> None:
         context = PolicyContextResolver(self.registry.catalog).resolve(
@@ -348,7 +470,7 @@ class ControlMappingTest(unittest.TestCase):
         )
 
     def test_reports_partial_control_coverage(self) -> None:
-        """S3 Context는 ISMS-P-2.6.2의 EC2 Rule을 평가하지 않는다. 완전 평가로 보이면 안 된다."""
+        """S3 Context는 ISMS-P-2.6.2의 EC2/RDS Rule을 평가하지 않는다. 완전 평가로 보이면 안 된다."""
         context = PolicyContextResolver(self.registry.catalog).resolve(
             policy_profile_id=PROFILE_ID, phase=AssessmentPhase.INITIAL, resource_type=S3
         )
@@ -359,9 +481,14 @@ class ControlMappingTest(unittest.TestCase):
         }
 
         partial = coverage["ISMS-P-2.6.2"]
-        self.assertEqual((partial.evaluated_rules, partial.total_rules), (2, 3))
+        self.assertEqual((partial.evaluated_rules, partial.total_rules), (2, 5))
         self.assertFalse(partial.is_complete)
-        self.assertTrue(coverage["ISMS-P-2.9.4"].is_complete)
+        # 2.9.4도 RDS/ALB 로깅 Rule을 얻었으므로 S3 Context만으로는 더 이상 완전하지 않다.
+        self.assertFalse(coverage["ISMS-P-2.9.4"].is_complete)
+        self.assertEqual(
+            (coverage["ISMS-P-2.9.4"].evaluated_rules, coverage["ISMS-P-2.9.4"].total_rules),
+            (1, 3),
+        )
 
     def test_rejects_an_unknown_control(self) -> None:
         with self.assertRaisesRegex(PolicyNotFoundError, "not found"):

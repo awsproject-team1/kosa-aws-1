@@ -42,5 +42,49 @@
         "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
       }
     ]
+  },
+  {
+    "rule_id": "EC2-PUBLIC-IP-001",
+    "version": "2026-09-03",
+    "title": "프라이빗 서브넷 EC2 인스턴스에 퍼블릭 IP를 할당하지 않는다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::EC2::Instance"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/2.1-D",
+        "content_sha256": "a7fe2ea872af72b5a9a129b655195428a30ef14e119668bbddf6195aaaec4b77"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.2",
+        "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+      }
+    ]
+  },
+  {
+    "rule_id": "EC2-SG-INGRESS-001",
+    "version": "2026-09-03",
+    "title": "EC2 인스턴스 인바운드 접근을 필요한 IP/Port로만 허용한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::EC2::Instance", "AWS::EC2::SecurityGroup"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/2.2-A",
+        "content_sha256": "191fb12a548aac6486c5946fef4aef2ca2b1c9ff55a7cfc9dcfbb71b90cc600d"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ]
   }
 ]

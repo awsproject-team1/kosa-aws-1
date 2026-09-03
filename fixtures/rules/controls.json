@@ -11,7 +11,9 @@
     "rule_references": [
       {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
       {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
-      {"rule_id": "EC2-SNAPSHOT-PUBLIC-001", "version": "2026-08-31"}
+      {"rule_id": "EC2-SNAPSHOT-PUBLIC-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-SG-INGRESS-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-ACCESS-001", "version": "2026-09-03"}
     ]
   },
   {
@@ -26,7 +28,9 @@
     "rule_references": [
       {"rule_id": "S3-ENCRYPT-001", "version": "2026-08-31"},
       {"rule_id": "S3-TLS-001", "version": "2026-08-31"},
-      {"rule_id": "EC2-EBS-ENCRYPT-001", "version": "2026-08-31"}
+      {"rule_id": "EC2-EBS-ENCRYPT-001", "version": "2026-08-31"},
+      {"rule_id": "RDS-ENCRYPT-001", "version": "2026-09-03"},
+      {"rule_id": "ALB-HTTPS-001", "version": "2026-09-03"}
     ]
   },
   {
@@ -39,7 +43,9 @@
       "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
     },
     "rule_references": [
-      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"},
+      {"rule_id": "RDS-LOGGING-001", "version": "2026-09-03"},
+      {"rule_id": "ALB-LOGGING-001", "version": "2026-09-03"}
     ]
   },
   {
@@ -55,7 +61,9 @@
       {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"},
       {"rule_id": "S3-ACL-001", "version": "2026-08-31"},
       {"rule_id": "S3-POLICY-001", "version": "2026-08-31"},
-      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"}
+      {"rule_id": "S3-LOGGING-001", "version": "2026-08-31"},
+      {"rule_id": "EC2-PUBLIC-IP-001", "version": "2026-09-03"},
+      {"rule_id": "RDS-PUBLIC-001", "version": "2026-09-03"}
     ]
   },
   {
@@ -68,7 +76,8 @@
       "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
     },
     "rule_references": [
-      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"}
+      {"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"},
+      {"rule_id": "ALB-HTTPS-001", "version": "2026-09-03"}
     ]
   }
 ]

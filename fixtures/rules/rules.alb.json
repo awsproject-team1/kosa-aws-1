@@ -1,0 +1,40 @@
+[
+  {
+    "rule_id": "ALB-HTTPS-001",
+    "version": "2026-09-03",
+    "title": "Application Load Balancer는 HTTPS/TLS 리스너만 노출한다",
+    "severity": "HIGH",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::ElasticLoadBalancingV2::LoadBalancer"],
+    "source_references": [
+      {
+        "source_id": "internal-cloud-security-checklist",
+        "source_version": "2026-08-24",
+        "locator": "part2/2.3-A",
+        "content_sha256": "344bb84c1117ff396e28258e44bed3b116a21c8e503b4e2121ae9fe392819dac"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ]
+  },
+  {
+    "rule_id": "ALB-LOGGING-001",
+    "version": "2026-09-03",
+    "title": "Application Load Balancer 액세스 로그를 활성화한다",
+    "severity": "MEDIUM",
+    "applicable_phases": ["INITIAL", "DEPLOYMENT_READINESS", "POST_DEPLOY_VERIFICATION"],
+    "resource_types": ["AWS::ElasticLoadBalancingV2::LoadBalancer"],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ]
+  }
+]
