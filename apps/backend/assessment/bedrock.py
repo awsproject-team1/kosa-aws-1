@@ -154,12 +154,20 @@ class BedrockStructuredEvaluator:
 
 _SYSTEM_PROMPT = (
     "Evaluate exactly the supplied resource against the supplied approved rule. "
+    "First decide whether the rule even applies to this resource. A rule applies "
+    "only when its subject matches the resource under the given perspective; if the "
+    "rule governs a different resource kind, attribute, or concern than what this "
+    "resource exposes, it does not apply. "
     "Return one JSON object only, with exactly status, score, rationale, and "
     "evidence_references. status must be exactly one of "
     + ", ".join(status.value for status in EvaluationStatus)
-    + " (use PASS when the resource satisfies the rule and FAIL when it violates it); "
-    "score must be 0 through 100, and every evidence reference must come from "
-    "allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
+    + ". Use OUT_OF_SCOPE when the rule does not apply to this resource; in that case "
+    "the resource is neither compliant nor violating, so score must be 0 and the "
+    "rationale must state why the rule does not apply. When the rule applies, use PASS "
+    "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
+    "a human must decide and INSUFFICIENT_EVIDENCE when the supplied evidence cannot "
+    "support a judgment. score must be 0 through 100, and every evidence reference must "
+    "come from allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
 )
 
 

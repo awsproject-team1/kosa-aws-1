@@ -156,3 +156,37 @@ class BedrockStructuredEvaluatorTest(unittest.TestCase):
 
         self.assertEqual(result.status, EvaluationStatus.PASS)
         self.assertEqual(result.score, 100)
+
+    def test_ai_may_judge_a_rule_out_of_scope_for_the_resource(self) -> None:
+        # The AI Evaluator selects applicability within the approved boundary: a rule
+        # that does not govern this resource is OUT_OF_SCOPE, not PASS/FAIL. The plan
+        # still fixed the coordinate, so Coverage counts it as completed while
+        # readiness excludes it (ADR-0002 AI selects applicable Rule; ADR-0016).
+        client = Client(
+            response(
+                {
+                    "status": "OUT_OF_SCOPE",
+                    "score": 0,
+                    "rationale": "This rule governs a different resource concern.",
+                    "evidence_references": ["aws:s3:GetPublicAccessBlock"],
+                }
+            )
+        )
+
+        result = self.evaluator(client).evaluate(
+            resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+
+        self.assertEqual(result.status, EvaluationStatus.OUT_OF_SCOPE)
+        # OUT_OF_SCOPE never becomes a Finding; only follow-up statuses do.
+        from apps.backend.assessment.findings import finding_from_result
+
+        self.assertIsNone(finding_from_result(result))
+
+    def test_system_prompt_grants_applicability_judgment(self) -> None:
+        from apps.backend.assessment.bedrock import _SYSTEM_PROMPT
+
+        # The prompt must give the model authority to decide applicability and name
+        # OUT_OF_SCOPE, otherwise "AI selects applicable Rule" (ADR-0002) is not honored.
+        self.assertIn("OUT_OF_SCOPE", _SYSTEM_PROMPT)
+        self.assertIn("whether the rule even applies", _SYSTEM_PROMPT)
