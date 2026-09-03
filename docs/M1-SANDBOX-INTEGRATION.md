@@ -27,7 +27,20 @@ Supply these non-secret parameters:
 
 The bootstrap outputs `GitHubActionsDeploymentRoleArn`,
 `FoundationExecutionRoleArn`, and `LambdaCodeBucketName`. Keep these values in
-the customer deployment record. It does not create the workload repository,
+the customer deployment record.
+
+The execution role's grant is a fixed list of service prefixes, and the
+foundation template grows independently of it. **When the foundation gains a
+resource whose service the role cannot provision, the deployment fails on that
+one resource with `AccessDenied` and CloudFormation rolls back the entire
+change set.** `tests/security/test_bootstrap_execution_role_covers_foundation.py`
+compares the two in CI; when it changes the bootstrap, the customer
+administrator re-applies the bootstrap stack **before** dispatching the
+foundation deployment (Console: CloudFormation → the bootstrap stack → Update →
+Replace current template; or `aws cloudformation deploy` with
+`--capabilities CAPABILITY_NAMED_IAM` and the same parameters). The account
+that already has the Lambda code bucket and OIDC provider uses the
+`m1-customer-bootstrap-roles.yaml` variant. It does not create the workload repository,
 GitHub App token, customer read role, or application secrets.
 
 ## Protected deployment Environment
