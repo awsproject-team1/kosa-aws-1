@@ -53,6 +53,14 @@ reviewers and the same `EXPECTED_AWS_ACCOUNT_ID`. No stack is deployed from a lo
 session. `AssessmentScopeJson` is a fail-closed, customer-scoped M0 selector map and must be supplied
 by the deployment workflow.
 
+Frontend releases use the separate `.github/workflows/deploy-frontend.yml` workflow. It builds
+the Vite SPA at an immutable commit, records the archive and `index.html` SHA-256 values, and pauses
+at the protected deployment Environment before assuming a frontend-only OIDC role. That role can
+write only the configured private SPA bucket and invalidate only the configured CloudFront
+distribution; it cannot mutate the foundation stack, API, Cognito, DynamoDB, or runtime roles.
+The foundation deploy creates this role only when the protected Environment supplies both
+`FRONTEND_SPA_BUCKET_NAME` and `FRONTEND_DISTRIBUTION_ID`.
+
 For M1 sandbox frontend testing, the stack also creates Cognito `Admin`/`User` groups and a
 Hosted UI domain with Authorization Code OAuth enabled. The customer-operated local-user
 handoff and PKCE frontend test are documented in `docs/M1-AUTH-FRONTEND-TEST.md`; no user

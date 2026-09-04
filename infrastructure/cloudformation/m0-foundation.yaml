@@ -82,6 +82,26 @@ Parameters:
     Type: String
     Default: http://localhost:5173
     ConstraintDescription: Exact HTTPS production or localhost logout URL for the Assessment SPA.
+  FrontendSpaBucketName:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^(?!xn--)(?!sthree-)(?!amzn-s3-demo-)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    ConstraintDescription: Exact private S3 bucket that serves the approved frontend through CloudFront, or empty to disable frontend deployment.
+  FrontendDistributionId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Z0-9]{13,14}$'
+    ConstraintDescription: Exact CloudFront distribution ID for the approved frontend, or empty to disable frontend deployment.
+  FrontendDeploymentEnvironment:
+    Type: String
+    Default: customer-sandbox-deploy
+    AllowedPattern: '^[A-Za-z0-9_.-]{1,255}$'
+    ConstraintDescription: Protected GitHub Environment trusted by the frontend deployment role.
+  GitHubOidcSubjectPrefix:
+    Type: String
+    Default: repo:awsproject-team1/kosa-aws-1
+    AllowedPattern: '^repo:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    ConstraintDescription: Exact GitHub owner/repository OIDC subject prefix trusted for deployment.
 
 Rules:
   M1AssessmentInputsAllOrNone:
@@ -119,6 +139,17 @@ Rules:
       - Assert: !Equals [!Ref "AWS::Region", us-east-1]
         AssertDescription: >-
           Live M1 deployment Region must match the approved Assessment Model Profile Region.
+  FrontendDeploymentInputsAllOrNone:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::And:
+                - Fn::Equals: [!Ref FrontendSpaBucketName, ""]
+                - Fn::Equals: [!Ref FrontendDistributionId, ""]
+            - Fn::And:
+                - Fn::Not: [!Equals [!Ref FrontendSpaBucketName, ""]]
+                - Fn::Not: [!Equals [!Ref FrontendDistributionId, ""]]
+        AssertDescription: Frontend SPA bucket and CloudFront distribution ID must be both empty or both non-empty.
 
 Conditions:
   # The Vite dev server origin is a development convenience; a deployed non-sandbox API must not
@@ -137,8 +168,55 @@ Conditions:
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
   DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
   PolicyAuthoringEnabled: !Not [!Equals [!Ref PolicyAuthoringModelProfileJson, ""]]
+  FrontendDeploymentEnabled: !And
+    - !Not [!Equals [!Ref FrontendSpaBucketName, ""]]
+    - !Not [!Equals [!Ref FrontendDistributionId, ""]]
 
 Resources:
+  # GitHub may publish only the approved SPA assets. This is a separate role from the
+  # foundation deployer so frontend releases cannot mutate the API, auth, data, or IAM stacks.
+  FrontendDeploymentRole:
+    Type: AWS::IAM::Role
+    Condition: FrontendDeploymentEnabled
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-frontend-deploy"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "${GitHubOidcSubjectPrefix}:environment:${FrontendDeploymentEnvironment}"
+      Policies:
+        - PolicyName: PublishApprovedFrontend
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InspectFrontendBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${FrontendSpaBucketName}"
+              - Sid: PublishFrontendObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${FrontendSpaBucketName}/*"
+              - Sid: InvalidateApprovedDistribution
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistributionId}"
+
   MetadataTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -1293,3 +1371,7 @@ Outputs:
   CognitoHostedUiDomain:
     Description: Cognito Hosted UI domain used by the browser OAuth PKCE flow.
     Value: !Sub "${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+  FrontendDeploymentRoleArn:
+    Condition: FrontendDeploymentEnabled
+    Description: OIDC role assumed only by the protected frontend deployment workflow.
+    Value: !GetAtt FrontendDeploymentRole.Arn
