@@ -123,6 +123,8 @@ from packages.contracts.policy_authoring import (
     PolicyAuthoringRequest,
     PolicyAuthoringResult,
     RejectedRequirement,
+    UnclassifiedReason,
+    UnclassifiedUnits,
 )
 from packages.contracts.policy_ingestion import (
     APPROVABLE_STATUSES,
@@ -186,6 +188,8 @@ __all__ = [
     "PolicyAuthoringRequest",
     "PolicyAuthoringResult",
     "RejectedRequirement",
+    "UnclassifiedReason",
+    "UnclassifiedUnits",
     "ApiError",
     "ApiErrorResponse",
     "APPROVABLE_STATUSES",

@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Protocol
 from uuid import uuid4
 
@@ -46,9 +47,17 @@ MAX_AUTHORING_RESULTS_PER_RUN = 200
 #: 조건 검사·승인 record·audit event 자리를 남긴 값이다. 넘으면 승인이 원자적이지 않게 된다.
 MAX_RULES_PER_APPROVAL = 90
 
-#: 결과 item의 SK segment. Review는 CANDIDATE만 승인 대상으로 읽고, 나머지 둘은 보존용이다.
+#: 결과 item의 SK segment. Review는 CANDIDATE만 승인 대상으로 읽고, 나머지는 보존용이다.
+#: `UNCLASSIFIED`는 후보가 아니라 추출이 답하지 못한 unit이다 — 승인 대상은 아니지만 리뷰어가
+#: 보아야 하므로 같은 읽기 경로에 있어야 한다. 여기 빠지면 write-back 검증이 방금 쓴 item을
+#: 찾지 못해 모든 실행이 fail-closed한다.
 AUTHORING_CANDIDATE_SEGMENT = "CANDIDATE"
-AUTHORING_RESULT_SEGMENTS = (AUTHORING_CANDIDATE_SEGMENT, "UNSUPPORTED", "REJECTED")
+AUTHORING_RESULT_SEGMENTS = (
+    AUTHORING_CANDIDATE_SEGMENT,
+    "UNSUPPORTED",
+    "REJECTED",
+    "UNCLASSIFIED",
+)
 
 #: 재시도마다 서버가 새로 만드는 write 시각. 멱등 판정에서 제외한다 — 포함하면 모든 재시도가
 #: "다른 내용"으로 보인다. 승인자가 정한 `approved_at`은 여기 없고 그대로 비교된다.
@@ -1128,6 +1137,11 @@ def _authoring_child_items(
                 **rejection.to_dict(),
             }
         )
+    for entry in result.unclassified:
+        # 후보가 아니라 "후보가 되지 못한 unit"이다. digest는 locator 집합에서 결정적으로
+        # 유도해, 같은 실행을 재시도해도 같은 item이 되게 한다(멱등 write).
+        digest = sha256("\x1f".join(entry.locators).encode("utf-8")).hexdigest()
+        items.append({**base("UNCLASSIFIED", digest), **entry.to_dict()})
     return items
 
 

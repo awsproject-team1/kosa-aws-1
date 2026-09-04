@@ -60,7 +60,8 @@ def extract_policy_candidates(
     # Artifact 검증 실패는 `ArtifactReadError`로 그대로 올라간다 — 후보 하나의 문제가 아니라
     # 어떤 문서를 읽고 있는지 말할 수 없는 상태이므로 추출 전체를 중단한다.
     units = artifact_reader.read(customer_id=customer_id, document=document)
-    requirements = extractor.extract(document=document, units=units, catalog=catalog)
+    extraction = extractor.extract(document=document, units=units, catalog=catalog)
+    requirements = extraction.requirements
     _require_unique(requirements)
 
     accepted: list[AcceptedRequirement] = []
@@ -86,6 +87,8 @@ def extract_policy_candidates(
 
     return PolicyAuthoringResult(
         document=document,
+        # 분류하지 못한 unit은 결과에 남는다. 조용한 유실이 아니라 보이는 미완료다.
+        unclassified=extraction.unclassified,
         accepted=tuple(accepted),
         manual=tuple(manual),
         unsupported=tuple(unsupported),

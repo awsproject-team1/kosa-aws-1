@@ -19,6 +19,8 @@ from packages.contracts import (
     RuleCandidate,
     RuleEvaluationType,
     RuleLifecycle,
+    UnclassifiedReason,
+    UnclassifiedUnits,
 )
 
 
@@ -66,6 +68,15 @@ def rejected_from_dict(data: object) -> RejectedRequirement:
     return RejectedRequirement(
         requirement=requirement_from_dict(fields.get("requirement")),
         rejection_codes=tuple(CandidateRejectionCode(str(code)) for code in codes),
+    )
+
+
+def unclassified_from_dict(data: object) -> UnclassifiedUnits:
+    """Restore one recorded gap. 저장된 사유 코드 밖의 값은 받지 않는다."""
+    fields = _mapping(data, "unclassified units")
+    return UnclassifiedUnits(
+        locators=_str_tuple(fields, "locators"),
+        reason=UnclassifiedReason(_string(fields, "reason")),
     )
 
 

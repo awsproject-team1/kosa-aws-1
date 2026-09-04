@@ -74,12 +74,9 @@ class Repository:
             status=AuthoringRunStatus.READY,
             provenance=result.provenance,
             result_digest="digest-" + result.provenance.authoring_run_id,
-            counts={
-                "accepted": len(result.accepted),
-                "manual": len(result.manual),
-                "unsupported": len(result.unsupported),
-                "rejected": len(result.rejected),
-            },
+            # 결과가 세는 것을 그대로 쓴다. 여기서 key를 손으로 나열하면 Contract가 세는
+            # 항목이 늘 때마다 가짜만 조용히 뒤처진다.
+            counts=result.counts,
         )
 
 

@@ -1685,3 +1685,22 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     않게)는 옳지만, 334 unit 문서에서는 "아무것도 저장하지 못함"을 뜻한다. 실패한 chunk를 보이는
     미완료로 기록할지(Assessment의 `EXECUTION_ERROR`와 같은 성격, 승인 경계 변경이라 ADR 필요),
     chunk를 더 작게 할지, 문서를 나눠 올릴지는 사람이 정할 일이다.
+
+- **실패한 chunk를 보이는 미완료로 기록한다 (2026-09-05, ADR-0025).** 위 세 선택지 중 1번.
+  - `extract()`가 `ExtractionOutcome{requirements, unclassified}`를 돌려준다. 모든 시도를 소진한
+    chunk의 locator가 사유 코드(`MODEL_RESPONSE_INVALID` / `INCOMPLETE_CLASSIFICATION`)와 함께
+    남고, 나머지 chunk의 후보는 저장된다. 겹침(1 unit)으로 이웃 chunk가 분류한 경계 unit은
+    목록에서 뺀다 — 빼지 않으면 미분류 수가 부풀려진다.
+  - **게이트는 그대로다.** 거부된 응답은 후보를 하나도 내지 못하고, `PoisonedResponseError`
+    (모델이 판정을 시도한 응답)는 여전히 실행 전체를 세운다. 달라진 것은 거부의 범위뿐이다 —
+    문서 전체가 아니라 그 chunk.
+  - 저장(`POLICY_AUTHORING_UNCLASSIFIED` item, locator 집합에서 유도한 멱등 digest),
+    집계(`counts["unclassified"]`), API(`unclassified[]`), 콘솔(집계 타일 + 표 + 승인 전 경고)까지
+    한 번에 배선했다. READY의 뜻이 "문서를 전부 훑었다"에서 "훑은 만큼의 후보가 완전하다"로
+    좁아지므로, 리뷰어가 그 차이를 모른 채 승인할 수 없어야 한다.
+  - **구현 중에 잡힌 것:** `AUTHORING_RESULT_SEGMENTS`(손으로 유지하는 읽기 경로 목록)에
+    `UNCLASSIFIED`를 넣지 않아 write-back 검증이 방금 쓴 item을 못 찾고 **모든 실행이
+    fail-closed**했다. confirm-review 때의 route 목록과 같은 종류의 누락이라, 같은 처방을 했다 —
+    "writer가 쓰는 segment ⊆ reader가 읽는 segment"를 소스에서 파생하는 테스트를 더했다.
+  - 실패율 자체는 그대로다. chunk 축소·문서 분할은 열려 있고, 미분류 단위 수가 그 지표가 된다.
+    라이브 ISMS-P 재실행 측정은 아직 남아 있다.

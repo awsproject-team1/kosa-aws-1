@@ -71,6 +71,17 @@ parser 수정 뒤 앞 12 chunk를 실제로 돌렸다(각 chunk는 내부적으�
 3. **문서를 나눠 올린다.** ISMS-P를 영역별(관리체계·보호대책·개인정보)로 쪼개면 각 문서가
    20–30 chunk가 된다. 코드 변경이 없고 오늘 쓸 수 있지만 근본 해결은 아니다.
 
+## 5. 선택 — 1번 (ADR-0025)
+
+사람이 1번을 골랐다. 실패한 chunk의 locator가 `UnclassifiedUnits`(사유: `MODEL_RESPONSE_INVALID` /
+`INCOMPLETE_CLASSIFICATION`)로 결과에 남고, 나머지 chunk의 후보는 저장된다. 미분류는
+`counts["unclassified"]`로 세어지고 `GET .../candidates`의 `unclassified[]`로 나가며, 콘솔이 승인
+화면에서 그것을 먼저 말한다. 청크 안의 게이트는 그대로다 — 거부된 응답은 후보를 하나도 내지
+못한다. 자세한 근거와 범위는 `docs/decisions/ADR-0025-visible-incompleteness-in-authoring.md`.
+
+**이 변경은 실패율을 낮추지 않는다.** 2·3번은 열려 있고, 미분류 단위 수가 그 효과를 재는 지표가
+된다. 라이브 재실행으로 이 문서의 실제 미분류 비율을 측정하는 것은 아직 남아 있다.
+
 ## 재현
 
 ```bash

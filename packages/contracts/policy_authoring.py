@@ -859,12 +859,58 @@ class AuthoringProvenance:
         }
 
 
+class UnclassifiedReason(StrEnum):
+    """Why one group of policy units could not be turned into candidates.
+
+    자유 문자열이 아니다. 사유 문구에 모델 응답 조각이 들어가면 정책 원문이 저장·로그로 샌다.
+    """
+
+    #: 응답이 구조화된 답이 아니었다(JSON 아님, 필드 모양 위반, 청크 밖 locator 인용 등).
+    MODEL_RESPONSE_INVALID = "MODEL_RESPONSE_INVALID"
+    #: 응답은 읽혔지만 요청한 unit을 모두 분류하지 않았거나 한 unit을 양쪽에 넣었다.
+    INCOMPLETE_CLASSIFICATION = "INCOMPLETE_CLASSIFICATION"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UnclassifiedUnits:
+    """Policy units the extraction could not classify, and why.
+
+    **왜 결과에 남기는가.** 문서 하나는 여러 chunk로 나뉘고, chunk 하나가 모든 시도를 소진하면
+    예전에는 실행 전체가 실패했다 — 부분 후보를 완전한 추출로 저장하지 않겠다는 규칙이었고 그
+    의도는 옳다(요구사항이 조용히 사라지면 안 된다). 그런데 334 unit / 67 chunk짜리 ISMS-P
+    문서에서 chunk 최종 실패율이 17–33%로 관측됐고, 그 규칙 아래에서 완주 확률은 0.0004%다
+    (`docs/evaluations/data/authoring-isms-p-20260905.md`). 규칙이 "아무것도 저장하지 못함"을
+    뜻하게 된 것이다.
+
+    그래서 유실을 **보이게** 만든다. 분류하지 못한 locator를 결과에 남기면 리뷰어는 "이 문서의
+    어느 단위가 후보가 되지 못했는가"를 그 자리에서 본다. 조용한 유실이 아니라 미완료다 —
+    Assessment의 `EXECUTION_ERROR`와 같은 성격이다.
+    """
+
+    locators: tuple[str, ...]
+    reason: UnclassifiedReason
+
+    def __post_init__(self) -> None:
+        _require_unique_strings(
+            self.locators, "locators", limit=MAX_LOCATORS_PER_REQUIREMENT * 10, allow_empty=False
+        )
+        if not isinstance(self.reason, UnclassifiedReason):
+            raise TypeError("reason must be an UnclassifiedReason")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"locators": list(self.locators), "reason": self.reason.value}
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PolicyAuthoringResult:
     """The complete outcome of one authoring run over one exact source version.
 
     승인 가능한 Rule이 되는 것은 `accepted`와 `manual`뿐이다. `unsupported`와 `rejected`는
     보존되지만 Rule로 변환되지 않는다 — 보존과 승인 가능성은 다른 문제다.
+
+    `unclassified`는 추출이 답하지 못한 unit이다. 비어 있지 않은 실행도 `READY`가 될 수 있지만,
+    그것은 "이 문서를 다 훑었다"가 아니라 "훑은 만큼의 후보가 완전하다"는 뜻이다. 이 목록을
+    화면과 counts가 함께 나르므로 리뷰어가 그 차이를 모른 채 승인할 수 없다.
     """
 
     document: NormalizedPolicyDocument
@@ -872,6 +918,7 @@ class PolicyAuthoringResult:
     manual: tuple[AcceptedRequirement, ...] = ()
     unsupported: tuple[ExtractedRequirement, ...] = ()
     rejected: tuple[RejectedRequirement, ...] = ()
+    unclassified: tuple[UnclassifiedUnits, ...] = ()
     provenance: AuthoringProvenance
 
     def __post_init__(self) -> None:
@@ -899,6 +946,15 @@ class PolicyAuthoringResult:
         for entry in self.rejected:
             if not isinstance(entry, RejectedRequirement):
                 raise TypeError("rejected items must be RejectedRequirement values")
+        seen_locators: set[str] = set()
+        for entry in self.unclassified:
+            if not isinstance(entry, UnclassifiedUnits):
+                raise TypeError("unclassified items must be UnclassifiedUnits values")
+            for locator in entry.locators:
+                if locator in seen_locators:
+                    # 같은 locator가 두 번 실패로 기록되면 "몇 개를 놓쳤는가"가 부풀려진다.
+                    raise ValueError("unclassified must not repeat a locator")
+                seen_locators.add(locator)
         self._require_unique_rule_versions()
 
     def _require_unique_rule_versions(self) -> None:
@@ -925,6 +981,9 @@ class PolicyAuthoringResult:
             "manual": len(self.manual),
             "unsupported": len(self.unsupported),
             "rejected": len(self.rejected),
+            # locator 수를 센다. chunk 수가 아니라 "이 문서의 몇 개 단위가 후보가 되지 못했는가"가
+            # 리뷰어가 묻는 질문이다.
+            "unclassified": sum(len(entry.locators) for entry in self.unclassified),
         }
 
     @property
@@ -942,6 +1001,13 @@ class PolicyAuthoringResult:
             sorted(f"unsupported:{requirement.digest}" for requirement in self.unsupported)
         )
         parts.extend(sorted(f"rejected:{entry.requirement.digest}" for entry in self.rejected))
+        parts.extend(
+            sorted(
+                f"unclassified:{entry.reason.value}:{locator}"
+                for entry in self.unclassified
+                for locator in entry.locators
+            )
+        )
         return sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
     def to_dict(self) -> dict[str, object]:
@@ -951,6 +1017,7 @@ class PolicyAuthoringResult:
             "manual": [entry.to_dict() for entry in self.manual],
             "unsupported": [requirement.to_dict() for requirement in self.unsupported],
             "rejected": [entry.to_dict() for entry in self.rejected],
+            "unclassified": [entry.to_dict() for entry in self.unclassified],
             "provenance": self.provenance.to_dict(),
         }
 
@@ -986,7 +1053,7 @@ class AuthoringManifest:
     result_digest: str | None = None
     failure_code: ArtifactReadFailureCode | None = None
 
-    _COUNT_KEYS = ("accepted", "manual", "unsupported", "rejected")
+    _COUNT_KEYS = ("accepted", "manual", "unsupported", "rejected", "unclassified")
 
     def __post_init__(self) -> None:
         for name in ("source_id", "source_version", "normalized_sha256"):

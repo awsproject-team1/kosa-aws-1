@@ -57,6 +57,8 @@ type Candidate = {
   compensating_control_semantics: string | null;
 };
 type RejectedRequirement = { requirement: ExtractedRequirement; rejection_codes: string[] };
+/** 추출이 답하지 못한 단위. 후보가 아니라 **보이는 미완료**다 — 조용한 유실이 아니다. */
+type UnclassifiedUnits = { locators: string[]; reason: string };
 type CandidatePage = {
   status: string;
   counts: Record<string, number> | null;
@@ -64,6 +66,7 @@ type CandidatePage = {
   candidates: Candidate[];
   unsupported: ExtractedRequirement[];
   rejected: RejectedRequirement[];
+  unclassified?: UnclassifiedUnits[];
   cursor: string | null;
 };
 /** `decided_by`·`observed_*`는 이 필드 이전에 저장된 결과에는 없다 — 그때는 전부 모델 판정이었다. */
@@ -207,12 +210,23 @@ async function fetchCandidatePage(token: string, sourceId: string, sourceVersion
   return api<CandidatePage>(`/policy-sources/${enc(sourceId)}/versions/${enc(sourceVersion)}/candidates?${query}`, token);
 }
 
+const UNCLASSIFIED_REASONS: Record<string, string> = {
+  MODEL_RESPONSE_INVALID: "응답을 신뢰할 수 없음",
+  INCOMPLETE_CLASSIFICATION: "모든 단위를 분류하지 않음",
+};
+
+/** 미분류는 항목 수가 아니라 **단위 수**로 센다 — 리뷰어가 알아야 하는 것은 몇 단위가 빠졌는가다. */
+function unclassifiedUnitCount(page: CandidatePage): number {
+  return (page.unclassified ?? []).reduce((total, entry) => total + entry.locators.length, 0);
+}
+
 /** Read a completed immutable authoring run to the end instead of silently dropping page 2+. */
 async function fetchAllCandidateResults(token: string, sourceId: string, sourceVersion: string): Promise<CandidatePage> {
   let first: CandidatePage | null = null;
   const candidates: Candidate[] = [];
   const unsupported: ExtractedRequirement[] = [];
   const rejected: RejectedRequirement[] = [];
+  const unclassified: UnclassifiedUnits[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
 
@@ -223,6 +237,7 @@ async function fetchAllCandidateResults(token: string, sourceId: string, sourceV
     candidates.push(...page.candidates);
     unsupported.push(...page.unsupported);
     rejected.push(...page.rejected);
+    unclassified.push(...(page.unclassified ?? []));
     if (!page.cursor) break;
     if (seenCursors.has(page.cursor)) throw new Error("후보 조회 cursor가 반복되었습니다.");
     seenCursors.add(page.cursor);
@@ -230,7 +245,7 @@ async function fetchAllCandidateResults(token: string, sourceId: string, sourceV
   }
 
   if (!first) throw new Error("후보 조회 결과가 비어 있습니다.");
-  return { ...first, candidates, unsupported, rejected, cursor: null };
+  return { ...first, candidates, unsupported, rejected, unclassified, cursor: null };
 }
 
 /* per-user profile assignment + known profiles (client-side for the demo) */
@@ -597,7 +612,9 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "done", meta: `${result.candidates.length} 후보` });
       setCandidates(c => ({ ...c, [s.source_id]: result! }));
       setOpenDoc(s.source_id);
-      setNotice(`추출 완료 · 승인 가능 ${result.candidates.length}개 · 미지원 ${result.unsupported.length}개 · 거절 ${result.rejected.length}개.`);
+      const gaps = (result.unclassified ?? []).reduce((total, entry) => total + entry.locators.length, 0);
+      setNotice(`추출 완료 · 승인 가능 ${result.candidates.length}개 · 미지원 ${result.unsupported.length}개 · 거절 ${result.rejected.length}개`
+        + (gaps > 0 ? ` · 미분류 ${gaps}개 단위 (아래 목록 확인 후 승인하세요).` : "."));
       await refresh();
     } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
     finally { setRunning(false); }
@@ -755,7 +772,14 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         <span><strong>{candidates[openDoc].counts?.manual ?? candidates[openDoc].candidates.filter(c => c.classification === "MANUAL").length}</strong><small>수동 검토</small></span>
         <span><strong>{candidates[openDoc].counts?.unsupported ?? candidates[openDoc].unsupported.length}</strong><small>미지원</small></span>
         <span><strong>{candidates[openDoc].counts?.rejected ?? candidates[openDoc].rejected.length}</strong><small>거절</small></span>
+        <span><strong>{unclassifiedUnitCount(candidates[openDoc])}</strong><small>미분류 단위</small></span>
       </div>
+
+      {unclassifiedUnitCount(candidates[openDoc]) > 0 && <p className="hint">
+        이 실행은 문서의 일부 단위를 분류하지 못했습니다. READY는 "문서를 전부 훑었다"가 아니라
+        "훑은 만큼의 후보가 완전하다"는 뜻입니다 — 아래 목록의 단위는 어떤 후보도 만들지 않았으므로,
+        그대로 승인하면 해당 요구사항은 평가되지 않습니다. 다시 추출하거나 문서를 나눠 올리세요.
+      </p>}
 
       <section className="candidate-section" aria-labelledby="approvable-candidates">
         <h3 id="approvable-candidates">승인 가능한 후보 ({candidates[openDoc].candidates.length})</h3>
@@ -788,6 +812,15 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
           rejectionCodes={entry.rejection_codes}
         />)}
       </section>
+
+      {unclassifiedUnitCount(candidates[openDoc]) > 0 && <section className="candidate-section" aria-labelledby="unclassified-units">
+        <h3 id="unclassified-units">분류하지 못한 단위 ({unclassifiedUnitCount(candidates[openDoc])})</h3>
+        <table><thead><tr><th>사유</th><th>단위(locator)</th></tr></thead>
+          <tbody>{(candidates[openDoc].unclassified ?? []).map((entry, index) => <tr key={`unclassified-${index}`}>
+            <td>{UNCLASSIFIED_REASONS[entry.reason] ?? entry.reason}</td>
+            <td>{entry.locators.join(", ")}</td>
+          </tr>)}</tbody></table>
+      </section>}
     </div>}
 
     <div className="card">
