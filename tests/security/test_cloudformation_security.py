@@ -715,5 +715,84 @@ class DeploymentArtifactSecurityTest(unittest.TestCase):
         return self.prepare_steps["Create or verify immutable Lambda artifact"]["run"]
 
 
+USER_MANAGEMENT_PATH = Path(__file__).parents[2] / "apps/backend/api/users.py"
+
+
+def _cognito_actions_called(path: Path) -> set[str]:
+    """Every Cognito API the user-management service invokes, as an IAM action name.
+
+    Read from the source rather than listed by hand: a hand-kept list drifts the moment someone
+    adds a call, which is exactly the drift this check exists to catch.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_client"
+        ):
+            called.add("".join(part.capitalize() for part in node.func.attr.split("_")))
+    return called
+
+
+def _policy_statements(resource: object) -> list[dict]:
+    """Every IAM statement anywhere in a resource, including inside `!If` branches."""
+    found: list[dict] = []
+    stack: list[object] = [resource]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "Effect" in node and "Action" in node:
+                found.append(node)
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+class ApiRuntimeCognitoGrantTest(unittest.TestCase):
+    """The API role must grant every Cognito call the user-management service makes.
+
+    A missing grant here does not fail loudly. The customer-boundary check reads the target user
+    before every write, so an ungranted read makes the boundary refuse every legitimate request —
+    a broken deployment that looks exactly like a working one denying you.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        resources = _template()["Resources"]
+        if not isinstance(resources, dict):
+            raise TypeError("CloudFormation resources must be a mapping")
+        cls.resources = resources
+
+    def test_the_api_role_grants_every_cognito_call_the_service_makes(self) -> None:
+        granted = {
+            action.removeprefix("cognito-idp:")
+            for statement in _policy_statements(self.resources["ApiRuntimeRole"])
+            for action in _actions(statement)
+            if action.startswith("cognito-idp:")
+        }
+        called = _cognito_actions_called(USER_MANAGEMENT_PATH)
+        self.assertNotEqual(called, set(), "expected the service to call Cognito at all")
+        self.assertEqual(called - granted, set())
+
+    def test_the_customer_boundary_read_is_among_them(self) -> None:
+        """Pinned by name: dropping this call is what would silently reopen the boundary."""
+        self.assertIn("AdminGetUser", _cognito_actions_called(USER_MANAGEMENT_PATH))
+
+    def test_cognito_administration_is_confined_to_this_user_pool(self) -> None:
+        for statement in _policy_statements(self.resources["ApiRuntimeRole"]):
+            if any(action.startswith("cognito-idp:") for action in _actions(statement)):
+                self.assertEqual(statement["Resource"], "UserPool.Arn")
+
+
+def _actions(statement: dict) -> list[str]:
+    value = statement["Action"]
+    actions = value if isinstance(value, list) else [value]
+    return [action for action in actions if isinstance(action, str)]
+
+
 if __name__ == "__main__":
     unittest.main()

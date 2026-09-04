@@ -477,6 +477,9 @@ Resources:
                     "cognito-idp:AdminAddUserToGroup",
                     "cognito-idp:AdminSetUserPassword",
                     "cognito-idp:AdminUpdateUserAttributes",
+                    # 쓰기 전에 대상 사용자의 custom:customer_id를 읽어 호출자 customer 소속인지
+                    # 확인한다. 이 권한이 없으면 그 확인이 통째로 실패한다.
+                    "cognito-idp:AdminGetUser",
                     "cognito-idp:ListUsers",
                   ]
                 Resource: !GetAtt UserPool.Arn

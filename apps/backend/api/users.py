@@ -152,11 +152,17 @@ class UserManagementService:
         target's `custom:customer_id` must be read and matched before any write. A user that does
         not exist and a user owned by someone else raise the identical denial: answering them
         differently would turn this endpoint into a cross-tenant existence oracle.
+
+        Only "no such user" is a denial. Every other read failure — a missing IAM grant above all —
+        is a server fault and is re-raised as one: reporting it as 403 would make a broken
+        deployment look like a working boundary refusing every legitimate request.
         """
         try:
             user = self._client.admin_get_user(UserPoolId=self._pool, Username=email)
         except Exception as error:
-            raise AuthorizationDenied("the user is not in the caller's customer") from error
+            if _aws_error_code(error) != "UserNotFoundException":
+                raise
+            raise AuthorizationDenied("the user is not in the caller's customer") from None
         attributes = user.get("UserAttributes", []) if isinstance(user, Mapping) else []
         owner = None
         for attribute in attributes if isinstance(attributes, list) else []:

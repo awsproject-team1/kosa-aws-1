@@ -46,6 +46,7 @@ class FakeCognito:
         self.groups: dict[str, str] = {}
         self.passwords: dict[str, tuple[str, bool]] = {}
         self.pages: list[dict] | None = None
+        self.get_user_error: Exception | None = None
 
     def admin_create_user(self, **kwargs):
         self.calls.append(("admin_create_user", kwargs))
@@ -74,6 +75,8 @@ class FakeCognito:
 
     def admin_get_user(self, **kwargs):
         self.calls.append(("admin_get_user", kwargs))
+        if self.get_user_error is not None:
+            raise self.get_user_error
         email = kwargs["Username"]
         if email not in self.users:
             raise ClientError("UserNotFoundException")
@@ -256,6 +259,20 @@ class AssignProfileTest(unittest.TestCase):
         except AuthorizationDenied as error:
             return error
         raise AssertionError("expected AuthorizationDenied")
+
+    def test_an_infrastructure_failure_is_not_reported_as_a_denial(self) -> None:
+        """A missing IAM grant must surface as a server fault, not as the boundary refusing.
+
+        Reporting it as 403 would make a broken deployment indistinguishable from a working one,
+        and every legitimate assignment would fail with an answer that says the caller is at fault.
+        """
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.get_user_error = ClientError("AccessDeniedException")
+        with self.assertRaises(ClientError):
+            _service(client).assign_profile(
+                ADMIN, email="a@example.com", policy_profile_id="profile-1"
+            )
+        self.assertEqual(client.profiles, {})
 
     def test_a_non_admin_cannot_assign_a_profile(self) -> None:
         client = FakeCognito({"a@example.com": "cust-a"})
