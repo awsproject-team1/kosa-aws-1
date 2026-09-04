@@ -17,6 +17,8 @@ from apps.backend.policy.authoring import (
 from apps.backend.policy.authoring.bedrock_extractor import (
     MAX_REQUIREMENTS_PER_CHUNK,
     PROMPT_VERSION,
+    ChunkAccountingError,
+    PoisonedResponseError,
     _catalog_prompt_view,
     _chunks,
     _redacted,
@@ -236,32 +238,40 @@ class ResponseGateTest(unittest.TestCase):
         with self.assertRaisesRegex(BedrockExtractionError, "outside this chunk"):
             _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_a_control_key_outside_the_catalog_fails_the_run(self) -> None:
-        bad = {
-            **VALID_REQUIREMENT,
-            "mapped_control_key": "NOT_A_CONTROL",
-            "source_locators": [DATABASE_LOCATOR],
-        }
-        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
-            _extract({"requirements": [VALID_REQUIREMENT, bad]})
+    def test_a_requirement_outside_the_catalog_survives_extraction_for_the_builder_to_reject(
+        self,
+    ) -> None:
+        """Catalog 경계는 `build_candidate`가 판정한다. 추출기는 그것을 응답 오류로 다루지 않는다.
 
-    def test_evidence_outside_the_control_boundary_fails_the_run(self) -> None:
-        bad = {
-            **VALID_REQUIREMENT,
-            "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"],
-            "source_locators": [DATABASE_LOCATOR],
-        }
-        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
-            _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        카탈로그에 없는 통제를 지목한 요구사항은 **평가할 수 없는 요구사항**이지 믿을 수 없는
+        응답이 아니다. 추출기가 이것을 예외로 올리면 그 판정이 청크 전체를 죽이고, 같은 청크에
+        들어 있던 멀쩡한 요구사항까지 사라진다 — 라이브 193 unit 문서의 39 청크 중 13개가 오직
+        이 이유로 실패했다. 경계 자체는 그대로다: 그런 후보는 승인 가능한 Rule이 되지 못하고,
+        사유 코드와 함께 보존된다(`test_policy_authoring_pipeline`).
+        """
+        outside = [
+            {
+                **VALID_REQUIREMENT,
+                "mapped_control_key": "NOT_A_CONTROL",
+                "source_locators": [DATABASE_LOCATOR],
+            },
+            {
+                **VALID_REQUIREMENT,
+                "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"],
+                "source_locators": [DATABASE_LOCATOR],
+            },
+            {
+                **VALID_REQUIREMENT,
+                "resource_types": ["AWS::RDS::DBInstance"],
+                "source_locators": [DATABASE_LOCATOR],
+            },
+        ]
+        for bad in outside:
+            with self.subTest(field=sorted(set(bad) - set(VALID_REQUIREMENT)) or "overridden"):
+                requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_a_resource_type_outside_the_control_boundary_fails_the_run(self) -> None:
-        bad = {
-            **VALID_REQUIREMENT,
-            "resource_types": ["AWS::RDS::DBInstance"],
-            "source_locators": [DATABASE_LOCATOR],
-        }
-        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
-            _extract({"requirements": [VALID_REQUIREMENT, bad]})
+                # 두 요구사항 모두 남는다. 하나가 카탈로그 밖이라고 다른 하나를 잃지 않는다.
+                self.assertEqual(len(requirements), 2)
 
     def test_an_overlong_field_fails_the_run(self) -> None:
         bad = {
@@ -373,10 +383,10 @@ class ChunkingTest(unittest.TestCase):
         self.assertEqual(len(requirements), 1)
 
     def test_one_failed_middle_chunk_fails_the_whole_document(self) -> None:
+        """청크 하나가 끝내 실패하면 문서 전체가 실패한다. 재시도가 그 규칙을 바꾸지 않는다."""
         client = FakeBedrock(
             _response([], [UNIT_TEXTS[0][0], UNIT_TEXTS[1][0]]),
             "truncated response",
-            _response([], [UNIT_TEXTS[2][0], UNIT_TEXTS[3][0]]),
         )
         extractor = BedrockPolicyCandidateExtractor(
             client=client,  # type: ignore[arg-type]
@@ -387,7 +397,8 @@ class ChunkingTest(unittest.TestCase):
 
         with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
             extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
-        self.assertEqual(len(client.calls), 2)
+        # 첫 청크 1회 + 두 번째 청크 3회. 세 번 다 쓸 수 없는 응답이라 문서가 실패한다.
+        self.assertEqual(len(client.calls), 4)
 
     def test_the_merged_order_does_not_depend_on_the_model_output_order(self) -> None:
         second = {
@@ -426,6 +437,125 @@ class RejectionLoggingTest(unittest.TestCase):
             _redacted("an AUTOMATABLE requirement must map to a control"),
             "an AUTOMATABLE requirement must map to a control",
         )
+
+
+class ChunkRepairTest(unittest.TestCase):
+    """누락된 locator를 이름으로 알려 한 번 더 물어본다.
+
+    완결성 게이트는 청크마다 걸리고 문서는 청크가 하나라도 실패하면 실패한다. 그래서 청크 실패
+    확률이 조금만 있어도 긴 문서는 거의 확실히 실패했다 — 라이브의 193 unit 문서는 39 청크가
+    되고 3/3 실패했다. 재시도는 게이트를 무르게 하지 않는다. 같은 게이트가 그대로 걸리고,
+    부분 결과는 여전히 저장되지 않으며, 마지막 시도까지 누락이 남으면 예전과 똑같이 실패한다.
+    """
+
+    @staticmethod
+    def _incomplete() -> dict[str, object]:
+        """한 locator를 두 목록 어디에도 넣지 않은 응답."""
+        allowed = [locator for locator, _kind, _text in UNIT_TEXTS]
+        return {
+            "requirements": [VALID_REQUIREMENT],
+            "non_requirement_locators": [
+                locator for locator in allowed if locator not in {STORAGE_LOCATOR, DATABASE_LOCATOR}
+            ],
+        }
+
+    def _extractor(self, client: "FakeBedrock", **kwargs: object):
+        return BedrockPolicyCandidateExtractor(
+            client=client,  # type: ignore[arg-type]
+            model_profile=AUTHORING_PROFILE,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_an_omitted_locator_is_re_asked_and_the_chunk_succeeds(self) -> None:
+        client = FakeBedrock(self._incomplete(), _response([VALID_REQUIREMENT]))
+
+        requirements = self._extractor(client).extract(
+            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+        )
+
+        self.assertEqual(len(requirements), 1)
+        self.assertEqual(len(client.calls), 2)
+
+    def test_the_repair_request_names_exactly_the_locators_that_were_left_out(self) -> None:
+        """게이트가 실제로 본 사실을 그대로 옮긴다 — 추측한 목록이 아니다."""
+        client = FakeBedrock(self._incomplete(), _response([VALID_REQUIREMENT]))
+
+        self._extractor(client).extract(
+            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+        )
+
+        first = json.loads(client.calls[0]["messages"][0]["content"][0]["text"])
+        repair = json.loads(client.calls[1]["messages"][0]["content"][0]["text"])
+        self.assertNotIn("unclassified_locators", first)
+        self.assertEqual(repair["unclassified_locators"], [DATABASE_LOCATOR])
+        self.assertEqual(repair["policy_units"], first["policy_units"])
+
+    def test_a_chunk_that_keeps_omitting_still_fails_the_document(self) -> None:
+        """마지막 시도까지 누락이 남으면 예전과 똑같이 실패한다. 게이트는 그대로다."""
+        client = FakeBedrock(self._incomplete())
+
+        with self.assertRaises(ChunkAccountingError):
+            self._extractor(client).extract(
+                document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+            )
+
+        self.assertEqual(len(client.calls), 3)
+
+    def test_a_single_attempt_restores_the_old_behaviour(self) -> None:
+        client = FakeBedrock(self._incomplete())
+
+        with self.assertRaises(ChunkAccountingError):
+            self._extractor(client, max_chunk_attempts=1).extract(
+                document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+            )
+
+        self.assertEqual(len(client.calls), 1)
+
+    def test_a_locator_in_both_lists_is_named_back_and_repaired(self) -> None:
+        """누락과 같은 성격의 회계 오류다. 어느 locator가 겹쳤는지 그대로 알려준다."""
+        allowed = [locator for locator, _kind, _text in UNIT_TEXTS]
+        both = {
+            "requirements": [VALID_REQUIREMENT],
+            "non_requirement_locators": allowed,
+        }
+        client = FakeBedrock(both, _response([VALID_REQUIREMENT]))
+
+        requirements = self._extractor(client).extract(
+            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+        )
+
+        self.assertEqual(len(requirements), 1)
+        repair = json.loads(client.calls[1]["messages"][0]["content"][0]["text"])
+        self.assertEqual(repair["double_classified_locators"], [STORAGE_LOCATOR])
+
+    def test_an_unusable_response_is_re_asked_without_a_hint(self) -> None:
+        """잘린 JSON에는 알려줄 내용이 없다. 실패가 생성 쪽이므로 같은 요청을 다시 보낸다."""
+        client = FakeBedrock("truncated", _response([VALID_REQUIREMENT]))
+
+        requirements = self._extractor(client).extract(
+            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+        )
+
+        self.assertEqual(len(requirements), 1)
+        second = json.loads(client.calls[1]["messages"][0]["content"][0]["text"])
+        self.assertNotIn("unclassified_locators", second)
+        self.assertNotIn("double_classified_locators", second)
+
+    def test_a_response_that_attempted_an_evaluation_is_never_re_asked(self) -> None:
+        """확률적 실수가 아니라 경계 위반이다. 다시 물어 통과시키면 그 사실이 사라진다."""
+        poisoned = {**VALID_REQUIREMENT, "score": 100}
+        client = FakeBedrock(_response([poisoned]), _response([VALID_REQUIREMENT]))
+
+        with self.assertRaises(PoisonedResponseError):
+            self._extractor(client).extract(
+                document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+            )
+
+        self.assertEqual(len(client.calls), 1)
+
+    def test_zero_attempts_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._extractor(FakeBedrock(), max_chunk_attempts=0)
 
 
 if __name__ == "__main__":

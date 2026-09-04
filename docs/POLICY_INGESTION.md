@@ -62,6 +62,26 @@ Requirement를 제안할 뿐 판정·심각도·점수를 만들지 않는다. �
 모두 덮는다. 남은 실패는 확률적이다 — 20 unit·4 청크 문서에서 실행 성공률 2/8이며, 청크
 하나가 실패하면 문서 전체가 실패하는 현재 설계 때문이다.
 
+**Catalog 경계는 추출기가 아니라 `build_candidate`가 판정한다** (2026-09-04). 두 곳이 같은
+검사를 서로 다른 무게로 하고 있었다 — `build_candidate`는 위반마다 코드를 붙여 후보 하나를
+거절하는데(`UNKNOWN_CONTROL_KEY`, `UNSUPPORTED_RESOURCE_TYPE`, `UNSUPPORTED_EVALUATION_TYPE`,
+`EVIDENCE_CAPABILITY_NOT_AVAILABLE`), 추출기는 같은 것을 예외로 올려 청크 전체를 죽였다.
+카탈로그에 없는 통제를 지목한 요구사항은 **평가할 수 없는 요구사항**이지 믿을 수 없는 응답이
+아니다. 추출기는 응답의 모양과 locator 출처만 판정하고, Catalog 경계는 그것을 코드로 표현할
+수 있는 곳에 맡긴다. 경계 자체는 그대로다 — 그런 후보는 승인 가능한 Rule이 되지 못한다.
+
+**청크는 최대 3회까지 물어본다** (`MAX_CHUNK_ATTEMPTS`). 완결성 게이트는 청크마다 걸리고
+문서는 청크가 하나라도 실패하면 실패하므로, 청크 실패 확률이 조금만 있어도 긴 문서는 거의
+확실히 실패한다. locator 회계가 틀린 경우(누락·중복)에는 **무엇이 틀렸는지 이름으로** 되돌려
+묻는다(`unclassified_locators`, `double_classified_locators`) — 판정 결과의 인용이지 유도가
+아니다. 평가 결과를 내놓으려 한 응답(`PoisonedResponseError`)은 재시도하지 않는다. 그것은
+확률적 실수가 아니라 경계 위반이고, 다시 물어 통과시키면 그 사실이 사라진다. 버려진 시도는
+모두 로그에 남는다.
+
+라이브 측정(2026-09-04). 20 unit 참고 문서: 실행 성공률 2/8 → **5/5**. 고객이 올린 193 unit
+문서(39 청크): 실패 청크 18/39 → **6/39**이며 문서 전체로는 아직 실패한다. 남은 6건은 SECTION
+소제목 누락 3건, 응답 모양 오류 2건, chunk 밖 locator 인용 1건이다.
+
 추출 Worker는 각 청크의 모든 정규화 unit locator를 반드시 설명하게 한다. locator는 하나 이상의
 Requirement가 인용하거나 `non_requirement_locators`에서 heading/문맥으로 명시돼야 하며, 두 집합의
 중복·누락·청크 밖 locator를 모두 거부한다. 응답 JSON, 후보 하나, 청크 하나라도 검증에 실패하면

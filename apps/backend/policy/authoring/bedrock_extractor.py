@@ -54,6 +54,16 @@ from packages.contracts.policy_authoring import (
 UNITS_PER_CHUNK = 6
 CHUNK_OVERLAP_UNITS = 1
 
+#: 한 청크를 몇 번까지 물어볼 것인가. 완결성 게이트는 청크마다 걸리고 문서는 청크가 하나라도
+#: 실패하면 실패하므로, 청크 실패 확률이 조금만 있어도 긴 문서는 거의 확실히 실패한다 —
+#: 193 unit 문서는 39 청크가 되고, 청크 성공률 0.95라도 문서 성공률은 0.95^39 ≈ 0.14다.
+#: 라이브에서 그 문서는 3/3 실패했다.
+#:
+#: 재시도는 게이트를 무르게 하지 않는다. 같은 게이트가 그대로 걸리고, 문서는 여전히 모든
+#: 청크가 성공해야만 성공하며, 부분 결과는 저장되지 않는다. 바뀌는 것은 실패한 청크를 한 번
+#: 더 물어본다는 것뿐이다.
+MAX_CHUNK_ATTEMPTS = 3
+
 #: 한 문서 전체가 만들 수 있는 후보 수의 상한. 모델이 문장마다 후보를 만들어도 저장 계층의
 #: 상한 안에 머문다.
 MAX_REQUIREMENTS_PER_DOCUMENT = 150
@@ -85,7 +95,7 @@ _OPTIONAL_FIELDS = frozenset(
 #: 예시 어디에서도 `required_evidence`와 `evaluation_rubric`을 말하지 않았는데, Contract는 그 둘이
 #: 없는 AUTOMATABLE을 거부한다. 그래서 모델이 낸 AUTOMATABLE은 하나도 남지 못했고 저장된 실행
 #: 세 건이 모두 `accepted: 0`이었다 — 업로드한 정책이 자동 평가 Rule을 만들지 못한 직접 원인이다.
-PROMPT_VERSION = "policy-authoring/2026-09-04.2"
+PROMPT_VERSION = "policy-authoring/2026-09-04.5"
 
 _SYSTEM_PROMPT = (
     "You extract compliance requirements from policy text and map each to a governance control "
@@ -140,6 +150,14 @@ _SYSTEM_PROMPT = (
     '"mapping_reason":"An organizational control requiring human review.",'
     '"classification":"MANUAL","mapped_control_key":"ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",'
     '"evaluation_type":"MANUAL"}\n'
+    "\n"
+    'A request may carry "unclassified_locators" or "double_classified_locators": a previous '
+    "attempt on these same policy_units left those locators out of both lists, or put them in "
+    "both. Fix exactly that in this response — every locator appears in exactly one place — and "
+    "classify each on its own merits together with the rest of the policy_units. Do not invent a "
+    "requirement to cover a locator that states none: a heading or a context sentence belongs "
+    "in non_requirement_locators.\n"
+    "\n"
     'UNSUPPORTED: {"source_locators":["heading/misc/item/9"],'
     '"requirement":"Vendor contracts must be retained for five years.",'
     '"requirement_summary":"Retain vendor contracts five years.",'
@@ -150,6 +168,29 @@ _SYSTEM_PROMPT = (
 
 class BedrockExtractionError(ValueError):
     """Raised when a model response is not a safe structured extraction."""
+
+
+class ChunkAccountingError(BedrockExtractionError):
+    """The response's locator accounting is wrong, and the gate knows exactly how.
+
+    누락(어느 목록에도 없음)과 중복(두 목록 모두에 있음) 두 가지다. 둘 다 재시도할 때 **무엇이
+    틀렸는지 이름으로** 알려줄 수 있다 — 입력이 실제로 달라지므로 재시도가 의미를 갖는다.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing: frozenset[str] = frozenset(),
+        overlapping: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(message)
+        self.missing = missing
+        self.overlapping = overlapping
+
+
+#: 이전 이름. 누락만 담던 시절의 계약을 쓰는 호출자를 위해 남긴다.
+IncompleteChunkError = ChunkAccountingError
 
 
 class PoisonedResponseError(BedrockExtractionError):
@@ -170,6 +211,7 @@ class BedrockPolicyCandidateExtractor:
         model_profile: ModelProfile,
         units_per_chunk: int = UNITS_PER_CHUNK,
         chunk_overlap: int = CHUNK_OVERLAP_UNITS,
+        max_chunk_attempts: int = MAX_CHUNK_ATTEMPTS,
     ) -> None:
         if client is None:
             raise TypeError("client is required")
@@ -185,10 +227,13 @@ class BedrockPolicyCandidateExtractor:
             )
         if units_per_chunk <= 0 or chunk_overlap < 0 or chunk_overlap >= units_per_chunk:
             raise ValueError("chunk sizing must be positive with a smaller overlap")
+        if max_chunk_attempts < 1:
+            raise ValueError("max_chunk_attempts must be at least one")
         self._client = client
         self._model_profile = model_profile
         self._units_per_chunk = units_per_chunk
         self._chunk_overlap = chunk_overlap
+        self._max_chunk_attempts = max_chunk_attempts
 
     @property
     def identity(self) -> ExtractorIdentity:
@@ -234,10 +279,54 @@ class BedrockPolicyCandidateExtractor:
     def _extract_chunk(
         self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
     ) -> tuple[ExtractedRequirement, ...]:
+        """Ask for this chunk, re-asking about the locators a response left out.
+
+        완결성 게이트는 그대로다. 달라지는 것은 누락을 처음 한 번의 답으로 확정하지 않는다는
+        것뿐이며, 마지막 시도까지 누락이 남으면 예전과 똑같이 실패한다.
+        """
+        hint: ChunkAccountingError | None = None
+        for attempt in range(self._max_chunk_attempts - 1):
+            try:
+                return self._ask_chunk(chunk, catalog, hint=hint)
+            except PoisonedResponseError:
+                # 평가 결과를 내놓으려 한 응답은 재시도하지 않는다. 그것은 확률적 실수가 아니라
+                # 모델이 경계를 넘으려 한 사실이고, 다시 물어 통과시키면 그 사실이 사라진다.
+                raise
+            except ChunkAccountingError as error:
+                hint = error
+                self._log_retry(attempt, error)
+            except BedrockExtractionError as error:
+                # 응답 자체가 쓸 수 없었다(잘린 JSON 등). 알려줄 내용은 없지만 실패가 생성
+                # 쪽에 있으므로 같은 요청이 쓸 만한 응답을 낼 수 있다.
+                hint = None
+                self._log_retry(attempt, error)
+        # 마지막 시도는 예외를 그대로 올린다. 여기서 실패하면 문서 전체가 실패하며, 그것이
+        # 이 게이트의 의도다 — 부분 결과를 완전한 추출로 저장하지 않는다.
+        return self._ask_chunk(chunk, catalog, hint=hint)
+
+    @staticmethod
+    def _log_retry(attempt: int, error: BedrockExtractionError) -> None:
+        """Record every discarded attempt. 재시도가 실패를 지우지는 않게 한다."""
+        logging.getLogger("governance.authoring").warning(
+            "chunk attempt %d discarded: %s: %s", attempt + 1, type(error).__name__, error
+        )
+
+    def _ask_chunk(
+        self,
+        chunk: tuple[ExtractionUnit, ...],
+        catalog: GovernanceControlCatalog,
+        *,
+        hint: ChunkAccountingError | None = None,
+    ) -> tuple[ExtractedRequirement, ...]:
         response = self._client.converse(
             modelId=self._model_profile.model_id,
             system=[{"text": _SYSTEM_PROMPT}],
-            messages=[{"role": "user", "content": [{"text": self._request_body(chunk, catalog)}]}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"text": self._request_body(chunk, catalog, hint)}],
+                }
+            ],
             inferenceConfig={"temperature": 0, "maxTokens": 8192},
         )
         payload = _response_object(response)
@@ -261,30 +350,43 @@ class BedrockPolicyCandidateExtractor:
         }
         overlap = requirement_locators & non_requirement_locators
         if overlap:
-            raise BedrockExtractionError(
-                "a locator cannot be both a requirement and a non-requirement"
+            raise ChunkAccountingError(
+                "a locator cannot be both a requirement and a non-requirement",
+                overlapping=frozenset(overlap),
             )
         classified = requirement_locators | non_requirement_locators
         if classified != allowed_locators:
-            raise BedrockExtractionError("the model did not classify every policy unit")
+            raise ChunkAccountingError(
+                "the model did not classify every policy unit",
+                missing=frozenset(allowed_locators - classified),
+            )
         return tuple(kept)
 
     def _request_body(
-        self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
+        self,
+        chunk: tuple[ExtractionUnit, ...],
+        catalog: GovernanceControlCatalog,
+        hint: ChunkAccountingError | None = None,
     ) -> str:
-        return json.dumps(
-            {
-                "policy_units": [
-                    {"locator": unit.locator, "kind": unit.kind.value, "text": unit.text}
-                    for unit in chunk
-                ],
-                "control_catalog": _catalog_prompt_view(catalog),
-                "classifications": [value.value for value in CandidateClassification],
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        """Build the chunk request; a repair attempt names what the accounting got wrong.
+
+        첫 시도의 본문은 그대로다. 두 힌트는 재시도에만 들어가며, 게이트가 실제로 본 사실을
+        그대로 옮긴다 — 어느 locator가 두 목록 어디에도 없었는지, 어느 locator가 양쪽에 모두
+        있었는지. 추측이나 유도가 아니라 판정 결과의 인용이다.
+        """
+        body: dict[str, object] = {
+            "policy_units": [
+                {"locator": unit.locator, "kind": unit.kind.value, "text": unit.text}
+                for unit in chunk
+            ],
+            "control_catalog": _catalog_prompt_view(catalog),
+            "classifications": [value.value for value in CandidateClassification],
+        }
+        if hint is not None and hint.missing:
+            body["unclassified_locators"] = sorted(hint.missing)
+        if hint is not None and hint.overlapping:
+            body["double_classified_locators"] = sorted(hint.overlapping)
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _catalog_prompt_view(catalog: GovernanceControlCatalog) -> list[dict[str, object]]:
@@ -440,8 +542,6 @@ def _requirement_from_response(
 
     classification = _enum(entry.get("classification"), CandidateClassification, "classification")
     control_key = _optional_string(entry.get("mapped_control_key"), "mapped_control_key")
-    if control_key is not None and catalog.control(control_key) is None:
-        raise BedrockExtractionError("mapped_control_key is outside the control catalog")
     evaluation_type = (
         None
         if entry.get("evaluation_type") is None
@@ -451,12 +551,17 @@ def _requirement_from_response(
     resource_types = _string_tuple(entry.get("resource_types"), "resource_types")
     required_evidence = _string_tuple(entry.get("required_evidence"), "required_evidence")
     optional_evidence = _string_tuple(entry.get("optional_evidence"), "optional_evidence")
-    if control_key is not None:
-        control = catalog.control(control_key)
-        assert control is not None
-        _require_subset(resource_types, control.supported_resource_types, "resource_types")
-        _require_subset(required_evidence, control.capability_keys, "required_evidence")
-        _require_subset(optional_evidence, control.capability_keys, "optional_evidence")
+    # Catalog 경계는 여기서 판정하지 않는다. `build_candidate`가 이미 같은 검사를 하고 위반마다
+    # 코드를 붙여 후보 **하나**를 거절한다(`UNKNOWN_CONTROL_KEY`, `UNSUPPORTED_RESOURCE_TYPE`,
+    # `UNSUPPORTED_EVALUATION_TYPE`, `EVIDENCE_CAPABILITY_NOT_AVAILABLE`).
+    #
+    # 여기서 같은 것을 예외로 올리면 그 판정이 청크 전체를 죽인다. 라이브 측정에서 그 결과가
+    # 드러났다 — 193 unit 문서의 39 청크 중 13개가 오직 이 이유로 실패했고, 그 청크에 함께 들어
+    # 있던 멀쩡한 요구사항까지 사라졌다. 카탈로그에 없는 통제를 지목한 요구사항은 "평가할 수 없는
+    # 요구사항"이지 "믿을 수 없는 응답"이 아니다.
+    #
+    # 경계 자체는 그대로다. 그런 후보는 거절되어 승인 가능한 Rule이 되지 못하며, 이제는 사라지는
+    # 대신 사유 코드와 함께 보존된다.
 
     try:
         return ExtractedRequirement(
