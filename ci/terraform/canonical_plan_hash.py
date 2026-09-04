@@ -45,23 +45,19 @@ def _project(plan_json: Mapping[str, object]) -> list[dict[str, object]]:
     for item in resource_changes:
         if not isinstance(item, Mapping):
             raise ValueError("resource_changes[] item must be an object")
-        entry: dict[str, object] = {}
-        for field in _RESOURCE_CHANGE_TOP_FIELDS:
-            if field in item:
-                _reject_non_finite(item[field])
-                entry[field] = item[field]
+        entry: dict[str, object] = {field: item.get(field) for field in _RESOURCE_CHANGE_TOP_FIELDS}
+        for value in entry.values():
+            _reject_non_finite(value)
         if not isinstance(entry.get("address"), str):
             raise ValueError("resource_changes[] item requires a string address")
         change = item.get("change")
         if not isinstance(change, Mapping):
             raise ValueError("resource_changes[].change must be an object")
-        change_entry: dict[str, object] = {}
-        for field in _CHANGE_FIELDS:
-            if field in change:
-                _reject_non_finite(change[field])
-                change_entry[field] = change[field]
-        if "actions" not in change_entry:
+        if "actions" not in change:
             raise ValueError("resource_changes[].change.actions is required")
+        change_entry: dict[str, object] = {field: change.get(field) for field in _CHANGE_FIELDS}
+        for value in change_entry.values():
+            _reject_non_finite(value)
         entry["change"] = change_entry
         projected.append(entry)
     addresses = [entry["address"] for entry in projected]

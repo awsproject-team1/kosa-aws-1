@@ -253,6 +253,8 @@ expected_profile_version=...)`은 그 판본 item을 직접 읽으므로, 실행
   설명 용도의 non-authoritative 값이다.
 - `ExtractedRequirement`: LLM structured output. source ID·version·hash를 만들지 않고 locator만
   돌려준다. 평가 결과 필드(`FORBIDDEN_EXTRACTION_FIELDS`)는 정의되지 않는다.
+- Bedrock 응답은 `requirements`와 `non_requirement_locators`의 exact schema다. 청크의 모든 입력
+  locator가 둘 중 정확히 한쪽에 포함돼야 하며, 후보/청크 일부를 버리고 성공시키는 경로는 없다.
 - `AcceptedRequirement`: Rule로 변환한 뒤에도 원 Requirement·분류·매핑 이유·read-only
   `proposed_severity`를 잃지 않게 둘을 함께 보존한다.
 - `RejectedRequirement` / `CandidateRejectionCode`: 거절 사유는 자유 문장이 아니라 열거값이다.

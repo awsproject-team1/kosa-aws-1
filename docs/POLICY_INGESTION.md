@@ -45,6 +45,12 @@ Control Catalog(`apps/backend/policy/control_catalog.py`)가 정의하고, AI는
 Requirement를 제안할 뿐 판정·심각도·점수를 만들지 않는다. 자동 평가할 수 없는 요구사항은
 `UNSUPPORTED`로 보존되며 승인 가능한 Rule이 되지 않는다.
 
+추출 Worker는 각 청크의 모든 정규화 unit locator를 반드시 설명하게 한다. locator는 하나 이상의
+Requirement가 인용하거나 `non_requirement_locators`에서 heading/문맥으로 명시돼야 하며, 두 집합의
+중복·누락·청크 밖 locator를 모두 거부한다. 응답 JSON, 후보 하나, 청크 하나라도 검증에 실패하면
+문서 전체 실행을 실패시켜 부분 결과가 `READY`로 저장되지 않는다. 배포된 Model Profile의
+`prompt_version`도 코드의 `PROMPT_VERSION`과 정확히 같아야 한다.
+
 원본과 정규화 결과는 Artifact로 분리한다. 평가기는 업로드 원본 전체를 임의로 읽지 않고 승인된
 Profile의 Rule과 필요한 정규화 구간만 받는다. Parser, 정규화 Schema, Rule 또는 승인된 Policy
 Document가 변경되면 Golden Dataset 품질 Gate를 다시 실행한다.
@@ -161,6 +167,10 @@ C는 protected normalized Artifact를 읽어 `PolicyCandidateExtraction`을 만�
 `READY` `NormalizedPolicyDocument`, undecided `RuleCandidate` 목록, extractor ID/version을 묶으며
 원문·정규화 text는 담지 않는다. 모든 Candidate의 `SourceReference`는 같은 source/version의
 정규화 unit locator와 text hash를 정확히 인용해야 한다.
+
+C의 Bedrock adapter는 모든 입력 locator의 분류가 완전한지 확인한 후에만 handoff를 만든다. 따라서
+`READY`는 모든 unit이 후보 또는 비요구사항 문맥으로 처리됐음을 뜻하며, 일부 청크만 성공한 결과를
+뜻하지 않는다.
 
 A는 이 handoff를 customer/source/version 단위로 영속화하고 `load_review()`에서 문서와 후보를,
 `load_publication()`에서 후보·approval·PolicySource를 복원한다. 후보 생성/품질은 C가, DynamoDB

@@ -2,6 +2,20 @@
 
 ## Current
 
+- **정책 후보 추출이 부분 성공을 완전한 결과로 표시하지 않는다.** 로컬 보관 사내 체크리스트의
+  선언 항목 128개와 Markdown parser 결과 128개가 정확히 일치하고 누락·중복·경고가 없음을 다시
+  검증했다(전체 정규화 unit 193개). Bedrock 응답은 이제 모든 청크 locator를 Requirement 또는
+  `non_requirement_locators`로 빠짐없이 분류해야 하며, 중복·청크 밖 locator·잘못된 후보·청크 실패
+  하나라도 있으면 실행 전체가 실패한다. 코드 prompt와 배포 Model Profile의 `prompt_version`도
+  `policy-authoring/2026-09-04`로 고정해 서로 다른 schema가 실행되지 않게 했다.
+  고객 disposable IaC 저장소는 PR #35로 기존 S3와 함께 EC2·RDS·ALB fixture를 복원했다. restricted
+  plan role에 없던 AZ/AMI discovery 권한을 요구하지 않도록 explicit AZ와 AWS-owned AL2023 public
+  parameter를 사용했다. 실제 artifact 대조에서 customer helper가 없는 optional field를 생략해 platform의
+  null-filled canonical projection과 hash가 달라지는 결함도 발견해 PR #36으로 수정했다. 최종 원격 OIDC
+  plan run `33842560536`이 성공했고 platform 재검증 바이트도 정확히 일치했다(22개 plan 좌표: create 17,
+  기존 S3 no-op 5). 실제 apply는 실행하지 않았다. 검증: unit 1285 / contract 239 / integration 21 /
+  security 118, Ruff check/format, Terraform 1.9.5 init/validate/fmt, policy source digest 21개 대조 통과.
+
 - **관리자 정책 후보 조회가 Backend의 전체 검토 형식을 표시한다.** 기존 SPA는
   `CandidateReviewEntry`에서 Rule ID/version·요약·매핑 사유만 보여 상세 요구사항, resource/evidence,
   평가 rubric·semantics, 서버 생성 locator/hash를 숨겼고 `unsupported`/`rejected` 결과도 렌더링하지
