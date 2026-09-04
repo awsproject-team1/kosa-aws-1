@@ -278,6 +278,14 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
     전부 차단됐다 — deploy Environment 변수 `FRONTEND_CALLBACK_URL`/`FRONTEND_LOGOUT_URL`이 비어
     기본값이 들어간 것. 둘 다 `https://dfur2d0d1329n.cloudfront.net`로 설정했고(이제 필수값으로
     취급), 라이브 API는 `update-api`로 즉시 패치했다(다음 배포가 같은 값으로 덮어쓴다).
+  - **사용자 생성 뒤 로그인 실패(2026-09-04 11:40 KST).** CloudTrail: `Login_Error_POST` ×5 — Cognito가
+    비밀번호를 거부했다. 계정은 완전했고(CONFIRMED·User 그룹·customer_id) 입력값 불일치였다. 같은 사고가
+    드러낸 코드 공백 셋을 고쳤다: (1) 백엔드가 길이 8만 보고 pool 정책(대·소·숫자·기호)은 안 봐서, 미달
+    비밀번호는 create→group 성공 후 `admin_set_user_password`에서 500이 나며 반쪽 계정을 남겼다 → 요청
+    단계 검증 + 실패 시 생성 사용자 삭제(`AdminDeleteUser` 권한 추가). (2) SPA에 로그아웃이 없어 Hosted UI
+    세션 쿠키가 직전 계정을 재사용했다 → `/logout` 경로("로그아웃", 로그인 화면의 세션 종료 링크). (3) pool
+    username이 대소문자 구분이라 email을 소문자로 정규화. 운영 시 재설정은
+    `admin-set-user-password --permanent`, 새 사용자 로그인 테스트는 시크릿 창에서.
   - `github_repository`·`aws_account_id`는 콘솔의 "연결된 고객사 리소스"(`GET /scope`)가 읽는
     표시값이다. 배포 gate가 이 둘을 받도록 넓혔으므로 dispatch로 넣을 수 있다 — 빼고 배포하면
     라이브 Lambda에 손으로 넣어둔 값을 덮어써 화면에서 사라진다. 두 값은 같은 selector의

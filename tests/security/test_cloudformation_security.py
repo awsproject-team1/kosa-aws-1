@@ -941,5 +941,34 @@ class CloudFormationTemplateDeliveryTest(unittest.TestCase):
         self.assertIn("${ExistingLambdaCodeBucketName}/lambda/m0/*", granted)
 
 
+class UserPoolPasswordPolicyParityTest(unittest.TestCase):
+    """The backend refuses an initial password before Cognito would, so the two rules must agree.
+
+    The API checks the password up front because Cognito's rejection lands on the last of three
+    writes and leaves a half-created account. That only helps if the API's idea of the policy is
+    the pool's. The template declares no `PasswordPolicy`, so Cognito's default applies (8+ chars,
+    one of each class); if someone ever sets one here, this pins that the backend follows.
+    """
+
+    def test_the_backend_policy_is_the_pool_policy(self) -> None:
+        from apps.backend.api.users import PASSWORD_MIN_LENGTH, PASSWORD_REQUIRED_CLASSES
+
+        pool = _properties(_template()["Resources"]["UserPool"])
+        policy = (pool.get("Policies") or {}).get("PasswordPolicy") or {}
+        expected_min = int(policy.get("MinimumLength", 8))
+        expected_classes = {
+            name
+            for name, key in (
+                ("uppercase", "RequireUppercase"),
+                ("lowercase", "RequireLowercase"),
+                ("number", "RequireNumbers"),
+                ("symbol", "RequireSymbols"),
+            )
+            if str(policy.get(key, "true")).lower() == "true"
+        }
+        self.assertEqual(PASSWORD_MIN_LENGTH, expected_min)
+        self.assertEqual(set(PASSWORD_REQUIRED_CLASSES), expected_classes)
+
+
 if __name__ == "__main__":
     unittest.main()
