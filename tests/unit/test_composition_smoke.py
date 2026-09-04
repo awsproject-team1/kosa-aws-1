@@ -91,6 +91,8 @@ class CompositionSmokeTest(unittest.TestCase):
             "_policy_candidates",
             "_remediation_exceptions",
             "_audit_events",
+            # Parent Q&A grounding is composed here too (POLICY_SOURCE_BUCKET_NAME is set above).
+            "_orchestrations",
         ):
             with self.subTest(attribute=attribute):
                 self.assertIsNotNone(

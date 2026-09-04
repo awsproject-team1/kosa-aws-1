@@ -12,25 +12,43 @@ client later confirms.
 from typing import Protocol
 
 from apps.backend.auth import Action, Principal, authorize
+from apps.backend.policy.qa_context import PolicyQaContext
 from packages.contracts import ModelProfile, OrchestrationDecision, OrchestrationRequest
 
 
 class ParentRouter(Protocol):
     def route(
-        self, request: OrchestrationRequest, *, model_profile: ModelProfile
+        self,
+        request: OrchestrationRequest,
+        *,
+        model_profile: ModelProfile,
+        policy_context: str | None = None,
     ) -> OrchestrationDecision: ...
+
+
+class PolicyContextBuilder(Protocol):
+    def build(self, *, customer_id: str, question: str) -> PolicyQaContext: ...
 
 
 class OrchestrationApiService:
     """Authorize then delegate one natural-language turn to the Parent Orchestrator."""
 
-    def __init__(self, *, router: ParentRouter, model_profile: ModelProfile) -> None:
+    def __init__(
+        self,
+        *,
+        router: ParentRouter,
+        model_profile: ModelProfile,
+        policy_context: PolicyContextBuilder | None = None,
+    ) -> None:
         if router is None:
             raise TypeError("router is required")
         if not isinstance(model_profile, ModelProfile):
             raise TypeError("model_profile must be a ModelProfile")
         self._router = router
         self._model_profile = model_profile
+        # Optional so a deployment without a policy bucket still routes; the Parent is then told
+        # that no material exists and answers accordingly.
+        self._policy_context = policy_context
 
     def orchestrate(
         self, principal: Principal, request: OrchestrationRequest
@@ -40,4 +58,13 @@ class OrchestrationApiService:
         if not isinstance(request, OrchestrationRequest):
             raise TypeError("request must be an OrchestrationRequest")
         authorize(principal, Action.ORCHESTRATE)
-        return self._router.route(request, model_profile=self._model_profile)
+        # Grounding is keyed by the customer the JWT proved — the caller cannot choose it.
+        material: str | None = None
+        if self._policy_context is not None:
+            context = self._policy_context.build(
+                customer_id=principal.customer_id, question=request.message
+            )
+            material = context.prompt_text if context.available else None
+        return self._router.route(
+            request, model_profile=self._model_profile, policy_context=material
+        )

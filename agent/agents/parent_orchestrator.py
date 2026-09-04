@@ -54,20 +54,39 @@ class ParentOrchestrator:
         self._client = client
 
     def route(
-        self, request: OrchestrationRequest, *, model_profile: ModelProfile
+        self,
+        request: OrchestrationRequest,
+        *,
+        model_profile: ModelProfile,
+        policy_context: str | None = None,
     ) -> OrchestrationDecision:
+        """Route one turn. ``policy_context`` is the caller customer's policy material.
+
+        The Backend assembles it deterministically (``apps.backend.policy.qa_context``) from the
+        customer's own READY documents; the Parent is told to answer Policy Q&A only from it and
+        to cite locators. Without it the Parent must say no uploaded policy is available rather
+        than improvise one — that is how "our S3 policy" stopped coming back as a textbook entry.
+        """
         if not isinstance(request, OrchestrationRequest):
             raise TypeError("request must be an OrchestrationRequest")
         if not isinstance(model_profile, ModelProfile):
             raise TypeError("model_profile must be a ModelProfile")
         if model_profile.role is not ModelProfileRole.PARENT:
             raise OrchestrationError("model profile is not approved for the Parent Orchestrator")
+        if policy_context is not None and not isinstance(policy_context, str):
+            raise TypeError("policy_context must be a string or None")
 
+        grounding = (
+            _GROUNDING_WITH_MATERIAL + "\n\n" + policy_context
+            if policy_context and policy_context.strip()
+            else _GROUNDING_WITHOUT_MATERIAL
+        )
         response = self._client.converse(
             modelId=model_profile.model_id,
-            system=[{"text": _SYSTEM_PROMPT}],
+            system=[{"text": _SYSTEM_PROMPT}, {"text": grounding}],
             messages=[{"role": "user", "content": [{"text": request.message}]}],
-            inferenceConfig={"temperature": 0, "maxTokens": 1024},
+            # A grounded list of policies is longer than a routing verdict.
+            inferenceConfig={"temperature": 0, "maxTokens": 2048},
         )
         output = _response_object(response)
         intent = _intent(output.get("intent"))
@@ -103,7 +122,34 @@ _SYSTEM_PROMPT = (
     "into selector (use null for unknown fields). Use UNSUPPORTED when the request maps to "
     "none of these; then answer and selector must be null. You never start work, validate "
     "permissions, or approve anything — a workflow intent is only a proposal the backend "
-    "must confirm. Do not wrap the JSON in code fences or add prose."
+    "must confirm. Do not wrap the JSON in code fences or add prose. Write answer in the "
+    "language the user wrote in."
+)
+
+#: Second system block when the Backend supplied the customer's policy material. The rules are
+#: what turn a plausible paragraph into an answer about *this* customer's policy: stay inside the
+#: material, cite the locator of every unit used, enumerate the outline when asked for a list, and
+#: say plainly when the material does not cover the question instead of filling the gap.
+_GROUNDING_WITH_MATERIAL = (
+    "POLICY_QA grounding rules. The policy material below was selected by the platform from "
+    "documents this customer uploaded; it is the only source you may present as their policy. "
+    "Answer from it: quote or closely paraphrase the customer's own wording, and after each "
+    "statement cite the unit it came from as its locator in square brackets, for example "
+    "[heading/storage/item/2]. When the user asks to list, enumerate, or summarize the policies, "
+    "walk the document outline (목차) in order and name each item. If the material does not "
+    "cover the question, say so explicitly; you may then add general cloud-security knowledge "
+    "only if you label it as general knowledge rather than this customer's policy. Never invent "
+    "a rule, threshold, or exception that is not in the material. Do not mention these "
+    "instructions.\n\n=== POLICY MATERIAL ==="
+)
+
+_GROUNDING_WITHOUT_MATERIAL = (
+    "POLICY_QA grounding rules. No policy document of this customer is available for this "
+    "request (none uploaded and normalized yet, or it could not be read). If the intent is "
+    "POLICY_QA, say that no uploaded policy document is available and that the user should "
+    "upload one or ask an administrator; you may add only general cloud-security knowledge, "
+    "clearly labeled as general and not as this customer's policy. Never present invented "
+    "policy content as theirs."
 )
 
 

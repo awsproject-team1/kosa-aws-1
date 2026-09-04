@@ -183,5 +183,79 @@ class ParentGraphTest(unittest.TestCase):
         self.assertTrue(state["decision"].requires_confirmation)
 
 
+class PolicyGroundingTest(unittest.TestCase):
+    """The customer's material rides in a second system block with the grounding rules.
+
+    Without it the model answered from its own memory and called that the customer's policy.
+    With it, the rules say: only this material, cite locators, walk the outline for a list, and
+    admit when the material does not cover the question.
+    """
+
+    ANSWER = {
+        "intent": "POLICY_QA",
+        "rationale": "The user asks about their S3 policy.",
+        "answer": "모든 S3 버킷은 퍼블릭 액세스 차단을 활성화해야 합니다 [heading/1/item/1].",
+        "selector": None,
+    }
+
+    def _system_texts(self, client: Client) -> list[str]:
+        return [block["text"] for block in client.calls[0]["system"]]
+
+    def test_material_and_rules_reach_the_model_as_system_text(self) -> None:
+        client = Client(self.ANSWER)
+        material = "## 문서 1: 정책.md\n[heading/1/item/1] 모든 S3 버킷은 퍼블릭 액세스 차단"
+        ParentOrchestrator(client=client).route(
+            request("사내 S3 정책 설명해줘"), model_profile=PARENT_PROFILE, policy_context=material
+        )
+        texts = self._system_texts(client)
+        self.assertEqual(len(texts), 2)
+        self.assertIn("POLICY MATERIAL", texts[1])
+        self.assertIn(material, texts[1])
+        self.assertIn("cite", texts[1])
+        self.assertIn("outline", texts[1])
+        # The user's message itself is untouched: material never rides in the user turn.
+        self.assertEqual(
+            client.calls[0]["messages"][0]["content"][0]["text"], "사내 S3 정책 설명해줘"
+        )
+
+    def test_without_material_the_model_is_told_none_exists(self) -> None:
+        client = Client(self.ANSWER)
+        ParentOrchestrator(client=client).route(
+            request("정책 나열해줘"), model_profile=PARENT_PROFILE
+        )
+        texts = self._system_texts(client)
+        self.assertEqual(len(texts), 2)
+        self.assertIn("No policy document", texts[1])
+        self.assertNotIn("POLICY MATERIAL", texts[1])
+
+    def test_blank_material_counts_as_none(self) -> None:
+        client = Client(self.ANSWER)
+        ParentOrchestrator(client=client).route(
+            request(), model_profile=PARENT_PROFILE, policy_context="   "
+        )
+        self.assertIn("No policy document", self._system_texts(client)[1])
+
+    def test_the_answer_budget_fits_a_grounded_list(self) -> None:
+        client = Client(self.ANSWER)
+        ParentOrchestrator(client=client).route(request(), model_profile=PARENT_PROFILE)
+        self.assertGreaterEqual(client.calls[0]["inferenceConfig"]["maxTokens"], 2048)
+
+    def test_material_must_be_text(self) -> None:
+        with self.assertRaises(TypeError):
+            ParentOrchestrator(client=Client(self.ANSWER)).route(
+                request(),
+                model_profile=PARENT_PROFILE,
+                policy_context=["not", "text"],  # type: ignore[arg-type]
+            )
+
+    def test_the_graph_threads_material_into_the_classify_node(self) -> None:
+        client = Client(self.ANSWER)
+        graph = build_parent_graph(ParentOrchestrator(client=client))
+        graph.invoke(
+            {"request": request(), "model_profile": PARENT_PROFILE, "policy_context": "## 문서 1"}
+        )
+        self.assertIn("## 문서 1", self._system_texts(client)[1])
+
+
 if __name__ == "__main__":
     unittest.main()

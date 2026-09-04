@@ -358,7 +358,36 @@ def _orchestration_components() -> object | None:
         return None
     profile = _parent_model_profile()
     client = boto3.client("bedrock-runtime", region_name=profile.region)
-    return OrchestrationApiService(router=ParentOrchestrator(client=client), model_profile=profile)
+    return OrchestrationApiService(
+        router=ParentOrchestrator(client=client),
+        model_profile=profile,
+        policy_context=_policy_qa_context_builder(),
+    )
+
+
+def _policy_qa_context_builder() -> object | None:
+    """Ground Policy Q&A in the caller customer's normalized documents.
+
+    Reuses the ingestion repository (source list, document metadata) and the authoring
+    artifact reader (normalized units from S3) — the same customer-scoped reads the authoring
+    worker performs — so the Parent sees exactly what the extractor would. None when no policy
+    bucket is configured: the route still answers, saying no material is available.
+    """
+    bucket = os.environ.get("POLICY_SOURCE_BUCKET_NAME")
+    if not bucket or not bucket.strip():
+        return None
+    import boto3
+
+    from apps.backend.policy.authoring import NormalizedArtifactReader
+    from apps.backend.policy.qa_context import PolicyQaContextBuilder
+
+    s3_client = boto3.client("s3")
+    catalog = DynamoDbPolicySourceUploadRepository(
+        table=_metadata_table(), bucket=bucket, presigner=s3_client
+    )
+    return PolicyQaContextBuilder(
+        catalog=catalog, reader=NormalizedArtifactReader(reader=s3_client, bucket=bucket)
+    )
 
 
 def _parent_model_profile() -> object:

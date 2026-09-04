@@ -33,6 +33,8 @@ class ParentState(TypedDict, total=False):
 
     request: OrchestrationRequest
     model_profile: ModelProfile
+    #: Customer policy material the Backend assembled for Policy Q&A; absent means "none".
+    policy_context: str | None
     decision: OrchestrationDecision
 
 
@@ -47,7 +49,11 @@ def build_parent_graph(orchestrator: ParentOrchestrator):
         raise TypeError("orchestrator must be a ParentOrchestrator")
 
     def classify(state: ParentState) -> ParentState:
-        decision = orchestrator.route(state["request"], model_profile=state["model_profile"])
+        decision = orchestrator.route(
+            state["request"],
+            model_profile=state["model_profile"],
+            policy_context=state.get("policy_context"),
+        )
         return {"decision": decision}
 
     def _terminal(state: ParentState) -> ParentState:

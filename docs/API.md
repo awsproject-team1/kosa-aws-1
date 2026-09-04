@@ -48,6 +48,12 @@ Parent Orchestrator가 메시지를 분류해 다음 중 하나를 돌려준다.
   - `POLICY_QA`면 `answer`에 직접 답변, 워크플로 intent면 `selector`에 후보
     (`repository_id`, `policy_profile_id`, `finding_id`, `remediation_id` 중 해당 값)와
     `requires_confirmation`이 온다. Client는 사용자 확인 뒤 해당 endpoint를 직접 호출한다.
+- **POLICY_QA 근거:** Backend가 호출자 customer의 READY 정책 문서(정규화 단위)에서 질문과 겹치는
+  발췌와 문서 목차를 결정적으로 골라 모델에 넘기고(`apps/backend/policy/qa_context.py`), 모델은
+  그 자료 안에서만 답하며 사용한 단위의 locator를 `[...]`로 인용한다. 자료가 없으면 "업로드된
+  정책 문서가 없다"고 말하고 일반 지식은 일반 지식이라고 표시한다. 검색 key는 JWT의
+  `custom:customer_id`이므로 다른 customer 문서는 닿을 수 없다. 정책 원문은 모델 프롬프트로만
+  나가고 로그·저장·응답 구조에는 남지 않는다(답변 텍스트 제외).
 - 배선됨: handler branch + API Gateway route(`PostOrchestrateRoute`) + SPA 챗봇 UI.
   라이브 반영은 `Deploy M0 Foundation` 재배포 시점을 따른다.
 

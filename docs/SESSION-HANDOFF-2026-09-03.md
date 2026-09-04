@@ -278,6 +278,13 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
     전부 차단됐다 — deploy Environment 변수 `FRONTEND_CALLBACK_URL`/`FRONTEND_LOGOUT_URL`이 비어
     기본값이 들어간 것. 둘 다 `https://dfur2d0d1329n.cloudfront.net`로 설정했고(이제 필수값으로
     취급), 라이브 API는 `update-api`로 즉시 패치했다(다음 배포가 같은 값으로 덮어쓴다).
+  - **챗봇 Policy Q&A가 일반론만 답하던 문제(2026-09-04).** Parent는 시스템 프롬프트 + 사용자
+    문장만 받았다 — 업로드 문서가 한 글자도 전달되지 않아 "정책 나열해줘"에 목록이 없고 "사내 S3
+    정책"에 위키 정의가 나왔다. `apps/backend/policy/qa_context.py`가 customer의 READY 문서에서
+    목차 + 질문과 겹치는 단위를 결정적으로(어휘 겹침, 한글 2-gram) 골라 두 번째 system 블록으로
+    넘기고, Parent는 그 안에서만 답하며 locator를 인용한다. 자료 없음/읽기 실패는 fail-soft로
+    "문서 없음"을 말한다. 정책 원문은 프롬프트로만 나간다(로그·저장 없음). Parent 프로파일은
+    여전히 Golden 게이트 없음(ADR-0012) — 시연 질문은 미리 몇 개 돌려 볼 것.
   - **사용자 생성 뒤 로그인 실패(2026-09-04 11:40 KST).** CloudTrail: `Login_Error_POST` ×5 — Cognito가
     비밀번호를 거부했다. 계정은 완전했고(CONFIRMED·User 그룹·customer_id) 입력값 불일치였다. 같은 사고가
     드러낸 코드 공백 셋을 고쳤다: (1) 백엔드가 길이 8만 보고 pool 정책(대·소·숫자·기호)은 안 봐서, 미달
