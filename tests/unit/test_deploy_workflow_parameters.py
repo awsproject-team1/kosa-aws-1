@@ -32,7 +32,7 @@ _DERIVED_PARAMETERS = {
     "FrontendSpaBucketName",  # protected Environment variable
     "FrontendDistributionId",  # protected Environment variable
     "FrontendDeploymentEnvironment",  # artifact approval Environment input
-    "GitHubOidcSubjectPrefix",  # github.repository
+    "GitHubOidcSubjectPrefix",  # protected Environment OIDC subject prefix
 }
 
 
