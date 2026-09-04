@@ -184,6 +184,13 @@ const AUTHORING_PENDING = new Set(["QUEUED", "PROCESSING"]);
 /** `PolicySourceKind` 값의 한국어 표시. 모르는 값은 그대로 보여준다. */
 const SEGMENT_LABELS: Record<string, string> = { INTERNAL_POLICY: "사내 정책", ISMS_P: "ISMS-P" };
 
+/** 화면에 보이는 점수·비율은 정수로 반올림한다.
+ *
+ * 계약이 나르는 값은 그대로다 — `ReadinessScore.score`는 소수 둘째 자리까지의 연속 점수이고
+ * API 응답에도 그 값이 실린다. 반올림은 표시에서만 한다: 보고서를 읽는 사람에게 `16.67`과
+ * `17`은 같은 뜻이고, 소수점은 그 숫자가 실제보다 정밀하다는 인상을 준다. */
+const rounded = (value: number) => Math.round(value);
+
 async function fetchCandidatePage(token: string, sourceId: string, sourceVersion: string, cursor?: string): Promise<CandidatePage> {
   const query = new URLSearchParams({ limit: "50" });
   if (cursor) query.set("cursor", cursor);
@@ -944,14 +951,14 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
   return <div className="panel">
     <div className="card"><h2>Assessment 결과 <code>{rep.assessment_id}</code></h2>
       <div className="row">
-        <span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
-        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rep.readiness_score.score : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>}
+        <span>실행률 <strong>{rounded(rep.coverage.percentage)}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
+        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rounded(rep.readiness_score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>}
       </div>
       {/* Profile이 여러 원본에 걸치면 점수를 원본별로만 보여준다. 두 준비도를 합친 하나의
           숫자는 어느 기준에 대한 답도 아니며, 한쪽의 미달을 다른 쪽이 가린다. */}
       {segments.length > 0 && <div className="candidate-summary" aria-label="정책 원본별 준비도">
         {segments.map(s => <span key={s.kind}>
-          <strong>{s.score ? s.score.score : (complete ? "계산 불가" : "계산 대기")}</strong>
+          <strong>{s.score ? rounded(s.score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>
           <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · 평가 ${s.score.evaluated_evaluations}건` : ""}</small>
         </span>)}
       </div>}
