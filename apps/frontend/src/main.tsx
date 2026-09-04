@@ -562,6 +562,16 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       const doc = await api<NormalizedDoc>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/process`, session.accessToken, { method: "POST" });
       if (doc.status === "FAILED") { obs.patchPipeline("normalize", "failed"); throw new Error(`정규화 실패: ${doc.failure_code}`); }
       obs.patchPipeline("normalize", "done");
+      // 병합 셀·불규칙 행 같은 경고가 붙으면 파싱이 성공해도 `REVIEW_REQUIRED`에서 멈춘다 —
+      // locator가 근거로 쓸 만한지는 사람이 판단할 일이기 때문이다. 예전에는 이 화면이 그
+      // 상태를 모른 채 추출을 요청했고, 요청은 영원히 `SOURCE_NOT_READY`로 실패하면서 사용자에게는
+      // "2분 내에 완료되지 않았습니다"로만 보였다. ISMS-P 엑셀이 정확히 그 경로였다.
+      if (doc.status === "REVIEW_REQUIRED") {
+        obs.patchPipeline("extract", "failed");
+        setOpenDoc(s.source_id);
+        await refresh();
+        throw new Error(`추출 결과 확인이 필요합니다 (${doc.warnings.join(", ")}). 문서 목록에서 '검토 확인'을 누르면 ${doc.units.length}개 단위로 추출을 진행합니다.`);
+      }
       obs.patchPipeline("extract", "active"); obs.lightNode("authoring", "active");
       obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active" });
       await api(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
@@ -606,6 +616,20 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         ? "이 문서에는 아직 후보 추출 실행이 없습니다. '추출 요청'을 먼저 누르세요."
         : `후보 조회 실패: ${msg}`);
       setCandidates(c => { const next = { ...c }; delete next[d.source_id]; return next; });
+    }
+  }
+
+  async function confirmReview(d: Doc) {
+    // 경고가 붙어 멈춘 문서를 사람이 확인했다고 기록하고, 이어서 추출까지 건다. 두 번을 눌러야
+    // 하는 이유가 사용자에게는 없다 — 확인의 의미는 "이대로 진행해도 된다"이다.
+    setError(null); setNotice(null);
+    try {
+      const doc = await api<NormalizedDoc>(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/confirm-review`, session.accessToken, { method: "POST" });
+      setNotice(`검토를 확인했습니다: ${d.filename} (${doc.units.length}개 단위). 추출을 시작합니다.`);
+      await refresh();
+      await requestExtraction({ ...d, status: doc.status });
+    } catch (e) {
+      setError(`검토 확인 실패: ${(e as Error).message}`);
     }
   }
 
@@ -703,8 +727,15 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         <tbody>{docs.map(d => <tr key={`${d.source_id}:${d.source_version}`}>
           <td>{d.filename}</td><td>{d.status}</td><td>{d.source_format ?? "-"}</td><td>{d.unit_count}</td>
           <td style={{ display: "flex", gap: 6 }}>
-            <button className="ghost" onClick={() => void loadCandidates(d)}>후보 조회</button>
-            <button className="ghost" onClick={() => void requestExtraction(d)}>추출 요청</button>
+            {/* `REVIEW_REQUIRED`는 파싱 실패가 아니라 사람의 확인을 기다리는 상태다. 그 확인을
+                입력할 버튼이 없으면 문서는 영원히 그 자리에 멈춘다 — 실제로 ISMS-P 엑셀이 그랬다.
+                확인 전에는 추출을 걸 수 없으므로 그 버튼만 보여준다. */}
+            {d.status === "REVIEW_REQUIRED"
+              ? <button onClick={() => void confirmReview(d)}>검토 확인</button>
+              : <>
+                <button className="ghost" onClick={() => void loadCandidates(d)}>후보 조회</button>
+                <button className="ghost" onClick={() => void requestExtraction(d)}>추출 요청</button>
+              </>}
             <button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} onClick={() => void deleteDoc(d)}>삭제</button>
           </td>
         </tr>)}
