@@ -122,8 +122,13 @@ Rules:
 
 Conditions:
   # The Vite dev server origin is a development convenience; a deployed non-sandbox API must not
-  # accept a browser origin nobody operates.
-  LocalDevelopmentOriginAllowed: !Equals [!Ref Environment, "sandbox"]
+  # accept a browser origin nobody operates. It is also skipped when the SPA callback already *is*
+  # that origin — API Gateway rejects a duplicated allow-origin outright ("Duplicated values are
+  # not allowed in allow-origins"), and with no FRONTEND_CALLBACK_URL configured the callback
+  # falls back to exactly this URL. The condition, not the list, is what keeps the two distinct.
+  LocalDevelopmentOriginAllowed: !And
+    - !Equals [!Ref Environment, "sandbox"]
+    - !Not [!Equals [!Ref FrontendCallbackUrl, "http://localhost:5173"]]
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
   DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
   PolicyAuthoringEnabled: !Not [!Equals [!Ref PolicyAuthoringModelProfileJson, ""]]
@@ -948,8 +953,9 @@ Resources:
       # Browser calls come from the SPA origin, which is cross-origin to this API. Without CORS the
       # browser blocks every request at the preflight (OPTIONS) with no response. The allowed origin
       # is the SPA callback URL, which must therefore be a bare origin (scheme + host, no path) or
-      # no browser request will match it. The Vite dev origin is added only in sandbox. Credentials
-      # are not used because the SPA sends a Bearer token, not cookies.
+      # no browser request will match it. The Vite dev origin is added only in sandbox, and only
+      # when it differs from that callback. Credentials are not used because the SPA sends a
+      # Bearer token, not cookies.
       CorsConfiguration:
         AllowOrigins: !If
           - LocalDevelopmentOriginAllowed
