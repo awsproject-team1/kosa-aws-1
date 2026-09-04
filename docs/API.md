@@ -27,6 +27,7 @@
 | `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 |
 | `GET` | `/deployments/{deploymentId}/observability` | Admin 전용 데모 실행 관측·비용 조회 |
 | `GET` | `/audit-events` | Admin 전용 감사 이력 조회 |
+| `POST` | `/orchestrate` | 자연어 메시지를 PolicyQA 답변 또는 워크플로 제안으로 라우팅 (ADR-0012). Parent는 제안·답변만 하고 Job을 만들지 않는다 |
 
 **"배선됨"은 handler branch와 API Gateway route가 **둘 다** 있다는 뜻이다.** API Gateway는 명시적
 allow-list이므로 route가 선언되지 않은 경로는 handler에 닿기 전에 404다. handler에 branch만 있고
@@ -34,6 +35,21 @@ route가 없는 상태는 문서상 배선이 아니며, 그 불일치는
 `tests/security/test_cloudformation_security.py`의 회귀가 handler의 분기 조건을 직접 읽어 막는다
 (사람이 유지하는 route 목록은 branch가 늘어날 때 조용히 낡는다 — 실제로 세 endpoint가 그렇게
 route 없이 남아 있었다).
+
+## Natural-language orchestration endpoint
+
+`POST /orchestrate`는 인증된 모든 사용자가 호출할 수 있다(`Action.ORCHESTRATE`, ADR-0012). LangGraph
+Parent Orchestrator가 메시지를 분류해 다음 중 하나를 돌려준다. **Parent는 워크플로를 시작하지
+않는다** — Job 생성·scope 검증·승인은 각 endpoint가 JWT로 다시 검증한다.
+
+- 요청: `{"message": "<자연어>"}`
+- 응답 `200`: `{intent, rationale, answer?, selector?, requires_confirmation}`
+  - `intent` ∈ `POLICY_QA` | `ASSESSMENT` | `REMEDIATION` | `DEPLOYMENT` | `UNSUPPORTED`
+  - `POLICY_QA`면 `answer`에 직접 답변, 워크플로 intent면 `selector`에 후보
+    (`repository_id`, `policy_profile_id`, `finding_id`, `remediation_id` 중 해당 값)와
+    `requires_confirmation`이 온다. Client는 사용자 확인 뒤 해당 endpoint를 직접 호출한다.
+- 배선됨: handler branch + API Gateway route(`PostOrchestrateRoute`) + SPA 챗봇 UI.
+  라이브 반영은 `Deploy M0 Foundation` 재배포 시점을 따른다.
 
 ## Customer policy ingestion endpoints
 
