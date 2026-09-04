@@ -18,6 +18,7 @@ from apps.backend.policy.authoring.bedrock_extractor import (
     MAX_REQUIREMENTS_PER_CHUNK,
     _catalog_prompt_view,
     _chunks,
+    _redacted,
 )
 from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
 from packages.contracts import ModelProfile, ModelProfileRole
@@ -193,22 +194,38 @@ class ResponseGateTest(unittest.TestCase):
         self.assertEqual(len(requirements), 1)
 
     def test_a_control_key_outside_the_catalog_is_skipped_not_fatal(self) -> None:
-        bad = {**VALID_REQUIREMENT, "mapped_control_key": "NOT_A_CONTROL", "source_locators": [DATABASE_LOCATOR]}
+        bad = {
+            **VALID_REQUIREMENT,
+            "mapped_control_key": "NOT_A_CONTROL",
+            "source_locators": [DATABASE_LOCATOR],
+        }
         requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
         self.assertEqual(len(requirements), 1)
 
     def test_evidence_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
-        bad = {**VALID_REQUIREMENT, "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"], "source_locators": [DATABASE_LOCATOR]}
+        bad = {
+            **VALID_REQUIREMENT,
+            "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"],
+            "source_locators": [DATABASE_LOCATOR],
+        }
         requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
         self.assertEqual(len(requirements), 1)
 
     def test_a_resource_type_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
-        bad = {**VALID_REQUIREMENT, "resource_types": ["AWS::RDS::DBInstance"], "source_locators": [DATABASE_LOCATOR]}
+        bad = {
+            **VALID_REQUIREMENT,
+            "resource_types": ["AWS::RDS::DBInstance"],
+            "source_locators": [DATABASE_LOCATOR],
+        }
         requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
         self.assertEqual(len(requirements), 1)
 
     def test_an_overlong_field_is_skipped_not_fatal(self) -> None:
-        bad = {**VALID_REQUIREMENT, "requirement": "x" * 5000, "source_locators": [DATABASE_LOCATOR]}
+        bad = {
+            **VALID_REQUIREMENT,
+            "requirement": "x" * 5000,
+            "source_locators": [DATABASE_LOCATOR],
+        }
         requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
         self.assertEqual(len(requirements), 1)
 
@@ -222,7 +239,11 @@ class ResponseGateTest(unittest.TestCase):
 
     def test_a_shape_the_classification_invariants_reject_is_refused(self) -> None:
         """분류가 말하는 것과 채워진 필드가 어긋나는 후보만 건너뛰고, 정상 후보는 남는다."""
-        bad = {**VALID_REQUIREMENT, "classification": "UNSUPPORTED", "source_locators": [DATABASE_LOCATOR]}
+        bad = {
+            **VALID_REQUIREMENT,
+            "classification": "UNSUPPORTED",
+            "source_locators": [DATABASE_LOCATOR],
+        }
         requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
         self.assertEqual(len(requirements), 1)
 
@@ -290,6 +311,35 @@ class ChunkingTest(unittest.TestCase):
         reverse, _client = _extract({"requirements": [second, VALID_REQUIREMENT]})
 
         self.assertEqual([entry.digest for entry in forward], [entry.digest for entry in reverse])
+
+
+class RejectionLoggingTest(unittest.TestCase):
+    """A skipped candidate is only visible in a log line, so that line must stay safe to keep.
+
+    The rejection reason is what makes fail-soft debuggable. Contract invariant messages are rule
+    text today, but a few embed the offending value with `!r`, and a locator carries a slug of the
+    customer's own headings. The reason is logged through a redaction that keeps rule text and
+    drops quoted values, so a future Contract message cannot turn this line into a leak.
+    """
+
+    def test_the_rejection_reason_is_logged_without_the_policy_sentence(self) -> None:
+        bad = {**VALID_REQUIREMENT, "classification": "UNSUPPORTED"}
+        with self.assertLogs("governance.authoring", level="WARNING") as logs:
+            requirements, _client = _extract({"requirements": [bad, VALID_REQUIREMENT]})
+        self.assertEqual(len(requirements), 1)
+        rejection = next(line for line in logs.output if "requirement rejected" in line)
+        self.assertIn("must not carry rule semantics", rejection)
+        self.assertNotIn(VALID_REQUIREMENT["requirement"], rejection)
+
+    def test_redaction_keeps_the_rule_text_and_drops_the_value(self) -> None:
+        self.assertEqual(
+            _redacted("source_locators must not repeat 'heading/tenant-secret/item/3'"),
+            "source_locators must not repeat '<redacted>'",
+        )
+        self.assertEqual(
+            _redacted("an AUTOMATABLE requirement must map to a control"),
+            "an AUTOMATABLE requirement must map to a control",
+        )
 
 
 if __name__ == "__main__":

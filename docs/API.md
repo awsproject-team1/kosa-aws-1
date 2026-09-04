@@ -50,7 +50,7 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 | `GET` | `/policy-sources` | 배선됨 | 호출자 customer의 업로드 문서 목록(요약: `source_id, source_version, filename, status, source_format, byte_size, unit_count`). 원문·units·정규화 text는 반환하지 않는다 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
-| `DELETE` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 미승인 문서 삭제(DynamoDB record + S3 원본·정규화 아티팩트). 승인 record가 있는 Source는 `409`로 거부 — Profile이 참조하는 evidence를 지우지 않는다 |
+| `DELETE` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 미승인 문서 삭제(DynamoDB record를 먼저 지우고 S3 원본·정규화 아티팩트를 지운다). 승인 record가 있는 Source는 `409`로 거부 — Profile이 참조하는 evidence를 지우지 않는다. 호출자 partition에 그 판본이 없으면 `404` |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 후보 추출 요청. `202`와 `{authoring_run_id, status}` |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 실행 상태와 후보/미지원/거절 결과 페이지 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 배선됨 | 검토된 Source/Control/Rule version 승인 |
@@ -65,9 +65,9 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 | Method | Path | 상태 | 설명 |
 | --- | --- | --- | --- |
 | `GET` | `/scope` | 배선됨 | 호출자 customer의 assessment scope에 연결된 대상 목록(`{customer_id, repositories:[{repository_id, github_repository?, aws_account_id?}]}`). 배포 구성(`ASSESSMENT_SCOPE_JSON`)에서 읽으며, 비밀 아닌 연결 정보(GitHub repo full name·AWS 계정 ID)만 노출하고 secret 참조(role ARN·secret id)는 반환하지 않는다. 다른 customer의 scope는 반환하지 않는다 |
-| `POST` | `/admin/users` | 배선됨 | Admin이 customer scope의 사용자 생성(`{email, role, temporary_password}` → `201 {email, role, customer_id}`). role은 `Admin`/`User`, 새 사용자는 호출자의 `custom:customer_id`로 고정 |
+| `POST` | `/admin/users` | 배선됨 | Admin이 customer scope의 사용자 생성(`{email, role, temporary_password}` → `201 {email, role, customer_id}`). role은 `Admin`/`User`, 새 사용자는 호출자의 `custom:customer_id`로 고정. `temporary_password`는 영구 비밀번호로 설정된다(콘솔에 첫 로그인 변경 flow가 없다). pool 전역에서 이미 쓰이는 email이면 `400` |
 | `GET` | `/admin/users` | 배선됨 | Admin이 자기 customer의 사용자 목록 조회(`{users:[{username, email, customer_id, profile, status, enabled}]}`). 비밀번호는 반환하지 않는다 |
-| `POST` | `/admin/users/profile` | 배선됨 | Admin이 사용자에게 기본 Policy Profile 지정(`{email, policy_profile_id}`). Cognito 표준 `profile` 속성에 저장되어 사용자가 로그인 시 자기 token에서 읽는다 |
+| `POST` | `/admin/users/profile` | 배선됨 | Admin이 사용자에게 기본 Policy Profile 지정(`{email, policy_profile_id}`). Cognito 표준 `profile` 속성에 저장되어 사용자가 로그인 시 자기 token에서 읽는다. 대상 사용자가 호출자 customer 소속이 아니거나 존재하지 않으면 동일하게 `403` — 존재 여부를 customer 경계 너머로 알리지 않는다 |
 
 ### 후보 조회 응답
 

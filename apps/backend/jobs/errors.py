@@ -12,6 +12,7 @@ from apps.backend.repositories.ports import (
     RepositoryError,
     RevisionConflictError,
 )
+from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
 from packages.contracts import ApiError
 
 
@@ -53,12 +54,18 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(401, "UNAUTHORIZED", "Authentication is required")
     if isinstance(error, (AuthorizationDenied, AssessmentScopeDenied)):
         return _failure(403, "SCOPE_DENIED", "The requested resource is outside the approved scope")
-    if isinstance(error, JobNotFoundError):
+    if isinstance(error, (JobNotFoundError, PolicySourceNotFound)):
         return _failure(404, "NOT_FOUND", "The requested resource was not found")
     if isinstance(error, RequestValidationError):
         return _failure(400, "VALIDATION_ERROR", "The request is invalid")
     if isinstance(
-        error, (DeploymentApprovalError, DeploymentConflictError, RemediationNotAutomatableError)
+        error,
+        (
+            DeploymentApprovalError,
+            DeploymentConflictError,
+            PolicySourceDeleteForbidden,
+            RemediationNotAutomatableError,
+        ),
     ):
         return _failure(409, "CONFLICT", "The request conflicts with current state")
     if isinstance(
@@ -74,8 +81,6 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(409, "CONFLICT", "The request conflicts with current state")
     if isinstance(error, (RepositoryError, WorkflowDispatchError)):
         return _failure(503, "EXECUTION_ERROR", "The service is temporarily unavailable")
-    if type(error).__name__ == "PolicySourceDeleteForbidden":
-        return _failure(409, "CONFLICT", "The request conflicts with current state")
     return _failure(500, "EXECUTION_ERROR", "An internal error occurred")
 
 

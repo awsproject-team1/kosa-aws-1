@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -84,49 +85,49 @@ _SYSTEM_PROMPT = (
     "catalog. You propose rules; you never evaluate anything.\n"
     "\n"
     "Return ONE JSON object only, no prose and no code fence, with exactly one key "
-    "\"requirements\" whose value is a list of requirement objects. Each requirement object MUST "
+    '"requirements" whose value is a list of requirement objects. Each requirement object MUST '
     "have these fields:\n"
-    "- \"source_locators\": array of one or more locator strings, each copied verbatim from the "
+    '- "source_locators": array of one or more locator strings, each copied verbatim from the '
     "supplied policy_units in THIS request (never invent a locator and never cite a locator that "
     "is not in the policy_units list you were given).\n"
-    "- \"requirement\": the full requirement text, in the policy's own words.\n"
-    "- \"requirement_summary\": one concise sentence restating the requirement.\n"
-    "- \"mapping_reason\": one sentence explaining the classification and any control mapping.\n"
-    "- \"classification\": exactly one of \"AUTOMATABLE\", \"MANUAL\", or \"UNSUPPORTED\".\n"
+    '- "requirement": the full requirement text, in the policy\'s own words.\n'
+    '- "requirement_summary": one concise sentence restating the requirement.\n'
+    '- "mapping_reason": one sentence explaining the classification and any control mapping.\n'
+    '- "classification": exactly one of "AUTOMATABLE", "MANUAL", or "UNSUPPORTED".\n'
     "\n"
-    "Keep \"requirement\" under 200 characters and \"requirement_summary\" and \"mapping_reason\" "
+    'Keep "requirement" under 200 characters and "requirement_summary" and "mapping_reason" '
     "under 120 characters each. Be concise so the JSON stays small.\n"
     "\n"
     "Classification rules — follow exactly, or the requirement is rejected:\n"
-    "- \"AUTOMATABLE\": the requirement maps to a control whose automation_support is AVAILABLE. "
-    "You MUST set \"mapped_control_key\" to that control_key AND set \"evaluation_type\" to one of "
-    "\"IAC\", \"AWS\", or \"HYBRID\". Set \"resource_types\" using only the control's "
+    '- "AUTOMATABLE": the requirement maps to a control whose automation_support is AVAILABLE. '
+    'You MUST set "mapped_control_key" to that control_key AND set "evaluation_type" to one of '
+    '"IAC", "AWS", or "HYBRID". Set "resource_types" using only the control\'s '
     "supported_resource_types.\n"
-    "- \"MANUAL\": the requirement needs human review. You MUST set \"mapped_control_key\" to the "
-    "catalog control whose automation_support is MANUAL, and set \"evaluation_type\" to \"MANUAL\".\n"
-    "- \"UNSUPPORTED\": no catalog control applies. Omit \"mapped_control_key\" and "
-    "\"evaluation_type\".\n"
+    '- "MANUAL": the requirement needs human review. You MUST set "mapped_control_key" to the '
+    'catalog control whose automation_support is MANUAL, and set "evaluation_type" to "MANUAL".\n'
+    '- "UNSUPPORTED": no catalog control applies. Omit "mapped_control_key" and '
+    '"evaluation_type".\n'
     "Use only values the mapped control declares; never invent a control_key, resource_type, or "
     "evidence key. Never output judgment, severity, score, source_score, or anchor.\n"
     "\n"
     "Examples:\n"
-    "AUTOMATABLE: {\"source_locators\":[\"heading/access-control/item/3\"],"
-    "\"requirement\":\"S3 buckets must block all public access.\","
-    "\"requirement_summary\":\"S3 buckets block public access.\","
-    "\"mapping_reason\":\"Maps to the S3 public access block control.\","
-    "\"classification\":\"AUTOMATABLE\",\"mapped_control_key\":\"S3_BLOCK_PUBLIC_ACCESS\","
-    "\"evaluation_type\":\"AWS\",\"resource_types\":[\"AWS::S3::Bucket\"]}\n"
-    "MANUAL: {\"source_locators\":[\"heading/policy/item/1\"],"
-    "\"requirement\":\"A security officer must approve external AI service adoption.\","
-    "\"requirement_summary\":\"Officer approves external AI adoption.\","
-    "\"mapping_reason\":\"An organizational control requiring human review.\","
-    "\"classification\":\"MANUAL\",\"mapped_control_key\":\"ORGANIZATIONAL_CONTROL_MANUAL_REVIEW\","
-    "\"evaluation_type\":\"MANUAL\"}\n"
-    "UNSUPPORTED: {\"source_locators\":[\"heading/misc/item/9\"],"
-    "\"requirement\":\"Vendor contracts must be retained for five years.\","
-    "\"requirement_summary\":\"Retain vendor contracts five years.\","
-    "\"mapping_reason\":\"No cloud-resource control evaluates contract retention.\","
-    "\"classification\":\"UNSUPPORTED\"}"
+    'AUTOMATABLE: {"source_locators":["heading/access-control/item/3"],'
+    '"requirement":"S3 buckets must block all public access.",'
+    '"requirement_summary":"S3 buckets block public access.",'
+    '"mapping_reason":"Maps to the S3 public access block control.",'
+    '"classification":"AUTOMATABLE","mapped_control_key":"S3_BLOCK_PUBLIC_ACCESS",'
+    '"evaluation_type":"AWS","resource_types":["AWS::S3::Bucket"]}\n'
+    'MANUAL: {"source_locators":["heading/policy/item/1"],'
+    '"requirement":"A security officer must approve external AI service adoption.",'
+    '"requirement_summary":"Officer approves external AI adoption.",'
+    '"mapping_reason":"An organizational control requiring human review.",'
+    '"classification":"MANUAL","mapped_control_key":"ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",'
+    '"evaluation_type":"MANUAL"}\n'
+    'UNSUPPORTED: {"source_locators":["heading/misc/item/9"],'
+    '"requirement":"Vendor contracts must be retained for five years.",'
+    '"requirement_summary":"Retain vendor contracts five years.",'
+    '"mapping_reason":"No cloud-resource control evaluates contract retention.",'
+    '"classification":"UNSUPPORTED"}'
 )
 
 
@@ -371,6 +372,17 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     return value
 
 
+#: 따옴표로 감싼 구간. Contract의 불변식 메시지는 대부분 규칙 문구지만, 일부는 위반한 값을
+#: `!r`로 끼워 넣는다(예: 중복 locator). locator는 고객 문서의 heading에서 파생되므로 정책 문구
+#: 조각이 로그로 새어 나갈 수 있다. 규칙 문구만 남기고 값은 지운다.
+_QUOTED_SPAN = re.compile("'[^']*'|\"[^\"]*\"", re.DOTALL)
+
+
+def _redacted(message: str) -> str:
+    """Drop quoted spans from a validation message so only its rule text is logged."""
+    return _QUOTED_SPAN.sub("'<redacted>'", message)
+
+
 def _strip_json_code_fence(text: str) -> str:
     """Remove a Markdown code fence that fully wraps the JSON, if present.
 
@@ -468,10 +480,11 @@ def _requirement_from_response(
         raise
     except (TypeError, ValueError) as error:
         # Contract의 분류 불변식을 만족하지 못하는 응답도 여기서 거부한다. 메시지에 정책 문장을
-        # 넣지 않기 위해 원인 텍스트는 그대로 전달하지 않는다. 다만 불변식 위반의 사유(필드명·규칙
-        # 문구, 정책 원문 아님)는 진단을 위해 로그에 남긴다.
+        # 넣지 않기 위해 원인 텍스트는 그대로 전달하지 않는다. 불변식 위반의 사유(필드명·규칙
+        # 문구)는 진단을 위해 로그에 남기되, 값을 끼워 넣는 메시지가 섞여 있으므로 인용 구간은
+        # 지우고 남긴다.
         logging.getLogger("governance.authoring").warning(
-            "requirement rejected: %s: %s", type(error).__name__, error
+            "requirement rejected: %s: %s", type(error).__name__, _redacted(str(error))
         )
         raise BedrockExtractionError("the model returned an invalid requirement shape") from error
 

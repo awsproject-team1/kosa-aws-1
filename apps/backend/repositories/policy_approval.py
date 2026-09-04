@@ -1,5 +1,6 @@
 """승인된 정책 Source·게시 Profile·후보 추출의 원자적 DynamoDB write와 승인 read 어댑터."""
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Protocol
@@ -27,6 +28,8 @@ from packages.contracts import (
     RuleCandidate,
     RuleLifecycle,
 )
+
+_LOGGER = logging.getLogger("governance.approval")
 
 #: 한 authoring 실행이 만들 수 있는 결과 item 수의 상한. 상한이 없으면 문서 하나가 고객
 #: partition을 채우고, 그 상태에서 write가 실패하면 어디까지 저장됐는지 말할 수 없다.
@@ -764,16 +767,18 @@ class DynamoDbPolicyApprovalRepository:
                 "ConditionalCheckFailedException",
                 "TransactionCanceledException",
             }:
-                import logging
-                reasons = getattr(error, "response", {}).get("CancellationReasons") if isinstance(getattr(error, "response", None), dict) else None
-                logging.getLogger("governance.approval").warning(
-                    "%s stale/conditional: code=%s reasons=%s", label, _error_code(error),
-                    [r.get("Code") for r in reasons] if isinstance(reasons, list) else None,
+                _LOGGER.warning(
+                    "%s stale/conditional: code=%s reasons=%s",
+                    label,
+                    _error_code(error),
+                    _cancellation_codes(error),
                 )
                 raise RepositoryError(f"{label} already exists or binding is stale") from None
-            import logging
-            logging.getLogger("governance.approval").error(
-                "%s: transaction failed code=%s type=%s", label, _error_code(error), type(error).__name__
+            _LOGGER.error(
+                "%s: transaction failed code=%s type=%s",
+                label,
+                _error_code(error),
+                type(error).__name__,
             )
             raise RepositoryError(f"{label} write failed") from None
 
@@ -1047,3 +1052,16 @@ def _error_code(error: BaseException) -> str | None:
     details = response.get("Error") if isinstance(response, dict) else None
     code = details.get("Code") if isinstance(details, dict) else None
     return code if isinstance(code, str) else None
+
+
+def _cancellation_codes(error: BaseException) -> list[str | None] | None:
+    """Per-item reason codes for a cancelled transaction, or None when absent.
+
+    A cancelled transaction names which item's condition failed; without it a stale-binding
+    report says only that *something* was stale. Codes only — the reasons carry item data.
+    """
+    response = getattr(error, "response", None)
+    reasons = response.get("CancellationReasons") if isinstance(response, dict) else None
+    if not isinstance(reasons, list):
+        return None
+    return [reason.get("Code") if isinstance(reason, dict) else None for reason in reasons]

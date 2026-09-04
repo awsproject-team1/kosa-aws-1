@@ -11,6 +11,7 @@ from apps.backend.policy.ingestion.storage_keys import (
     normalized_object_key,
     original_object_key,
 )
+from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
 from packages.contracts import (
     DocumentUnitKind,
     ExtractionWarningCode,
@@ -33,10 +34,6 @@ class DynamoTable(Protocol):
     def query(self, **kwargs: object) -> Mapping[str, object]: ...
 
     def delete_item(self, **kwargs: object) -> object: ...
-
-
-class PolicySourceDeleteForbidden(ValueError):
-    """Raised when deleting a policy source is not allowed (e.g. it is approved)."""
 
 
 class S3Presigner(Protocol):
@@ -287,15 +284,19 @@ class DynamoDbPolicySourceUploadRepository:
             for item in page.get("Items", []):
                 size = item.get("byte_size")
                 units = item.get("units")
-                items.append({
-                    "source_id": item.get("source_id"),
-                    "source_version": item.get("source_version"),
-                    "filename": item.get("filename"),
-                    "status": item.get("status"),
-                    "source_format": item.get("source_format"),
-                    "byte_size": int(size) if isinstance(size, (int, Decimal)) and not isinstance(size, bool) else None,
-                    "unit_count": len(units) if isinstance(units, list) else 0,
-                })
+                items.append(
+                    {
+                        "source_id": item.get("source_id"),
+                        "source_version": item.get("source_version"),
+                        "filename": item.get("filename"),
+                        "status": item.get("status"),
+                        "source_format": item.get("source_format"),
+                        "byte_size": int(size)
+                        if isinstance(size, (int, Decimal)) and not isinstance(size, bool)
+                        else None,
+                        "unit_count": len(units) if isinstance(units, list) else 0,
+                    }
+                )
             token = page.get("LastEvaluatedKey")
             if not token:
                 break
@@ -303,11 +304,17 @@ class DynamoDbPolicySourceUploadRepository:
         return tuple(items)
 
     def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None:
-        """Delete one unapproved policy source: S3 original + normalized + the DynamoDB record.
+        """Delete one unapproved policy source: the DynamoDB record, then its S3 artifacts.
 
         Refuses if the source has an approval record — an approved source may back a published
         Profile's Rules, and deleting it would break evidence traceability. Tenant-scoped: the
-        keys are built from the caller's own customer_id.
+        keys are built from the caller's own customer_id, and the record delete additionally
+        asserts the stored `customer_id` so a key collision cannot cross the partition.
+
+        The record goes first. A delete is only observable once that write lands, so if the S3
+        cleanup then fails the leftovers are unreferenced objects (invisible to every read path,
+        collectable by a lifecycle rule) rather than a live record pointing at bytes that are
+        already gone. Ordering it the other way turns one failure into a broken document.
         """
         pk = f"CUSTOMER#{customer_id}"
         approval_sk = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#APPROVAL"
@@ -316,24 +323,29 @@ class DynamoDbPolicySourceUploadRepository:
         except Exception as error:
             raise RuntimeError("policy source delete precheck failed") from error
         if approved is not None:
-            raise PolicySourceDeleteForbidden(
-                "an approved policy source cannot be deleted"
+            raise PolicySourceDeleteForbidden("an approved policy source cannot be deleted")
+        try:
+            self._table.delete_item(
+                Key={"PK": pk, "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}"},
+                ConditionExpression="attribute_exists(SK) AND customer_id = :customer",
+                ExpressionAttributeValues={":customer": customer_id},
             )
-        # S3 아티팩트를 먼저 지운다. 없는 객체 삭제는 S3에서 성공으로 취급되므로 UPLOAD_PENDING
-        # (원본 미업로드) 문서도 안전하게 지운다.
+        except Exception as error:
+            # 조건 실패는 "이 고객 파티션에 그 문서가 없다"는 뜻이다. 서버 오류(500)가 아니라
+            # 404로 보여야 콘솔이 이미 지워진 항목을 정상 처리한다.
+            if _is_conditional_check_failure(error):
+                raise PolicySourceNotFound("policy source version not found") from None
+            raise RuntimeError("policy source record delete failed") from error
+        # 없는 객체 삭제는 S3에서 성공으로 취급되므로 UPLOAD_PENDING(원본 미업로드) 문서도
+        # 안전하게 지운다.
         for key_fn in (original_object_key, normalized_object_key):
-            key = key_fn(customer_id=customer_id, source_id=source_id, source_version=source_version)
+            key = key_fn(
+                customer_id=customer_id, source_id=source_id, source_version=source_version
+            )
             try:
                 self._presigner.delete_object(Bucket=self._bucket, Key=key)  # type: ignore[union-attr]
             except Exception as error:
                 raise RuntimeError("policy artifact delete failed") from error
-        try:
-            self._table.delete_item(
-                Key={"PK": pk, "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}"},
-                ConditionExpression="attribute_exists(SK)",
-            )
-        except Exception as error:
-            raise RuntimeError("policy source record delete failed") from error
 
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str
@@ -351,6 +363,19 @@ class DynamoDbPolicySourceUploadRepository:
         if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
             raise LookupError("policy source version not found")
         return item
+
+
+def _is_conditional_check_failure(error: BaseException) -> bool:
+    """True when a DynamoDB write was refused by its ConditionExpression.
+
+    The botocore error shape is read defensively so a fake/mocked client that raises a plain
+    exception simply reads as "not a conditional failure" instead of masking the real fault.
+    """
+    response = getattr(error, "response", None)
+    if not isinstance(response, Mapping):
+        return False
+    detail = response.get("Error")
+    return isinstance(detail, Mapping) and detail.get("Code") == "ConditionalCheckFailedException"
 
 
 def document_from_item(item: Mapping[str, object]) -> NormalizedPolicyDocument:

@@ -154,8 +154,13 @@ class JobHttpHandler:
                 if self._users is None:
                     raise JobNotFoundError("user management route not found")
                 try:
-                    body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
+                    body = _mapping(
+                        json.loads(
+                            event.get("body") if isinstance(event.get("body"), str) else "{}"
+                        )
+                    )
                     from apps.backend.api.users import CreateUserRequest
+
                     req = CreateUserRequest(
                         email=_non_empty_string(body.get("email"), "email"),
                         role=_non_empty_string(body.get("role"), "role"),
@@ -170,12 +175,18 @@ class JobHttpHandler:
                 if self._users is None:
                     raise JobNotFoundError("user management route not found")
                 try:
-                    body = _mapping(json.loads(event.get("body") if isinstance(event.get("body"), str) else "{}"))
+                    body = _mapping(
+                        json.loads(
+                            event.get("body") if isinstance(event.get("body"), str) else "{}"
+                        )
+                    )
                     email = _non_empty_string(body.get("email"), "email")
                     pid = _non_empty_string(body.get("policy_profile_id"), "policy_profile_id")
                 except (TypeError, ValueError, json.JSONDecodeError) as error:
                     raise RequestValidationError("profile assign body is invalid") from error
-                return _response(200, self._users.assign_profile(principal, email=email, policy_profile_id=pid))
+                return _response(
+                    200, self._users.assign_profile(principal, email=email, policy_profile_id=pid)
+                )
             policy_path = _policy_source_path(path)
             if policy_path is not None and self._policy_sources is not None:
                 source_id, source_version, action = policy_path
@@ -190,7 +201,10 @@ class JobHttpHandler:
                     self._policy_sources.delete_source(
                         principal, source_id=source_id, source_version=source_version
                     )
-                    return _response(200, {"deleted": True, "source_id": source_id, "source_version": source_version})
+                    return _response(
+                        200,
+                        {"deleted": True, "source_id": source_id, "source_version": source_version},
+                    )
                 if method == "POST" and action == "process":
                     if self._policy_reader is None:
                         raise JobNotFoundError("policy process route not found")

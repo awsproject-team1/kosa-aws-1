@@ -629,7 +629,11 @@ def _repository_ids(value: object) -> frozenset[str]:
         raise ValueError
     repositories: set[str] = set()
     for entry in value:
-        if not isinstance(entry, Mapping) or not set(entry) <= allowed or "repository_id" not in entry:
+        if (
+            not isinstance(entry, Mapping)
+            or not set(entry) <= allowed
+            or "repository_id" not in entry
+        ):
             raise ValueError
         repositories.add(_required_string(entry.get("repository_id"), "repository_id"))
     return frozenset(repositories)

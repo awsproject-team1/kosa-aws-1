@@ -1,13 +1,19 @@
 """Tenant-scope tests for A's Policy Source upload-session adapter."""
 
 import unittest
+from decimal import Decimal
 from io import BytesIO
 
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.auth import AuthorizationDenied, Principal, Role
+from apps.backend.jobs.errors import sanitize_public_failure
 from apps.backend.policy.ingestion import normalize_upload
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
+from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
 from packages.contracts import PolicySourceUploadRequest
+
+#: 목록 요약이 정책 원문을 실어 나르지 않는다는 것을 확인하기 위한 표식 문자열.
+POLICY_TEXT = "정책 원문 한 줄"
 
 
 class Table:
@@ -143,7 +149,6 @@ class PolicySourceUploadRepositoryTest(unittest.TestCase):
         # The DynamoDB resource API deserializes Number attributes to Decimal, so the stored
         # byte_size is a Decimal at finalize time, not an int. finalize_upload must accept it;
         # otherwise every real upload fails metadata validation with a 500 (regression).
-        from decimal import Decimal
 
         table, s3 = Table(), S3()
         repository = DynamoDbPolicySourceUploadRepository(
@@ -234,3 +239,215 @@ class PolicySourceUploadRepositoryTest(unittest.TestCase):
                     filename="policy.md", declared_media_type="text/markdown", byte_size=1
                 ),
             )
+
+
+class DeleteTable:
+    """A table fake that enforces the delete's ConditionExpression.
+
+    The condition is the whole tenant guard on this path, so a fake that ignored it would let the
+    delete tests pass against a repository that had dropped it.
+    """
+
+    def __init__(self, items: dict[tuple[str, str], dict] | None = None) -> None:
+        self.items = dict(items or {})
+        self.deleted: list[tuple[str, str]] = []
+        self.queries: list[dict] = []
+        self.pages: list[dict] | None = None
+
+    def put_item(self, **kwargs):
+        raise AssertionError("not used")
+
+    def update_item(self, **kwargs):
+        raise AssertionError("not used")
+
+    def get_item(self, **kwargs):
+        key = (kwargs["Key"]["PK"], kwargs["Key"]["SK"])
+        item = self.items.get(key)
+        return {"Item": item} if item is not None else {}
+
+    def query(self, **kwargs):
+        self.queries.append(kwargs)
+        if self.pages is not None:
+            index = 0 if "ExclusiveStartKey" not in kwargs else int(kwargs["ExclusiveStartKey"])
+            return self.pages[index]
+        values = kwargs["ExpressionAttributeValues"]
+        return {
+            "Items": [
+                item
+                for (pk, sk), item in self.items.items()
+                if pk == values[":pk"] and sk.startswith(values[":sk"])
+            ]
+        }
+
+    def delete_item(self, **kwargs):
+        key = (kwargs["Key"]["PK"], kwargs["Key"]["SK"])
+        item = self.items.get(key)
+        expected = kwargs["ExpressionAttributeValues"][":customer"]
+        if item is None or item.get("customer_id") != expected:
+            raise ConditionalCheckFailed()
+        del self.items[key]
+        self.deleted.append(key)
+
+
+class ConditionalCheckFailed(Exception):
+    """The botocore shape a refused ConditionExpression arrives in."""
+
+    def __init__(self) -> None:
+        super().__init__("ConditionalCheckFailedException")
+        self.response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+
+
+class DeletingS3(S3):
+    def __init__(self, fail: bool = False) -> None:
+        super().__init__()
+        self.deleted: list[str] = []
+        self.fail = fail
+
+    def delete_object(self, *, Bucket, Key):
+        if self.fail:
+            raise RuntimeError("s3 unavailable")
+        self.deleted.append(Key)
+
+
+def _ingestion_item(customer_id: str, source_id: str = "source-1", version: str = "v1") -> dict:
+    return {
+        "PK": f"CUSTOMER#{customer_id}",
+        "SK": f"POLICY_INGESTION#{source_id}#VERSION#{version}",
+        "entity_type": "POLICY_INGESTION",
+        "customer_id": customer_id,
+        "source_id": source_id,
+        "source_version": version,
+        "filename": "policy.md",
+        "declared_media_type": "text/markdown",
+        "byte_size": Decimal(38),
+        "status": "NORMALIZED",
+        "source_format": "MARKDOWN",
+        "artifact_id": "policy-original-source-1-v1",
+        "units": [{"locator": "line/1", "text": POLICY_TEXT, "kind": "PARAGRAPH"}],
+    }
+
+
+class PolicySourceListTest(unittest.TestCase):
+    def test_the_query_is_pinned_to_the_callers_partition(self) -> None:
+        table = DeleteTable(
+            {
+                ("CUSTOMER#cust-a", "POLICY_INGESTION#source-1#VERSION#v1"): _ingestion_item(
+                    "cust-a"
+                ),
+                ("CUSTOMER#cust-b", "POLICY_INGESTION#source-9#VERSION#v1"): _ingestion_item(
+                    "cust-b", "source-9"
+                ),
+            }
+        )
+        repository = DynamoDbPolicySourceUploadRepository(
+            table=table, bucket="artifacts", presigner=DeletingS3()
+        )
+        sources = repository.list_sources(customer_id="cust-a")
+        self.assertEqual([s["source_id"] for s in sources], ["source-1"])
+        self.assertEqual(table.queries[0]["ExpressionAttributeValues"][":pk"], "CUSTOMER#cust-a")
+
+    def test_the_summary_never_carries_policy_text(self) -> None:
+        """A list view is a directory, not a reader: unit text must not leave the partition."""
+        table = DeleteTable(
+            {("CUSTOMER#cust-a", "POLICY_INGESTION#source-1#VERSION#v1"): _ingestion_item("cust-a")}
+        )
+        repository = DynamoDbPolicySourceUploadRepository(
+            table=table, bucket="artifacts", presigner=DeletingS3()
+        )
+        (source,) = repository.list_sources(customer_id="cust-a")
+        self.assertNotIn(POLICY_TEXT, str(source))
+        self.assertEqual(source["unit_count"], 1)
+        self.assertEqual(source["byte_size"], 38)
+        self.assertIsInstance(source["byte_size"], int)
+
+    def test_pagination_is_followed_to_the_last_page(self) -> None:
+        table = DeleteTable()
+        table.pages = [
+            {"Items": [_ingestion_item("cust-a")], "LastEvaluatedKey": "1"},
+            {"Items": [_ingestion_item("cust-a", "source-2")]},
+        ]
+        repository = DynamoDbPolicySourceUploadRepository(
+            table=table, bucket="artifacts", presigner=DeletingS3()
+        )
+        sources = repository.list_sources(customer_id="cust-a")
+        self.assertEqual([s["source_id"] for s in sources], ["source-1", "source-2"])
+
+
+class PolicySourceDeleteTest(unittest.TestCase):
+    def _repository(self, table, s3):
+        return DynamoDbPolicySourceUploadRepository(table=table, bucket="artifacts", presigner=s3)
+
+    @staticmethod
+    def _one_source(owner: str = "cust-a") -> DeleteTable:
+        return DeleteTable(
+            {("CUSTOMER#cust-a", "POLICY_INGESTION#source-1#VERSION#v1"): _ingestion_item(owner)}
+        )
+
+    def test_the_record_goes_before_the_artifacts(self) -> None:
+        """Ordering is the recoverability call: orphaned bytes beat a record pointing at none."""
+        table, s3 = self._one_source(), DeletingS3()
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(
+            table.deleted, [("CUSTOMER#cust-a", "POLICY_INGESTION#source-1#VERSION#v1")]
+        )
+        self.assertEqual(
+            s3.deleted,
+            [
+                "customers/cust-a/policy-sources/source-1/versions/v1/original",
+                "customers/cust-a/policy-sources/source-1/versions/v1/normalized",
+            ],
+        )
+
+    def test_an_approved_source_is_refused_and_nothing_is_deleted(self) -> None:
+        table = self._one_source()
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL")] = {
+            "entity_type": "POLICY_SOURCE_APPROVAL"
+        }
+        s3 = DeletingS3()
+        with self.assertRaises(PolicySourceDeleteForbidden):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(table.deleted, [])
+        self.assertEqual(s3.deleted, [])
+
+    def test_a_missing_source_is_not_found_rather_than_a_server_fault(self) -> None:
+        table, s3 = DeleteTable(), DeletingS3()
+        with self.assertRaises(PolicySourceNotFound):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(s3.deleted, [])
+
+    def test_another_customers_record_is_not_reachable(self) -> None:
+        """Key prefix and the stored customer_id both guard it, so neither alone is the boundary."""
+        table, s3 = self._one_source(owner="cust-b"), DeletingS3()
+        with self.assertRaises(PolicySourceNotFound):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(s3.deleted, [])
+
+    def test_an_artifact_failure_surfaces_after_the_record_is_gone(self) -> None:
+        table, s3 = self._one_source(), DeletingS3(fail=True)
+        with self.assertRaises(RuntimeError):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(
+            table.deleted, [("CUSTOMER#cust-a", "POLICY_INGESTION#source-1#VERSION#v1")]
+        )
+
+
+class PolicySourceDeletePublicFailureTest(unittest.TestCase):
+    """The public mapping is the reason these exception types exist; pin both statuses."""
+
+    def test_a_refused_delete_is_a_conflict_not_a_server_error(self) -> None:
+        failure = sanitize_public_failure(PolicySourceDeleteForbidden("approved"))
+        self.assertEqual((failure.status_code, failure.error.code), (409, "CONFLICT"))
+
+    def test_a_missing_source_is_a_not_found(self) -> None:
+        failure = sanitize_public_failure(PolicySourceNotFound("missing"))
+        self.assertEqual((failure.status_code, failure.error.code), (404, "NOT_FOUND"))
