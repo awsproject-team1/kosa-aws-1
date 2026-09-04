@@ -462,7 +462,7 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(text, str):
         raise BedrockExtractionError("Bedrock response text is missing")
     try:
-        value = json.loads(_strip_json_code_fence(text))
+        value = _one_json_object(_strip_json_code_fence(text))
     except json.JSONDecodeError as error:
         # 자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다.
         raise BedrockExtractionError("Bedrock response is not JSON") from error
@@ -480,6 +480,33 @@ _QUOTED_SPAN = re.compile("'[^']*'|\"[^\"]*\"", re.DOTALL)
 def _redacted(message: str) -> str:
     """Drop quoted spans from a validation message so only its rule text is logged."""
     return _QUOTED_SPAN.sub("'<redacted>'", message)
+
+
+#: 완결된 JSON 값 뒤에 남아도 무시하는 문자. 모델이 상상한 바깥 배열을 닫으려고 덧붙이는
+#: 괄호뿐이며, 값을 시작할 수 있는 문자는 하나도 없다.
+_TRAILING_NOISE = set("]} \t\r\n")
+
+
+def _one_json_object(text: str) -> object:
+    """Parse the one JSON object the response must carry, ignoring brackets appended after it.
+
+    **왜 필요한가.** ISMS-P 엑셀을 라이브에서 추출할 때 Nova가 완결된 객체 뒤에 닫는 괄호 하나를
+    덧붙였다 — `{"requirements":[...],"non_requirement_locators":[...]}]`. 내용은 멀쩡했고(요청한
+    6개 unit을 모두 분류했다) `stopReason`도 `end_turn`이었지만, `json.loads`는 `Extra data`로
+    응답 전체를 버렸다. 5개 청크 중 2개가 그랬고, 67개 청크가 모두 통과해야 하는 문서에서 그
+    비율은 사실상 완주 불가를 뜻한다.
+
+    **무엇을 받아주지 않는가.** 뒤에 남은 것이 닫는 괄호와 공백이 아니면 예전처럼 실패한다 —
+    산문도, 두 번째 객체도 통과하지 못한다(두 번째 값을 조용히 버리면 그 안의 요구사항이
+    사라진다). 잘린 응답은 애초에 첫 값을 읽지 못해 여기서 걸린다. `_strip_json_code_fence`와
+    같은 성격의 보정이다: 같은 값을 표기만 다르게 적은 것을 되돌릴 뿐, 자유 텍스트에서 값을
+    캐내지 않는다.
+    """
+    value, end = json.JSONDecoder().raw_decode(text.strip())
+    remainder = text.strip()[end:]
+    if remainder and not set(remainder) <= _TRAILING_NOISE:
+        raise json.JSONDecodeError("unexpected data after the JSON object", text, end)
+    return value
 
 
 def _strip_json_code_fence(text: str) -> str:

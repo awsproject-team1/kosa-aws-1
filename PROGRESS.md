@@ -1669,3 +1669,19 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     `_policy_source_path()` helper가 처리하는 경로를 사람이 유지하는 allow-list로 제외하고
     있어서 이 누락을 잡지 못했으므로, **helper가 받는 action 집합을 소스에서 파생해 각각 route가
     있는지 확인하는 테스트**를 더했다(목록을 갱신하는 것을 잊어도 걸린다).
+
+- **ISMS-P 추출이 완주하지 못한 이유를 읽었다 (2026-09-05).** 전체 기록은
+  `docs/evaluations/data/authoring-isms-p-20260905.md`.
+  - **고친 것.** Nova가 완결된 JSON 객체 뒤에 닫는 괄호 하나를 덧붙였고(`{...}]`), `json.loads`가
+    `Extra data`로 응답 전체를 버렸다. 내용은 요청한 unit을 모두 분류한 정상 응답이었고
+    `stopReason`도 `end_turn`이었다(잘린 것이 아니다). 첫 5 chunk 중 2건이 그랬다. 완결된 첫
+    객체를 읽고 뒤에 남은 닫는 괄호·공백만 무시한다 — 산문·두 번째 객체·잘린 객체는 그대로
+    거부한다(두 번째 객체를 조용히 버리면 그 안의 요구사항이 사라진다). `_strip_json_code_fence`와
+    같은 성격의 보정이다.
+  - **남은 것은 산술이다.** parser 수정 뒤에도 chunk 최종 실패율은 실행마다 17–33%였고, 이
+    문서는 67 chunk가 **모두** 성공해야 저장된다. 완주 확률 ≈ 0.0004% — 사실상 불가능하다.
+    20 unit(4 chunk)짜리 markdown 사내 정책이 지금까지 성공해 온 것은 chunk 수가 적어서다.
+  - **판단이 남았다.** "부분 후보를 저장하지 않는다"는 규칙의 의도(요구사항이 조용히 사라지지
+    않게)는 옳지만, 334 unit 문서에서는 "아무것도 저장하지 못함"을 뜻한다. 실패한 chunk를 보이는
+    미완료로 기록할지(Assessment의 `EXECUTION_ERROR`와 같은 성격, 승인 경계 변경이라 ADR 필요),
+    chunk를 더 작게 할지, 문서를 나눠 올릴지는 사람이 정할 일이다.

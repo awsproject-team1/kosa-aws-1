@@ -205,6 +205,36 @@ class ResponseGateTest(unittest.TestCase):
         self.assertEqual(len(requirements), 1)
         self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
 
+    def test_a_bracket_appended_after_the_object_is_ignored(self) -> None:
+        """라이브에서 관측된 형태다 — 완결된 객체 뒤에 닫는 괄호 하나.
+
+        ISMS-P 엑셀 추출에서 5개 청크 중 2개가 `{...}]`로 왔다. 내용은 요청한 unit을 모두
+        분류한 정상 응답이었고 `stopReason`도 `end_turn`이었는데, `Extra data` 때문에 응답
+        전체가 버려졌다. 67개 청크가 모두 통과해야 하는 문서에서 그 비율은 완주 불가다.
+        """
+        body = json.dumps(_response([VALID_REQUIREMENT]))
+        requirements, _client = _extract(body + "]")
+
+        self.assertEqual(len(requirements), 1)
+        self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
+
+    def test_prose_after_the_object_is_still_refused(self) -> None:
+        """보정은 표기뿐이다. 값을 시작할 수 있는 것이 뒤에 있으면 응답을 신뢰하지 않는다."""
+        body = json.dumps(_response([VALID_REQUIREMENT]))
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body + " and that is everything I found.")
+
+    def test_a_second_object_is_refused_rather_than_silently_dropped(self) -> None:
+        """두 번째 객체를 조용히 버리면 그 안의 요구사항이 사라진다."""
+        body = json.dumps(_response([VALID_REQUIREMENT]))
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body + body)
+
+    def test_a_truncated_object_is_refused(self) -> None:
+        body = json.dumps(_response([VALID_REQUIREMENT]))
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body[: len(body) // 2])
+
     def test_a_non_json_response_is_refused(self) -> None:
         """자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다."""
         with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
