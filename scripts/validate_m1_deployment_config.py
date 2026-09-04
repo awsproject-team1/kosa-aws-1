@@ -21,7 +21,11 @@ from pathlib import Path
 
 from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
 from agent.runtime.github_tool import require_github_repository_full_name
-from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS, SCOPE_SELECTOR_FIELDS
+from apps.backend.api.scope import (
+    SCOPE_CONNECTION_FIELDS,
+    SCOPE_CONNECTION_RULES,
+    SCOPE_SELECTOR_FIELDS,
+)
 
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
 COMMON_TARGET_FIELDS = frozenset(
@@ -215,27 +219,22 @@ def _scope(raw: object) -> dict[tuple[str, str], dict[str, str]]:
 def _connection_facts(entry: Mapping[str, object]) -> dict[str, str]:
     """Shape-check the console's connection facts.
 
+    규칙은 값을 내보내는 서비스 모듈이 소유한다 — 필드가 늘면 검사가 함께 온다.
     fixture 모드에는 대조할 M1 target이 없으므로 여기까지가 이 값들에 대한 유일한 검증이다.
     live 모드는 `validate_environment`가 같은 selector의 target 값과 한 번 더 대조한다.
     """
     facts: dict[str, str] = {}
     # 선언 여부는 키의 존재로 본다. `entry.get(...) is not None`으로 보면 `null`을 쓴 오타가
     # 조용히 무시돼, 배포는 통과하는데 화면에서 그 값만 사라진다.
-    if "github_repository" in entry:
-        value = _required(entry["github_repository"], "github_repository")
-        if not _repository_name(value):
+    for field_name, rule in sorted(SCOPE_CONNECTION_RULES.items()):
+        if field_name not in entry:
+            continue
+        value = _required(entry[field_name], field_name)
+        if not rule.is_valid(value):
             raise DeploymentConfigurationError(
-                "assessment scope github_repository must be a canonical owner/repository name"
+                f"assessment scope {field_name} must be {rule.requirement}"
             )
-        facts["github_repository"] = value
-    if "aws_account_id" in entry:
-        value = _required(entry["aws_account_id"], "aws_account_id")
-        if ACCOUNT_ID.fullmatch(value) is None:
-            raise DeploymentConfigurationError("assessment scope aws_account_id must be 12 digits")
-        facts["aws_account_id"] = value
-    if facts.keys() != SCOPE_DISPLAY_FIELDS & entry.keys():
-        # 연결 정보가 늘었는데 여기 검사를 붙이지 않으면, 모양을 확인하지 않은 값이 화면에 뜬다.
-        raise DeploymentConfigurationError("assessment scope connection fields are unchecked")
+        facts[field_name] = value
     return facts
 
 

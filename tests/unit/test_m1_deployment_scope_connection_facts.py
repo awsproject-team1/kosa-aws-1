@@ -201,6 +201,22 @@ class ScopeVocabularyIsSingleSourcedTest(unittest.TestCase):
         self.assertIs(SCOPE_FIELDS, SCOPE_SELECTOR_FIELDS)
         self.assertIs(SCOPE_DISPLAY_FIELDS, SCOPE_CONNECTION_FIELDS)
 
+    def test_the_field_list_is_derived_from_the_rules(self) -> None:
+        """A connection field cannot exist without the rule that recognizes a good value."""
+        from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS, SCOPE_CONNECTION_RULES
+
+        self.assertEqual(SCOPE_CONNECTION_FIELDS, frozenset(SCOPE_CONNECTION_RULES))
+
+    def test_the_runtime_docstring_does_not_restate_the_field_list(self) -> None:
+        """The parser's prose named the fields by hand, so it would go stale as they grow."""
+        from apps.backend.api import runtime as api_runtime
+        from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS
+
+        docstring = api_runtime._repository_ids.__doc__ or ""
+        for field_name in SCOPE_CONNECTION_FIELDS:
+            self.assertNotIn(field_name, docstring)
+        self.assertIn("SCOPE_ENTRY_FIELDS", docstring)
+
     def test_the_runtime_parser_reads_the_same_definition(self) -> None:
         from apps.backend.api import runtime as api_runtime
         from apps.backend.api.scope import SCOPE_ENTRY_FIELDS
@@ -228,6 +244,58 @@ class ScopeVocabularyIsSingleSourcedTest(unittest.TestCase):
         environment = _environment({"repository_id": "repo-001", "github_repository": None})
         with self.assertRaises(DeploymentConfigurationError):
             validate_environment(environment)
+
+
+class ReadPathRefusesWhatItCannotRecognizeTest(unittest.TestCase):
+    """`ASSESSMENT_SCOPE_JSON` is an ordinary Lambda variable, editable outside the workflow.
+
+    The gate is the first defense, but it is not the only way a value reaches this screen — the
+    live variable was hand-edited exactly because the gate could not carry these fields. The read
+    path serves a fact only while it still matches the rule the gate would have applied.
+    """
+
+    @staticmethod
+    def _view(entry: dict) -> dict:
+        from apps.backend.api.scope import ScopeApiService
+        from apps.backend.auth import Principal, Role
+
+        service = ScopeApiService(scope_json=json.dumps({"cust-001": [entry]}))
+        principal = Principal(
+            subject="u", client_id="c", customer_id="cust-001", roles=frozenset({Role.ADMIN})
+        )
+        (repository,) = service.get_scope(principal)["repositories"]
+        return repository
+
+    def test_well_formed_facts_are_served(self) -> None:
+        view = self._view(
+            {
+                "repository_id": "repo-001",
+                "github_repository": REPOSITORY,
+                "aws_account_id": ACCOUNT,
+            }
+        )
+        self.assertEqual(view["github_repository"], REPOSITORY)
+        self.assertEqual(view["aws_account_id"], ACCOUNT)
+
+    def test_a_malformed_fact_is_dropped_rather_than_shown(self) -> None:
+        for field_name, bad in (
+            ("github_repository", "not-a-full-name"),
+            ("aws_account_id", "12345"),
+        ):
+            with self.subTest(field=field_name):
+                view = self._view({"repository_id": "repo-001", field_name: bad})
+                self.assertNotIn(field_name, view)
+                self.assertEqual(view["repository_id"], "repo-001")
+
+    def test_the_read_path_covers_every_connection_field(self) -> None:
+        """Adding a rule without teaching the view to serve it would show a blank on screen."""
+        from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS
+
+        entry = {"repository_id": "repo-001"}
+        for field_name in SCOPE_CONNECTION_FIELDS:
+            entry[field_name] = REPOSITORY if "repository" in field_name else ACCOUNT
+        view = self._view(entry)
+        self.assertEqual(set(view) - {"repository_id"}, set(SCOPE_CONNECTION_FIELDS))
 
 
 if __name__ == "__main__":
