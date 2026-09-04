@@ -20,6 +20,7 @@ from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.api.remediations import RemediationApiService
+from apps.backend.api.scope import SCOPE_ENTRY_FIELDS
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
@@ -624,7 +625,7 @@ def _repository_ids(value: object) -> frozenset[str]:
     연결 정보(`github_repository`, `aws_account_id`)는 허용하되, 그 밖의 알 수 없는 필드는
     fail-closed로 거부한다 — 비밀 참조(role ARN, secret id)를 이 환경변수에 넣지 않게 강제한다.
     """
-    allowed = {"repository_id", "github_repository", "aws_account_id"}
+    allowed = SCOPE_ENTRY_FIELDS
     if not isinstance(value, list):
         raise ValueError
     repositories: set[str] = set()

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
 from agent.runtime.github_tool import require_github_repository_full_name
+from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS, SCOPE_SELECTOR_FIELDS
 
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
 COMMON_TARGET_FIELDS = frozenset(
@@ -44,16 +45,13 @@ RESOURCE_FIELDS = frozenset({"resource_type", "resource_id"})
 #: Resource types the Worker has an Actual read adapter for. Imported, not restated: a
 #: hand-copied list would let this gate accept a type the Worker cannot read.
 SUPPORTED_RESOURCE_TYPES = frozenset(ACTUAL_READ_RESOURCE_TYPES)
-#: Assessment scope가 선언하는 평가 경계. Policy Profile은 고객 partition의 Catalog가 정하므로
-#: 여기 남아 있으면 두 경계가 서로 다른 것을 말하게 된다.
-SCOPE_FIELDS = frozenset({"repository_id"})
-#: 콘솔이 "연결된 고객사 리소스"로 보여주는 비밀 아닌 연결 정보(`GET /scope`). 선택 항목이고
-#: 평가 경계를 넓히지 않는다 — 운영자가 실제 고객 repository/계정에 연결됐는지 화면에서 확인할
-#: 수 있게 하는 표시값이다. 이 gate가 받지 않으면 배포 workflow로는 넣을 방법이 없어, 재배포가
-#: 라이브 환경변수에 손으로 넣어둔 값을 지운다. 허용 목록은 runtime(`api/runtime.py`의
-#: `_repository_ids`)과 같아야 하며, 목록 밖 필드는 fail-closed로 거부해 secret 참조(role ARN·
-#: secret id)가 이 환경변수에 들어오지 못하게 한다.
-SCOPE_DISPLAY_FIELDS = frozenset({"github_repository", "aws_account_id"})
+#: Scope 항목의 평가 경계 필드와, 콘솔이 표시하는 선택적 연결 정보. Imported, not restated —
+#: 위 리소스 유형과 같은 이유다. 이 gate가 runtime보다 좁으면 화면이 읽을 값을 배포할 방법이
+#: 없어 재배포가 라이브 표시값을 지우고, 넓으면 배포는 통과했는데 API Lambda가 콜드 스타트에
+#: 실패한다. 목록 밖 필드는 계속 fail-closed로 거부해 secret 참조(role ARN·secret id)가 이
+#: 환경변수에 들어오지 못하게 한다.
+SCOPE_FIELDS = SCOPE_SELECTOR_FIELDS
+SCOPE_DISPLAY_FIELDS = SCOPE_CONNECTION_FIELDS
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 
@@ -221,20 +219,23 @@ def _connection_facts(entry: Mapping[str, object]) -> dict[str, str]:
     live 모드는 `validate_environment`가 같은 selector의 target 값과 한 번 더 대조한다.
     """
     facts: dict[str, str] = {}
-    repository = entry.get("github_repository")
-    if repository is not None:
-        value = _required(repository, "github_repository")
+    # 선언 여부는 키의 존재로 본다. `entry.get(...) is not None`으로 보면 `null`을 쓴 오타가
+    # 조용히 무시돼, 배포는 통과하는데 화면에서 그 값만 사라진다.
+    if "github_repository" in entry:
+        value = _required(entry["github_repository"], "github_repository")
         if not _repository_name(value):
             raise DeploymentConfigurationError(
                 "assessment scope github_repository must be a canonical owner/repository name"
             )
         facts["github_repository"] = value
-    account = entry.get("aws_account_id")
-    if account is not None:
-        value = _required(account, "aws_account_id")
+    if "aws_account_id" in entry:
+        value = _required(entry["aws_account_id"], "aws_account_id")
         if ACCOUNT_ID.fullmatch(value) is None:
             raise DeploymentConfigurationError("assessment scope aws_account_id must be 12 digits")
         facts["aws_account_id"] = value
+    if facts.keys() != SCOPE_DISPLAY_FIELDS & entry.keys():
+        # 연결 정보가 늘었는데 여기 검사를 붙이지 않으면, 모양을 확인하지 않은 값이 화면에 뜬다.
+        raise DeploymentConfigurationError("assessment scope connection fields are unchecked")
     return facts
 
 

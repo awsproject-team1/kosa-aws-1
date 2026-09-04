@@ -186,29 +186,48 @@ class FixtureModeTest(unittest.TestCase):
             validate_environment(environment)
 
 
-class RuntimeAllowListParityTest(unittest.TestCase):
-    """The gate and the runtime must accept the same scope fields.
+class ScopeVocabularyIsSingleSourcedTest(unittest.TestCase):
+    """The gate and the API runtime must read one list, not two hand-kept copies.
 
-    They are two different parsers over one env var. If the gate is narrower, a value the runtime
-    would happily serve cannot be deployed; if it is wider, a deploy succeeds and the API Lambda
-    fails closed at cold start. Either way the mismatch shows up only in a live deployment.
+    They are two parsers over one env var. A narrower gate makes the console's value undeployable
+    and lets the next redeploy erase it; a wider gate ships a value the API Lambda rejects at cold
+    start. Either way the mismatch surfaces only in a live deployment, so it is pinned here.
     """
 
-    def test_the_gate_allows_exactly_what_the_runtime_allows(self) -> None:
-        from apps.backend.api import runtime as api_runtime
+    def test_the_gate_reads_the_service_definition(self) -> None:
+        from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS, SCOPE_SELECTOR_FIELDS
         from scripts.validate_m1_deployment_config import SCOPE_DISPLAY_FIELDS, SCOPE_FIELDS
 
-        selector = {"repository_id": "repo-001"}
-        for field_name in SCOPE_DISPLAY_FIELDS:
-            selector[field_name] = REPOSITORY if "repository" in field_name else ACCOUNT
-        # 런타임 파서가 같은 항목을 받아들이고 repository_id를 그대로 뽑아내는지 확인한다.
-        self.assertEqual(
-            api_runtime._repository_ids([selector]),
-            frozenset({"repo-001"}),
-        )
-        for field_name in sorted(SCOPE_FIELDS | SCOPE_DISPLAY_FIELDS):
+        self.assertIs(SCOPE_FIELDS, SCOPE_SELECTOR_FIELDS)
+        self.assertIs(SCOPE_DISPLAY_FIELDS, SCOPE_CONNECTION_FIELDS)
+
+    def test_the_runtime_parser_reads_the_same_definition(self) -> None:
+        from apps.backend.api import runtime as api_runtime
+        from apps.backend.api.scope import SCOPE_ENTRY_FIELDS
+
+        entry = {"repository_id": "repo-001"}
+        for field_name in SCOPE_ENTRY_FIELDS - {"repository_id"}:
+            entry[field_name] = REPOSITORY if "repository" in field_name else ACCOUNT
+        self.assertEqual(api_runtime._repository_ids([entry]), frozenset({"repo-001"}))
+        self.assertEqual(api_runtime.SCOPE_ENTRY_FIELDS, SCOPE_ENTRY_FIELDS)
+
+    def test_every_connection_field_is_shape_checked_by_the_gate(self) -> None:
+        """Adding a field to the vocabulary without a shape check must fail here, not in prod."""
+        from apps.backend.api.scope import SCOPE_CONNECTION_FIELDS
+
+        for field_name in sorted(SCOPE_CONNECTION_FIELDS):
             with self.subTest(field=field_name):
-                self.assertIn(field_name, selector)
+                environment = _environment(
+                    {"repository_id": "repo-001", field_name: "!!not-a-valid-value!!"}
+                )
+                with self.assertRaises(DeploymentConfigurationError):
+                    validate_environment(environment)
+
+    def test_a_null_connection_field_is_refused_not_ignored(self) -> None:
+        """A `null` typo would otherwise deploy clean and drop that value from the screen."""
+        environment = _environment({"repository_id": "repo-001", "github_repository": None})
+        with self.assertRaises(DeploymentConfigurationError):
+            validate_environment(environment)
 
 
 if __name__ == "__main__":
