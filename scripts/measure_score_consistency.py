@@ -1,10 +1,18 @@
-"""Measure how stable the continuous 0–100 score is when the same input is evaluated repeatedly.
+"""Measure how stable the evaluation is when the same input is evaluated repeatedly.
 
-이 스크립트는 **Runtime이 쓰는 그 평가기**(`BedrockStructuredEvaluator`, 승인 Model Profile, 같은
-prompt, 같은 inference config)로 대표 Case를 N회 반복 평가하고 통계를 낸다. 허용 오차나 합격
-기준을 정하지 않는다 — 측정값(평균·최소·최대·Range·표준편차·status 일치율·Finding 일치율·
-pairwise 차이)과 계약 위반·Severe Overestimation 후보를 그대로 보고하고, Anchor 전환 여부는 사람이
-판단한다(ADR-0003, `docs/CONTRACTS.md` score 정책).
+이 스크립트는 **Runtime이 쓰는 그 경로**로 대표 Case를 N회 반복 평가하고 통계를 낸다. AWS_ACTUAL
+Case는 `ActualBedrockEvaluator`를 지난다 — 근거 게이트, 결정적 판정, 모델 호출이 Worker와 같은
+순서로 일어난다. IAC Case는 `BedrockStructuredEvaluator`다. 처음 버전은 모델 어댑터만 직접 만들어
+게이트와 결정적 경로를 통째로 우회했고, 그래서 그 두 경로가 고친 것을 이 도구로 확인할 수 없었다.
+
+허용 오차나 합격 기준을 정하지 않는다 — 측정값과 계약 위반을 그대로 보고하고 판단은 사람이 한다
+(ADR-0003 정정, ADR-0024). **지표는 판정 주체별로 나뉜다.** 코드가 판정한 좌표(`decided_by=CODE`)는
+같은 입력에 항상 같은 답을 내므로 반복 일치·분산은 정보가 아니고 기대 status 정확도만 뜻이 있다.
+모델이 판정한 좌표(`MODEL`)는 반복 일치와 정확도를 둘 다 본다. `model_calls`는 실제로 Bedrock을
+부른 횟수이며, 그 수가 곧 비용이다.
+
+score는 status의 재진술이다(PASS 100, FAIL 0). 그래서 score 통계는 status 뒤집힘의 통계이며,
+모델이 돌려준 숫자 자체는 결과에 남지 않는다.
 
 Case 종류
 - self-agreement: 같은 입력 N회 (RDS/S3/ALB/EC2 위반·준수, IAC/AWS_ACTUAL 관점)
@@ -41,6 +49,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from agent.runtime import AwsResourceView, MockAwsResourceTool  # noqa: E402
+from apps.backend.assessment.actual import ActualEvidenceLoader  # noqa: E402
+from apps.backend.assessment.actual_evaluator import ActualBedrockEvaluator  # noqa: E402
 from apps.backend.assessment.bedrock import (  # noqa: E402
     BedrockEvaluationError,
     BedrockStructuredEvaluator,
@@ -100,6 +111,8 @@ class RunRecord:
     contract_error: str | None = None
     #: `--show-rationales`일 때만 채운다. 합성 문서에 대한 모델 문장이며 고객 데이터가 아니다.
     rationale: str | None = None
+    #: 누가 status를 정했는가(`CODE` | `MODEL`). `MODEL`인 실행만 Bedrock을 불렀다.
+    decided_by: str | None = None
 
 
 @dataclass(slots=True)
@@ -136,12 +149,17 @@ class CaseReport:
             if run.status in {"MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE", "OUT_OF_SCOPE"}
             and run.score not in (None, 0, 0.0)
         ]
+        sources = [run.decided_by for run in self.runs if run.decided_by is not None]
         return {
             "case_id": self.case_id,
             "kind": self.kind,
             "rule_id": self.rule_id,
             "perspective": self.perspective,
             "expected_status": self.expected_status,
+            # 판정 주체. 한 Case 안에서 갈리면 안 된다 — 같은 입력이 게이트를 다르게 통과했다는 뜻.
+            "decided_by": _mode(sources),
+            "decision_source_agreement": _share(sources, _mode(sources)),
+            "model_calls": sum(1 for source in sources if source == "MODEL"),
             "runs": len(self.runs),
             "scores": scores,
             "mean": round(statistics.fmean(scores), 2) if scores else None,
@@ -760,12 +778,42 @@ def builtin_cases(rules_path: Path) -> tuple[ConsistencyCase, ...]:
 # --------------------------------------------------------------------------------------
 # Evaluation
 # --------------------------------------------------------------------------------------
-def evaluator_for(case: ConsistencyCase, client: object) -> BedrockStructuredEvaluator:
-    return BedrockStructuredEvaluator(
+CUSTOMER_ID = "acme-cloud"
+
+
+def evaluator_for(
+    case: ConsistencyCase, client: object
+) -> BedrockStructuredEvaluator | ActualBedrockEvaluator:
+    """The evaluator the Worker would use for this perspective.
+
+    AWS_ACTUAL은 `ActualBedrockEvaluator`다: Case 문서를 read-only tool의 응답으로 실어, 근거
+    게이트 → 결정적 판정 → 모델 순서가 Worker와 같게 일어난다. 모델 어댑터를 직접 만들면 앞의
+    두 단계가 측정에서 빠진다.
+    """
+    if case.perspective is EvaluationPerspective.IAC:
+        return BedrockStructuredEvaluator(
+            client=client,  # type: ignore[arg-type]
+            perspective=case.perspective,
+            resource_document=case.resource_document,
+            evidence_references=case.evidence_references,
+        )
+    document = case.resource_document
+    view = AwsResourceView(
+        aws_account_id=AWS_ACCOUNT,
+        resource_type=str(document["resource_type"]),
+        resource_id=str(document["resource_id"]),
+        attributes=dict(document["attributes"]),  # type: ignore[arg-type]
+    )
+    return ActualBedrockEvaluator(
+        evidence_loader=ActualEvidenceLoader(
+            tool=MockAwsResourceTool(
+                customer_id=CUSTOMER_ID, aws_account_id=AWS_ACCOUNT, resources=(view,)
+            ),
+            customer_id=CUSTOMER_ID,
+            aws_account_id=AWS_ACCOUNT,
+            resource_type=view.resource_type,
+        ),
         client=client,  # type: ignore[arg-type]
-        perspective=case.perspective,
-        resource_document=case.resource_document,
-        evidence_references=case.evidence_references,
     )
 
 
@@ -833,13 +881,20 @@ def _record(result: EvaluationResult, keep_rationales: bool = False) -> RunRecor
         finding=finding_from_result(result) is not None,
         rationale_length=len(result.rationale),
         rationale=result.rationale if keep_rationales else None,
+        decided_by=result.decided_by.value,
     )
 
 
 def attribute_order_invariance(case: ConsistencyCase) -> dict[str, object]:
     """Prove, without a model call, that key order cannot change the prompt."""
     permuted = _reverse_keys(case.resource_document)
-    original = evaluator_for(case, _NoCallClient())._request_body(  # noqa: SLF001 - measurement
+    # prompt 바이트 검사이므로 모델 어댑터를 직접 만든다 — 게이트·결정적 판정은 prompt를 갖지 않는다.
+    original = BedrockStructuredEvaluator(
+        client=_NoCallClient(),  # type: ignore[arg-type]
+        perspective=case.perspective,
+        resource_document=case.resource_document,
+        evidence_references=case.evidence_references,
+    )._request_body(  # noqa: SLF001 - measurement
         case.resource_id, case.rule, context_for(case), case.evidence_references
     )
     reordered = BedrockStructuredEvaluator(
@@ -1010,14 +1065,16 @@ def render_markdown(summary: Mapping[str, object]) -> str:
         "",
         "## Self-agreement per case",
         "",
-        "| case | rule | perspective | expected | runs | scores | mean | min | max | range | stdev "
-        "| status agreement | expected status accuracy | finding agreement | max pairwise | "
-        "contract errors | severe overestimation candidates |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| case | rule | perspective | decided by | expected | runs | scores | mean | min | max "
+        "| range | stdev | status agreement | expected status accuracy | finding agreement "
+        "| max pairwise | contract errors | severe overestimation candidates |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- "
+        "| --- | --- | --- |",
     ]
     for row in summary["cases"]:  # type: ignore[union-attr]
         lines.append(
-            f"| {row['case_id']} | {row['rule_id']} | {row['perspective']} | {row['expected_status']} "
+            f"| {row['case_id']} | {row['rule_id']} | {row['perspective']} | {row['decided_by']} "
+            f"| {row['expected_status']} "
             f"| {row['runs']} | {', '.join(_fmt(s) for s in row['scores'])} | {row['mean']} | {row['min']} "
             f"| {row['max']} | {row['range']} | {row['stdev']} | {row['status_agreement']} "
             f"| {row['expected_status_accuracy']} | {row['finding_agreement']} | {row['max_pairwise_diff']} "
@@ -1052,6 +1109,21 @@ def render_markdown(summary: Mapping[str, object]) -> str:
         lines.append(
             f"- {row['case_id']}: prompt bytes identical = {row['prompt_bytes_identical']}"
         )
+    lines += ["", "## By decision source", ""]
+    sources: Mapping[str, Mapping[str, object]] = summary["by_decision_source"]  # type: ignore[assignment]
+    code, model = sources["CODE"], sources["MODEL"]
+    lines.append(
+        f"- code-decided: {code['cases']} cases · {code['runs']} runs · expected status accuracy "
+        f"{code['expected_status_accuracy']} · below full accuracy: "
+        f"{', '.join(map(str, code['cases_below_full_accuracy'])) or '-'}"  # type: ignore[arg-type]
+    )
+    lines.append(
+        f"- model-decided: {model['cases']} cases · {model['runs']} runs · expected status accuracy "
+        f"{model['expected_status_accuracy']} · status agreement {model['status_agreement']} "
+        f"· below full accuracy: "
+        f"{', '.join(map(str, model['cases_below_full_accuracy'])) or '-'}"  # type: ignore[arg-type]
+    )
+    lines.append(f"- Bedrock calls: {summary['model_calls']}")
     lines += ["", "## Contract checks", ""]
     lines.append(f"- runs with contract errors: {summary['contract_error_runs']}")
     lines.append(
@@ -1069,6 +1141,48 @@ def _fmt(value: object) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
+
+
+def by_decision_source(case_rows: Sequence[Mapping[str, object]]) -> dict[str, dict[str, object]]:
+    """Aggregate the per-case rows separately for code-decided and model-decided coordinates.
+
+    코드 판정 좌표에 반복 일치·분산을 매기는 것은 정보가 아니다(항상 1.0·0). 그래서 그 쪽은 기대
+    status 정확도만 싣고, 모델 쪽은 정확도와 반복 일치를 둘 다 싣는다. 두 집단의 크기와
+    `model_calls`가 "N개 좌표 중 M개는 코드가 판정, Bedrock 호출 K회"라는 문장을 만든다.
+    """
+    groups: dict[str, dict[str, object]] = {}
+    for source in ("CODE", "MODEL"):
+        rows = [row for row in case_rows if row["decided_by"] == source]
+        accuracies = [
+            float(row["expected_status_accuracy"])  # type: ignore[arg-type]
+            for row in rows
+            if row["expected_status_accuracy"] is not None
+        ]
+        agreements = [
+            float(row["status_agreement"])  # type: ignore[arg-type]
+            for row in rows
+            if row["status_agreement"] is not None
+        ]
+        entry: dict[str, object] = {
+            "cases": len(rows),
+            "runs": sum(int(row["runs"]) for row in rows),  # type: ignore[call-overload]
+            "expected_status_accuracy": (
+                round(statistics.fmean(accuracies), 4) if accuracies else None
+            ),
+            "cases_below_full_accuracy": [
+                row["case_id"]
+                for row in rows
+                if row["expected_status_accuracy"] is not None
+                and float(row["expected_status_accuracy"]) < 1.0  # type: ignore[arg-type]
+            ],
+        }
+        if source == "MODEL":
+            entry["status_agreement"] = (
+                round(statistics.fmean(agreements), 4) if agreements else None
+            )
+            entry["model_calls"] = sum(int(row["model_calls"]) for row in rows)  # type: ignore[call-overload]
+        groups[source] = entry
+    return groups
 
 
 def summarize(
@@ -1089,6 +1203,8 @@ def summarize(
         "repetitions": repetitions,
         "dry_run": dry_run,
         "cases": case_rows,
+        "by_decision_source": by_decision_source(case_rows),
+        "model_calls": sum(int(row["model_calls"]) for row in case_rows),  # type: ignore[call-overload]
         "transitions": transitions(reports, cases),
         "phrasing_pairs": phrasing_pairs(reports, cases),
         "attribute_order_invariance": [

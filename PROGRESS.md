@@ -24,11 +24,16 @@
   - **판정 출처가 결과에 남는다.** `EvaluationResult.decided_by: CODE | MODEL`. drift 파생은 두
     관점의 출처가 다르고 판정이 어긋나면 `FAIL`이 아니라 `MANUAL_REVIEW`다 — 코드 FAIL + 모델
     PASS가 양쪽 모두 비준수인 리소스를 유령 drift로 보고하던 것을 막는다.
-  - **다음.** (1) 계측기 `measure_score_consistency.py`가 `BedrockStructuredEvaluator`를 직접 만들어
-    게이트와 결정적 경로를 우회한다 — 실제 `ActualBedrockEvaluator` 경로로 옮기고 코드/모델 좌표
-    지표를 나눈다. (2) 이제 미판정으로 **보이게 된** 빈 곳(S3 ownership/logging/policy 본문, EC2
-    서브넷, SG ingress CIDR 술어)을 adapter·read role·술어 어휘로 메운다. (3) plan `after` 값으로
-    IaC 관점도 코드가 판정한다. (4) 조치 prompt에 Rule 문언과 Terraform 매핑을 넘긴다.
+  - **계측기가 실제 경로를 지난다.** `measure_score_consistency.py`는 `BedrockStructuredEvaluator`를
+    직접 만들어 게이트와 결정적 경로를 우회했다 — e06c55e가 고쳤다는 세 건을 그 세 건을 찾은
+    도구로 확인할 수 없었다. AWS_ACTUAL Case는 이제 `MockAwsResourceTool` 위의
+    `ActualBedrockEvaluator`를 지나고, 지표는 `by_decision_source`로 나뉜다(코드 판정은 정확도만,
+    모델 판정은 정확도+일치). dry-run 24 Case: **13 CODE / 11 MODEL, Bedrock 호출 48→22회**.
+    라이브 회귀 측정은 자격 증명이 있는 환경에서 실행해야 한다 —
+    `docs/evaluations/data/score-boundary-20260905.md`.
+  - **다음.** (1) 이제 미판정으로 **보이게 된** 빈 곳(S3 ownership/logging/policy 본문, EC2
+    서브넷, SG ingress CIDR 술어)을 adapter·read role·술어 어휘로 메운다. (2) plan `after` 값으로
+    IaC 관점도 코드가 판정한다. (3) 조치 prompt에 Rule 문언과 Terraform 매핑을 넘긴다.
 
 - **사실은 코드가 판정하고, 판단만 모델에 맡긴다 (2026-09-05).** ISMS-P 준비도 평가의 비용과
   시간을 줄이는 것이 이 서비스의 목적이므로, 측정으로 드러난 세 가지 손실을 한 곳에서 없앤다.
