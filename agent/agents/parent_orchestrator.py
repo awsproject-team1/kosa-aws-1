@@ -85,14 +85,17 @@ class ParentOrchestrator:
         )
         output = _response_object(response)
         intent = _intent(output.get("intent"))
-        rationale = _non_empty_string(output.get("rationale"), "rationale")
+        # Tolerate a missing rationale: the model occasionally omits it, and failing the whole
+        # turn over a missing explanation is worse than a generic one. intent is what matters.
+        rationale = _optional_text(output.get("rationale")) or "no rationale provided"
 
         if intent is OrchestrationIntent.POLICY_QA:
-            return OrchestrationDecision(
-                intent=intent,
-                rationale=rationale,
-                answer=_non_empty_string(output.get("answer"), "answer"),
-            )
+            # Prefer the model's answer; if it is empty, fall back to the rationale so the user
+            # still gets text instead of a failed request. Only fail if there is nothing at all.
+            answer = _optional_text(output.get("answer")) or _optional_text(output.get("rationale"))
+            if answer is None:
+                raise OrchestrationError("Bedrock POLICY_QA response has no answer")
+            return OrchestrationDecision(intent=intent, rationale=rationale, answer=answer)
         if intent is OrchestrationIntent.UNSUPPORTED:
             return OrchestrationDecision(intent=intent, rationale=rationale)
         # A workflow intent is a proposal the Backend must confirm.
@@ -146,10 +149,16 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(message, Mapping):
         raise OrchestrationError("Bedrock response message is missing")
     content = message.get("content")
-    if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], Mapping):
-        raise OrchestrationError("Bedrock response must contain one text block")
-    text = content[0].get("text")
-    if not isinstance(text, str):
+    if not isinstance(content, list) or not content:
+        raise OrchestrationError("Bedrock response must contain a text block")
+    # Nova may split its reply across several content blocks; join every text part rather than
+    # requiring exactly one, then parse the concatenation as the single JSON object.
+    text = "".join(
+        block["text"]
+        for block in content
+        if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+    )
+    if not text.strip():
         raise OrchestrationError("Bedrock response text is missing")
     try:
         value = json.loads(_strip_json_fence(text))
@@ -157,8 +166,12 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
         raise OrchestrationError("Bedrock response is not JSON") from error
     if not isinstance(value, dict):
         raise OrchestrationError("Bedrock response JSON must be an object")
-    if set(value) != {"intent", "rationale", "answer", "selector"}:
-        raise OrchestrationError("Bedrock response fields are invalid")
+    # Be liberal in what we accept: the model may omit optional keys or add extra ones. Only
+    # `intent` is structurally required here; `rationale`/`answer`/`selector` are read with
+    # `.get()` per intent below, and the strict `intent`/`answer`/`selector` validity checks
+    # still run. Requiring an exact key set turned every harmless drift into a failed request.
+    if "intent" not in value:
+        raise OrchestrationError("Bedrock response is missing intent")
     return value
 
 
@@ -208,7 +221,13 @@ def _optional_string(value: object) -> str | None:
     return value
 
 
-def _non_empty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise OrchestrationError(f"{field_name} must be a non-empty string")
-    return value
+def _optional_text(value: object) -> str | None:
+    """Return trimmed text, or None when the model omitted it or left it blank/non-string.
+
+    Used for the model's free-text fields (rationale, answer) where absence is a tolerable drift,
+    not a failure. Selector identifiers keep the stricter `_optional_string` check.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None

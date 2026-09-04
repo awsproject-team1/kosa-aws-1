@@ -166,17 +166,62 @@ class ParentOrchestratorTest(unittest.TestCase):
         system_texts = " ".join(block["text"] for block in client.calls[0]["system"])
         self.assertNotIn("POLICY CONTEXT —", system_texts)
 
-    def test_rejects_extra_model_fields(self) -> None:
+    def test_extra_model_fields_are_tolerated(self) -> None:
+        # The strict exact-field-set check rejected harmless drift (an added key), turning a usable
+        # reply into a 500. Extra keys are now ignored; the known fields still drive the decision.
         client = Client(
             {
                 "intent": "POLICY_QA",
                 "rationale": "x",
-                "answer": "y",
+                "answer": "Block public access.",
                 "selector": None,
-                "extra": 1,
+                "confidence": 0.9,
             }
         )
-        with self.assertRaisesRegex(OrchestrationError, "fields are invalid"):
+        decision = ParentOrchestrator(client=client).route(request(), model_profile=PARENT_PROFILE)
+        self.assertIs(decision.intent, OrchestrationIntent.POLICY_QA)
+        self.assertEqual(decision.answer, "Block public access.")
+
+    def test_a_missing_rationale_is_tolerated(self) -> None:
+        client = Client({"intent": "ASSESSMENT", "selector": {"repository_id": "repo-1"}})
+        decision = ParentOrchestrator(client=client).route(request(), model_profile=PARENT_PROFILE)
+        self.assertIs(decision.intent, OrchestrationIntent.ASSESSMENT)
+        self.assertEqual(decision.selector.repository_id, "repo-1")
+        self.assertTrue(decision.rationale)
+
+    def test_policy_qa_answer_falls_back_to_rationale_when_answer_is_missing(self) -> None:
+        client = Client({"intent": "POLICY_QA", "rationale": "Encryption at rest is required."})
+        decision = ParentOrchestrator(client=client).route(request(), model_profile=PARENT_PROFILE)
+        self.assertIs(decision.intent, OrchestrationIntent.POLICY_QA)
+        self.assertEqual(decision.answer, "Encryption at rest is required.")
+
+    def test_a_reply_split_across_content_blocks_is_joined(self) -> None:
+        class SplitClient:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def converse(self, **kwargs: object) -> object:
+                self.calls.append(kwargs)
+                return {
+                    "output": {
+                        "message": {
+                            "content": [
+                                {"text": '{"intent":"POLICY_QA","rationale":"r",'},
+                                {"text": '"answer":"Split answer."}'},
+                            ]
+                        }
+                    }
+                }
+
+        decision = ParentOrchestrator(client=SplitClient()).route(
+            request(), model_profile=PARENT_PROFILE
+        )
+        self.assertIs(decision.intent, OrchestrationIntent.POLICY_QA)
+        self.assertEqual(decision.answer, "Split answer.")
+
+    def test_a_response_without_intent_still_fails(self) -> None:
+        client = Client({"rationale": "x", "answer": "y", "selector": None})
+        with self.assertRaisesRegex(OrchestrationError, "missing intent"):
             ParentOrchestrator(client=client).route(request(), model_profile=PARENT_PROFILE)
 
     def test_rejects_invalid_intent(self) -> None:
