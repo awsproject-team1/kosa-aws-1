@@ -283,7 +283,7 @@ jobs:
       FRONTEND_SPA_BUCKET_NAME: ${{ vars.FRONTEND_SPA_BUCKET_NAME }}
       FRONTEND_DISTRIBUTION_ID: ${{ vars.FRONTEND_DISTRIBUTION_ID }}
       FRONTEND_DEPLOYMENT_ENVIRONMENT: ${{ inputs.artifact_approval_environment }}
-      GITHUB_OIDC_SUBJECT_PREFIX: repo:${{ github.repository }}
+      OIDC_SUBJECT_PREFIX: ${{ vars.OIDC_SUBJECT_PREFIX }}
       EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out approved repository revision
@@ -298,6 +298,7 @@ jobs:
           test -n "${LAMBDA_CODE_S3_KEY}"
           test -n "${LAMBDA_CODE_S3_OBJECT_VERSION}"
           [[ "${LAMBDA_ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${OIDC_SUBJECT_PREFIX}" =~ ^repo:[^:]+$ ]]
           test -n "${LANGGRAPH_LAYER_S3_KEY}"
           test -n "${LANGGRAPH_LAYER_S3_OBJECT_VERSION}"
           # 배포 대상과 그 token은 함께 있거나 함께 없어야 한다. 템플릿 Rule도 같은 것을
@@ -384,7 +385,7 @@ jobs:
               "FrontendSpaBucketName=${FRONTEND_SPA_BUCKET_NAME}" \
               "FrontendDistributionId=${FRONTEND_DISTRIBUTION_ID}" \
               "FrontendDeploymentEnvironment=${FRONTEND_DEPLOYMENT_ENVIRONMENT}" \
-              "GitHubOidcSubjectPrefix=${GITHUB_OIDC_SUBJECT_PREFIX}" \
+              "GitHubOidcSubjectPrefix=${OIDC_SUBJECT_PREFIX}" \
             --no-fail-on-empty-changeset
 
       - name: Diagnose failed CloudFormation deployment

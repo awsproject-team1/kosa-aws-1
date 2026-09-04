@@ -99,9 +99,10 @@ Parameters:
     ConstraintDescription: Protected GitHub Environment trusted by the frontend deployment role.
   GitHubOidcSubjectPrefix:
     Type: String
-    Default: repo:awsproject-team1/kosa-aws-1
-    AllowedPattern: '^repo:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-    ConstraintDescription: Exact GitHub owner/repository OIDC subject prefix trusted for deployment.
+    MinLength: 12
+    MaxLength: 220
+    AllowedPattern: '^repo:[^:]+$'
+    ConstraintDescription: Exact name-based or immutable-ID GitHub OIDC subject prefix trusted for deployment.
 
 Rules:
   M1AssessmentInputsAllOrNone:

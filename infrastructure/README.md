@@ -59,7 +59,8 @@ at the protected deployment Environment before assuming a frontend-only OIDC rol
 write only the configured private SPA bucket and invalidate only the configured CloudFront
 distribution; it cannot mutate the foundation stack, API, Cognito, DynamoDB, or runtime roles.
 The foundation deploy creates this role only when the protected Environment supplies both
-`FRONTEND_SPA_BUCKET_NAME` and `FRONTEND_DISTRIBUTION_ID`.
+`FRONTEND_SPA_BUCKET_NAME` and `FRONTEND_DISTRIBUTION_ID`. `OIDC_SUBJECT_PREFIX` must carry the
+same name-based or immutable-ID subject prefix used by the customer bootstrap role.
 
 For M1 sandbox frontend testing, the stack also creates Cognito `Admin`/`User` groups and a
 Hosted UI domain with Authorization Code OAuth enabled. The customer-operated local-user
