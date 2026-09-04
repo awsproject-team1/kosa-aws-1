@@ -65,6 +65,83 @@ def response(body: dict[str, object]) -> dict[str, object]:
     return {"output": {"message": {"content": [{"text": json.dumps(body)}]}}}
 
 
+class ScriptedClient:
+    """Answers a list of bodies in order, so a retry can be observed exactly."""
+
+    def __init__(self, bodies: list[dict[str, object]]) -> None:
+        self.bodies = bodies
+        self.calls = 0
+
+    def converse(self, **kwargs: object) -> object:
+        self.calls += 1
+        return response(self.bodies.pop(0))
+
+
+VALID_BODY = {
+    "status": "FAIL",
+    "score": 0,
+    "rationale": "Public access block is disabled.",
+    "evidence_references": ["aws:s3:GetPublicAccessBlock"],
+}
+INVENTED_LOCATOR_BODY = {
+    **VALID_BODY,
+    # 라이브에서 실제로 나온 형태 — prompt의 필드명을 locator namespace로 착각했다.
+    "evidence_references": ["resource_document:main.tf#L26-L30"],
+}
+
+
+class ContractRetryTest(unittest.TestCase):
+    """A malformed answer is a format failure, not a judgment. Ask once more (ADR-0024)."""
+
+    def _evaluate(self, client: object, **kwargs: object):
+        return BedrockStructuredEvaluator(
+            client=client,  # type: ignore[arg-type]
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            resource_document={"bucket": "bucket-public-001"},
+            evidence_references=("aws:s3:GetPublicAccessBlock",),
+            **kwargs,  # type: ignore[arg-type]
+        ).evaluate(
+            resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+
+    def test_a_rejected_evidence_citation_is_asked_again_once(self) -> None:
+        client = ScriptedClient([INVENTED_LOCATOR_BODY, VALID_BODY])
+
+        result = self._evaluate(client)
+
+        self.assertEqual(client.calls, 2)
+        self.assertIs(result.status, EvaluationStatus.FAIL)
+        self.assertEqual(result.evidence_references, ("aws:s3:GetPublicAccessBlock",))
+
+    def test_a_valid_first_answer_is_not_asked_again(self) -> None:
+        """재시도는 형식 실패에만 있다 — 마음에 드는 답이 나올 때까지 다시 묻지 않는다."""
+        client = ScriptedClient([VALID_BODY, VALID_BODY])
+
+        self._evaluate(client)
+
+        self.assertEqual(client.calls, 1)
+
+    def test_two_malformed_answers_still_fail_closed(self) -> None:
+        client = ScriptedClient([INVENTED_LOCATOR_BODY, INVENTED_LOCATOR_BODY])
+
+        with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
+            self._evaluate(client)
+        self.assertEqual(client.calls, 2)
+
+    def test_the_measurement_harness_can_turn_the_retry_off(self) -> None:
+        """계측기는 모델의 날것 위반 빈도를 재야 한다. 삼킨 재시도가 섞이면 셀 수 없다."""
+        client = ScriptedClient([INVENTED_LOCATOR_BODY, VALID_BODY])
+
+        with self.assertRaises(BedrockEvaluationError):
+            self._evaluate(client, attempts=1)
+        self.assertEqual(client.calls, 1)
+
+    def test_attempts_must_be_a_positive_integer(self) -> None:
+        for value in (0, -1, True, "2"):
+            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
+                self._evaluate(ScriptedClient([VALID_BODY]), attempts=value)
+
+
 class BedrockStructuredEvaluatorTest(unittest.TestCase):
     def evaluator(self, client: Client) -> BedrockStructuredEvaluator:
         return BedrockStructuredEvaluator(

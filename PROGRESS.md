@@ -1620,3 +1620,21 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
 - [ ] **Shared:** C4/ADR/API/Contract Freshness, E2E, Secret Scan, Release/Demo Review
 
 **Dependencies:** 모든 M0–M3 Exit criteria 충족 후에만 `dev → main` PR과 최종 Release 검증을 진행한다.
+
+- **한 좌표의 실패가 평가 전체를 죽이지 않는다 (2026-09-05).** 라이브 로그가 48시간 동안 assessment
+  worker 실행 38,923회 중 38,899회 실패를 보여줬다. 고리는 이랬다: 모델 응답 하나가 계약을 어기면
+  (가장 잦은 형태는 근거 인용 — `resource_document:main.tf#L26-L30`처럼 prompt 필드명을 locator
+  namespace로 착각) 예외가 Worker 실행 전체를 죽이고, 이미 끝난 좌표의 결과도 저장되지 않으며,
+  SQS가 재전달하고, 두 번째 실행의 다른 답을 immutable 저장소가 거부해(`ImmutableEvaluationResultConflict`
+  10,009회) DLQ로 갔다. DLQ에 867건이 쌓여 있었다.
+  - **모델 응답의 계약 위반은 판정이 아니라 형식 실패다.** `BedrockStructuredEvaluator`가 한 번 더
+    묻는다(`attempts=2`). 같은 입력에 이 모델은 실행마다 다르게 답하므로 두 번째가 대개 통과한다.
+    게이트를 무르게 하지 않는다 — 두 번째도 어기면 실패다. 계측기는 `attempts=1`로 만들어 모델의
+    날것 위반 빈도를 그대로 잰다(그 빈도가 그 도구의 관측치다).
+  - **그래도 실패하면 그 좌표만 `EXECUTION_ERROR`다.** `AssessmentRunner`가 나머지 좌표를 계속
+    평가하고 저장한다. 관대해지는 것이 아니다: `EXECUTION_ERROR`는 Coverage 완료로 세지 않고,
+    readiness 게시를 막고, Finding이 되지 않는다. 조용한 통과가 아니라 **보이는 미완료**다.
+    rationale에는 예외 종류만 담는다 — 거부한 locator를 결과에 실으면 지어낸 값을 저장하는 셈이다.
+    `TypeError`는 잡지 않는다(배선 오류이지 평가 실패가 아니다).
+  - 부수 효과로 재시도-충돌 고리가 끊긴다: Lambda가 성공하므로 SQS가 메시지를 지우고, 같은 좌표에
+    다른 답을 쓰려는 두 번째 실행 자체가 없어진다.

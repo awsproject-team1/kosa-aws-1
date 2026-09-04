@@ -803,6 +803,9 @@ def evaluator_for(
             perspective=case.perspective,
             resource_document=case.resource_document,
             evidence_references=case.evidence_references,
+            # 재시도 없이 잰다. Runtime은 계약 위반을 한 번 더 물어 넘기지만, 여기서 그것을 섞으면
+            # "모델이 얼마나 자주 계약을 어기는가"를 더는 셀 수 없다 — 그 빈도가 이 도구의 관측치다.
+            attempts=1,
         )
     document = case.resource_document
     view = AwsResourceView(

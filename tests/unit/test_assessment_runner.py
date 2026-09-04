@@ -1,11 +1,17 @@
 """Assessment runner rejects model output that escapes its Policy Context."""
 
 import unittest
+from dataclasses import replace
 
-from apps.backend.assessment import AssessmentRunner, EvaluationContractError
+from apps.backend.assessment import (
+    AssessmentRunner,
+    BedrockEvaluationError,
+    EvaluationContractError,
+)
 from apps.backend.policy import PolicyContext
 from packages.contracts import (
     AssessmentPhase,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -83,6 +89,92 @@ def result(rule_id: str = "S3-001") -> EvaluationResult:
         rubric_version="mvp-v1",
         model_profile_id=MODEL_PROFILE.model_profile_id,
     )
+
+
+def two_rule_context() -> PolicyContext:
+    base = context()
+    second = replace(base.rules[0], rule_id="S3-002")
+    return replace(base, rules=(base.rules[0], second))
+
+
+class FailingEvaluator:
+    """Fails the first rule, answers the second. Mirrors one bad model response in a batch."""
+
+    perspective = EvaluationPerspective.IAC
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def evaluate(self, *, resource_id, rule, context, model_profile):
+        self.calls += 1
+        if rule.rule_id == "S3-001":
+            raise self.error
+        return replace(result(), rule_id=rule.rule_id)
+
+
+class OneFailedCoordinateTest(unittest.TestCase):
+    """한 좌표의 실패가 나머지를 버리지 않는다 — 라이브에서 48h 동안 38,899회 실패한 그 고리다."""
+
+    def test_a_failed_coordinate_becomes_execution_error_and_the_rest_survive(self) -> None:
+        evaluator = FailingEvaluator(BedrockEvaluationError("evidence reference is outside"))
+
+        outcomes = AssessmentRunner(evaluator).evaluate_resource(
+            resource_id="bucket-001", context=two_rule_context(), model_profile=MODEL_PROFILE
+        )
+
+        self.assertEqual(evaluator.calls, 2)
+        failed, judged = outcomes
+        self.assertIs(failed.status, EvaluationStatus.EXECUTION_ERROR)
+        self.assertIs(failed.perspective, EvaluationPerspective.IAC)
+        self.assertIs(failed.decided_by, DecisionSource.CODE)
+        self.assertEqual(failed.evidence_references, ())
+        self.assertIs(judged.status, EvaluationStatus.PASS)
+
+    def test_the_recorded_reason_names_the_failure_kind_not_the_rejected_value(self) -> None:
+        """거부한 locator를 결과에 실으면 지어낸 값을 그대로 저장하는 셈이다."""
+        evaluator = FailingEvaluator(
+            BedrockEvaluationError("outside approved evidence: resource_document:main.tf#L26")
+        )
+
+        failed = AssessmentRunner(evaluator).evaluate_resource(
+            resource_id="bucket-001", context=two_rule_context(), model_profile=MODEL_PROFILE
+        )[0]
+
+        self.assertIn("BedrockEvaluationError", failed.rationale)
+        self.assertNotIn("resource_document", failed.rationale)
+
+    def test_a_wiring_error_is_not_swallowed(self) -> None:
+        """`TypeError`는 배선 오류다. 그것을 EXECUTION_ERROR로 덮으면 버그가 결과로 저장된다."""
+        with self.assertRaises(TypeError):
+            AssessmentRunner(
+                FailingEvaluator(TypeError("evaluator is misconfigured"))
+            ).evaluate_resource(
+                resource_id="bucket-001", context=two_rule_context(), model_profile=MODEL_PROFILE
+            )
+
+    def test_without_a_known_perspective_the_failure_propagates(self) -> None:
+        """어느 관점의 실패인지 말할 수 없으면 결과를 지어내지 않는다."""
+
+        class Anonymous(FailingEvaluator):
+            perspective = None
+
+        with self.assertRaises(BedrockEvaluationError):
+            AssessmentRunner(Anonymous(BedrockEvaluationError("no"))).evaluate_resource(
+                resource_id="bucket-001", context=two_rule_context(), model_profile=MODEL_PROFILE
+            )
+
+    def test_an_explicit_perspective_overrides_the_evaluator(self) -> None:
+        class Anonymous(FailingEvaluator):
+            perspective = None
+
+        failed = AssessmentRunner(
+            Anonymous(BedrockEvaluationError("no")), perspective=EvaluationPerspective.AWS_ACTUAL
+        ).evaluate_resource(
+            resource_id="bucket-001", context=two_rule_context(), model_profile=MODEL_PROFILE
+        )[0]
+
+        self.assertIs(failed.perspective, EvaluationPerspective.AWS_ACTUAL)
 
 
 class AssessmentRunnerTest(unittest.TestCase):

@@ -41,6 +41,7 @@ from apps.backend.policy.control_catalog import (
 from apps.backend.policy.evidence_paths import missing_document_paths
 from packages.contracts import (
     DecisionSource,
+    EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     GovernanceControl,
@@ -86,6 +87,11 @@ class ActualBedrockEvaluator:
     @property
     def resource_type(self) -> str:
         return self._evidence_loader.resource_type
+
+    @property
+    def perspective(self) -> EvaluationPerspective:
+        """Every result of this evaluator is an Actual judgment, however it was reached."""
+        return EvaluationPerspective.AWS_ACTUAL
 
     def evaluate(
         self,

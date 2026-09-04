@@ -53,6 +53,10 @@ def governance_resource_id(repository_id: str) -> str:
 class ManualReviewEvaluator:
     """Produce the MANUAL_REVIEW result for one approved MANUAL Rule, calling nothing."""
 
+    @property
+    def perspective(self) -> EvaluationPerspective:
+        return EvaluationPerspective.MANUAL
+
     def evaluate(
         self,
         *,

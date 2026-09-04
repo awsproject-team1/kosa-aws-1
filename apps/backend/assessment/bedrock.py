@@ -26,6 +26,10 @@ class BedrockEvaluationError(ValueError):
     """Raised when a model response is not a safe structured evaluation."""
 
 
+#: 한 좌표에 허용하는 모델 호출 횟수. 형식 실패에만 두 번째가 있다(`_judged`).
+_MODEL_ATTEMPTS = 2
+
+
 class BedrockConverseClient(Protocol):
     """Minimal provider boundary; the Lambda runtime supplies the regional client."""
 
@@ -47,9 +51,12 @@ class BedrockStructuredEvaluator:
         perspective: EvaluationPerspective,
         resource_document: Mapping[str, object],
         evidence_references: tuple[str, ...],
+        attempts: int = _MODEL_ATTEMPTS,
     ) -> None:
         if client is None:
             raise TypeError("client is required")
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
+            raise ValueError("attempts must be a positive integer")
         if not isinstance(perspective, EvaluationPerspective):
             raise TypeError("perspective must be an EvaluationPerspective")
         if not isinstance(resource_document, Mapping):
@@ -62,6 +69,18 @@ class BedrockStructuredEvaluator:
         self._evidence_references = _unique_non_empty_strings(
             evidence_references, "evidence_references"
         )
+        # 계측기는 `attempts=1`로 만들어 모델의 **날것** 계약 위반 빈도를 잰다. Runtime이 삼킨
+        # 재시도를 측정에 섞으면 "얼마나 자주 어기는가"를 더는 알 수 없다.
+        self._attempts = attempts
+
+    @property
+    def perspective(self) -> EvaluationPerspective:
+        """The perspective every result of this evaluator carries.
+
+        `AssessmentRunner`가 실패한 좌표의 `EXECUTION_ERROR`를 만들 때 필요하다 — 어느 관점의
+        실패인지 말할 수 없으면 결과를 만들지 않는다.
+        """
+        return self._perspective
 
     def evaluate(
         self,
@@ -91,25 +110,9 @@ class BedrockStructuredEvaluator:
             ),
             "allowed evidence reference",
         )
-        response = self._client.converse(
-            modelId=model_profile.model_id,
-            system=[{"text": _SYSTEM_PROMPT}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": self._request_body(resource_id, rule, context, allowed_evidence)}
-                    ],
-                }
-            ],
-            inferenceConfig={"temperature": 0, "maxTokens": 1024},
+        status, score, rationale, evidence = self._judged(
+            resource_id, rule, context, allowed_evidence, model_profile
         )
-        output = _response_object(response)
-        status = _status(output.get("status"))
-        _score(output.get("score"))  # 계약 검증만 한다. 값은 status가 정한다.
-        score = _normalized_score(status)
-        rationale = _non_empty_string(output.get("rationale"), "rationale")
-        evidence = _response_evidence(output.get("evidence_references"), allowed_evidence)
         return EvaluationResult(
             resource_id=resource_id,
             rule_id=rule.rule_id,
@@ -125,6 +128,62 @@ class BedrockStructuredEvaluator:
             scoring_mode=ScoringMode.CONTINUOUS,
             decided_by=DecisionSource.MODEL,
         )
+
+    def _judged(
+        self,
+        resource_id: str,
+        rule: PolicyRule,
+        context: PolicyContext,
+        allowed_evidence: tuple[str, ...],
+        model_profile: ModelProfile,
+    ) -> tuple[EvaluationStatus, float, str, tuple[str, ...]]:
+        """Ask the model, and ask once more when its answer breaks the output contract.
+
+        **왜 재시도인가.** 모델 응답이 계약을 어기는 것은 판정이 아니라 형식 실패다. 라이브에서
+        가장 잦은 형태는 근거 인용이다 — 모델이 prompt의 필드명을 locator namespace로 착각해
+        `resource_document:main.tf#L26-L30`처럼 적고, 근거 게이트가 응답 전체를 거부한다
+        (`docs/evaluations/data/score-validity-20260905.md` §4: 12회 중 2회). 게이트를 무르게 해서
+        통과시키는 선택지는 없다 — 그것은 모델이 지어낸 근거를 받아들이는 길이다.
+
+        같은 입력에 대해 이 모델은 실행마다 다르게 답한다(temperature 0에서도). 그래서 한 번 더
+        묻는다. 두 번째도 어기면 그것은 이 좌표의 실패이고, 호출자가 `EXECUTION_ERROR`로 남긴다.
+
+        재시도는 판정을 바꾸지 않는다 — 계약을 만족한 첫 응답은 그대로 쓴다. "마음에 드는 답이
+        나올 때까지 다시 묻기"가 되지 않도록 형식 실패에만, 한 번만 한다.
+        """
+        last: BedrockEvaluationError | None = None
+        for _ in range(self._attempts):
+            response = self._client.converse(
+                modelId=model_profile.model_id,
+                system=[{"text": _SYSTEM_PROMPT}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "text": self._request_body(
+                                    resource_id, rule, context, allowed_evidence
+                                )
+                            }
+                        ],
+                    }
+                ],
+                inferenceConfig={"temperature": 0, "maxTokens": 1024},
+            )
+            try:
+                output = _response_object(response)
+                status = _status(output.get("status"))
+                _score(output.get("score"))  # 계약 검증만 한다. 값은 status가 정한다.
+                return (
+                    status,
+                    _normalized_score(status),
+                    _non_empty_string(output.get("rationale"), "rationale"),
+                    _response_evidence(output.get("evidence_references"), allowed_evidence),
+                )
+            except BedrockEvaluationError as error:
+                last = error
+        assert last is not None  # 루프는 성공 반환이나 예외 저장 없이 끝나지 않는다.
+        raise last
 
     def _request_body(
         self,
