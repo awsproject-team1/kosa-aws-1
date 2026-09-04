@@ -8,6 +8,7 @@ on:
       - "infrastructure/parameters/**"
       - "tests/security/test_cloudformation_security.py"
       - ".github/workflows/deploy-m0-foundation.yml"
+      - ".github/workflows/deploy-frontend.yml"
       - ".github/workflows/m0-lambda-package.yml"
       - "scripts/package-m0-lambda.sh"
       - "requirements-dev.txt"

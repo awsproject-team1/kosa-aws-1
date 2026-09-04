@@ -1,0 +1,219 @@
+name: Deploy Frontend SPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub Environment allowed to publish the SPA
+        required: true
+        default: customer-sandbox-deploy
+        type: environment
+      project_name:
+        description: ProjectName used by the frontend and foundation stacks
+        required: true
+        default: kosa-governance
+        type: string
+      stack_environment:
+        description: Short stack Environment value
+        required: true
+        default: sandbox
+        type: string
+      aws_region:
+        description: AWS Region containing the API and Cognito resources
+        required: true
+        default: us-east-1
+        type: string
+      spa_bucket_name:
+        description: Exact private S3 origin bucket
+        required: true
+        type: string
+      distribution_id:
+        description: Exact CloudFront distribution ID
+        required: true
+        type: string
+      api_base_url:
+        description: Public API Gateway base URL compiled into the SPA
+        required: true
+        type: string
+      cognito_domain:
+        description: Public Cognito Hosted UI domain compiled into the SPA
+        required: true
+        type: string
+      cognito_client_id:
+        description: Public Cognito app client ID compiled into the SPA
+        required: true
+        type: string
+      console_url:
+        description: Exact CloudFront HTTPS origin used as OAuth redirect and post-deploy probe
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_sha256: ${{ steps.package.outputs.artifact_sha256 }}
+      index_sha256: ${{ steps.package.outputs.index_sha256 }}
+    env:
+      VITE_API_BASE_URL: ${{ inputs.api_base_url }}
+      VITE_COGNITO_DOMAIN: ${{ inputs.cognito_domain }}
+      VITE_COGNITO_CLIENT_ID: ${{ inputs.cognito_client_id }}
+      VITE_COGNITO_REDIRECT_URI: ${{ inputs.console_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v24.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm --prefix apps/frontend ci
+
+      - name: Build production SPA
+        run: npm --prefix apps/frontend run build
+
+      - name: Package immutable frontend artifact
+        id: package
+        run: |
+          set -euo pipefail
+          tar -C apps/frontend/dist -czf "${RUNNER_TEMP}/frontend.tgz" .
+          artifact_sha256=$(sha256sum "${RUNNER_TEMP}/frontend.tgz" | cut -d ' ' -f1)
+          index_sha256=$(sha256sum apps/frontend/dist/index.html | cut -d ' ' -f1)
+          echo "artifact_sha256=${artifact_sha256}" >> "${GITHUB_OUTPUT}"
+          echo "index_sha256=${index_sha256}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Frontend artifact awaiting deployment approval"
+            echo "- Commit SHA: \`${GITHUB_SHA}\`"
+            echo "- Artifact SHA-256: \`${artifact_sha256}\`"
+            echo "- index.html SHA-256: \`${index_sha256}\`"
+            echo "- Target bucket: \`${{ inputs.spa_bucket_name }}\`"
+            echo "- CloudFront distribution: \`${{ inputs.distribution_id }}\`"
+            echo "- Console URL: \`${{ inputs.console_url }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Store frontend artifact for the approval-gated job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-${{ github.sha }}
+          path: ${{ runner.temp }}/frontend.tgz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_NAME: ${{ inputs.project_name }}
+      STACK_ENVIRONMENT: ${{ inputs.stack_environment }}
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+      AWS_REGION: ${{ inputs.aws_region }}
+      SPA_BUCKET_NAME: ${{ inputs.spa_bucket_name }}
+      DISTRIBUTION_ID: ${{ inputs.distribution_id }}
+      API_BASE_URL: ${{ inputs.api_base_url }}
+      COGNITO_DOMAIN: ${{ inputs.cognito_domain }}
+      COGNITO_CLIENT_ID: ${{ inputs.cognito_client_id }}
+      CONSOLE_URL: ${{ inputs.console_url }}
+      EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
+      ARTIFACT_SHA256: ${{ needs.prepare.outputs.artifact_sha256 }}
+      INDEX_SHA256: ${{ needs.prepare.outputs.index_sha256 }}
+    steps:
+      - name: Download approved frontend artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: frontend-${{ github.sha }}
+          path: ${{ runner.temp }}/frontend-artifact
+
+      - name: Validate protected deployment target
+        id: target
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
+          [[ "${PROJECT_NAME}" =~ ^[a-z][a-z0-9-]{2,40}$ ]]
+          [[ "${STACK_ENVIRONMENT}" =~ ^[a-z][a-z0-9-]{1,7}$ ]]
+          [[ "${DISTRIBUTION_ID}" =~ ^[A-Z0-9]{13,14}$ ]]
+          test "${SPA_BUCKET_NAME}" = "${PROJECT_NAME}-${STACK_ENVIRONMENT}-frontend-${EXPECTED_AWS_ACCOUNT_ID}"
+          test "${COGNITO_DOMAIN}" = "${PROJECT_NAME}-${STACK_ENVIRONMENT}-${EXPECTED_AWS_ACCOUNT_ID}.auth.${AWS_REGION}.amazoncognito.com"
+          [[ "${COGNITO_CLIENT_ID}" =~ ^[a-z0-9]{26}$ ]]
+          [[ "${API_BASE_URL}" =~ ^https://[a-z0-9]+\.execute-api\.${AWS_REGION}\.amazonaws\.com/?$ ]]
+          [[ "${CONSOLE_URL}" =~ ^https://[a-z0-9]+\.cloudfront\.net/?$ ]]
+          [[ "${ARTIFACT_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${INDEX_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          role_arn="arn:aws:iam::${EXPECTED_AWS_ACCOUNT_ID}:role/${PROJECT_NAME}-${STACK_ENVIRONMENT}-frontend-deploy"
+          echo "role_arn=${role_arn}" >> "${GITHUB_OUTPUT}"
+
+          actual_sha256=$(sha256sum "${RUNNER_TEMP}/frontend-artifact/frontend.tgz" | cut -d ' ' -f1)
+          test "${actual_sha256}" = "${ARTIFACT_SHA256}"
+          mkdir "${RUNNER_TEMP}/frontend-dist"
+          tar -C "${RUNNER_TEMP}/frontend-dist" -xzf "${RUNNER_TEMP}/frontend-artifact/frontend.tgz"
+          test "$(sha256sum "${RUNNER_TEMP}/frontend-dist/index.html" | cut -d ' ' -f1)" = "${INDEX_SHA256}"
+
+      - name: Configure frontend deployment credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ steps.target.outputs.role_arn }}
+          role-session-name: frontend-spa-deploy
+          allowed-account-ids: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Verify approved account and private origin
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "${EXPECTED_AWS_ACCOUNT_ID}"
+          aws s3api get-bucket-location \
+            --bucket "${SPA_BUCKET_NAME}" \
+            --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+            >/dev/null
+
+      - name: Publish SPA and remove stale assets
+        run: |
+          set -euo pipefail
+          aws s3 sync "${RUNNER_TEMP}/frontend-dist/" "s3://${SPA_BUCKET_NAME}/" \
+            --delete \
+            --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp "${RUNNER_TEMP}/frontend-dist/index.html" "s3://${SPA_BUCKET_NAME}/index.html" \
+            --content-type text/html \
+            --cache-control "no-cache,no-store,must-revalidate"
+          aws s3api get-object \
+            --bucket "${SPA_BUCKET_NAME}" \
+            --key index.html \
+            --expected-bucket-owner "${EXPECTED_AWS_ACCOUNT_ID}" \
+            "${RUNNER_TEMP}/published-index.html" \
+            >/dev/null
+          test "$(sha256sum "${RUNNER_TEMP}/published-index.html" | cut -d ' ' -f1)" = "${INDEX_SHA256}"
+
+      - name: Invalidate CloudFront and verify the published index
+        run: |
+          set -euo pipefail
+          invalidation_id=$(aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths '/*' \
+            --query Invalidation.Id \
+            --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --id "${invalidation_id}"
+          curl --fail --silent --show-error --location \
+            "${CONSOLE_URL%/}/?deployment=${GITHUB_SHA}" \
+            --output "${RUNNER_TEMP}/cloudfront-index.html"
+          test "$(sha256sum "${RUNNER_TEMP}/cloudfront-index.html" | cut -d ' ' -f1)" = "${INDEX_SHA256}"
+          {
+            echo "### Frontend deployment complete"
+            echo "- Commit SHA: \`${GITHUB_SHA}\`"
+            echo "- Artifact SHA-256: \`${ARTIFACT_SHA256}\`"
+            echo "- CloudFront invalidation: \`${invalidation_id}\`"
+            echo "- Console URL: ${CONSOLE_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"

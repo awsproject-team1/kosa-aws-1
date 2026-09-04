@@ -29,6 +29,10 @@ _DERIVED_PARAMETERS = {
     "LangGraphLayerS3Key",  # prepare-artifact job output
     "LangGraphLayerS3ObjectVersion",  # prepare-artifact job output
     "AssessmentScopeJson",  # workflow_dispatch input
+    "FrontendSpaBucketName",  # protected Environment variable
+    "FrontendDistributionId",  # protected Environment variable
+    "FrontendDeploymentEnvironment",  # artifact approval Environment input
+    "GitHubOidcSubjectPrefix",  # github.repository
 }
 
 
@@ -67,6 +71,15 @@ class DeployWorkflowParameterCoverageTest(unittest.TestCase):
             with self.subTest(guard=guard):
                 # 실패 메시지에 워크플로 전문을 싣지 않는다.
                 self.assertTrue(guard in text, f"deploy workflow does not guard: {guard}")
+
+    def test_the_frontend_target_pair_is_validated_before_cloudformation(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        for guard in (
+            "FRONTEND_SPA_BUCKET_NAME is required alongside",
+            "FRONTEND_DISTRIBUTION_ID is required alongside",
+        ):
+            with self.subTest(guard=guard):
+                self.assertIn(guard, text)
 
     def test_credentials_come_from_oidc_not_static_keys(self) -> None:
         """배포는 OIDC로 role을 assume한다. 장기 access key는 어디에도 없다."""

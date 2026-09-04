@@ -143,6 +143,40 @@ class CloudFormationSecurityTest(unittest.TestCase):
         self.assertEqual(table["UpdateReplacePolicy"], "Retain")
         self.assertTrue(_properties(table)["DeletionProtectionEnabled"])
 
+    def test_frontend_deployment_role_is_oidc_and_target_scoped(self) -> None:
+        role = self.resources["FrontendDeploymentRole"]
+        self.assertEqual(role["Condition"], "FrontendDeploymentEnabled")
+        properties = _properties(role)
+        trust = properties["AssumeRolePolicyDocument"]["Statement"][0]
+        self.assertEqual(trust["Action"], "sts:AssumeRoleWithWebIdentity")
+        self.assertEqual(
+            trust["Principal"]["Federated"],
+            "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com",
+        )
+        self.assertEqual(
+            trust["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"],
+            "${GitHubOidcSubjectPrefix}:environment:${FrontendDeploymentEnvironment}",
+        )
+
+        statements = properties["Policies"][0]["PolicyDocument"]["Statement"]
+        by_sid = {statement["Sid"]: statement for statement in statements}
+        self.assertEqual(
+            set(by_sid),
+            {"InspectFrontendBucket", "PublishFrontendObjects", "InvalidateApprovedDistribution"},
+        )
+        self.assertEqual(
+            by_sid["InspectFrontendBucket"]["Resource"],
+            "arn:${AWS::Partition}:s3:::${FrontendSpaBucketName}",
+        )
+        self.assertEqual(
+            by_sid["PublishFrontendObjects"]["Resource"],
+            "arn:${AWS::Partition}:s3:::${FrontendSpaBucketName}/*",
+        )
+        self.assertEqual(
+            by_sid["InvalidateApprovedDistribution"]["Resource"],
+            "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistributionId}",
+        )
+
     def test_artifact_bucket_enforces_private_versioned_encrypted_storage(self) -> None:
         bucket = self.resources["ArtifactBucket"]
         properties = _properties(bucket)

@@ -280,6 +280,10 @@ jobs:
       # Cognito Hosted UI 콜백. 기본값은 localhost이므로 배포된 SPA로 로그인하려면 지정해야 한다.
       FRONTEND_CALLBACK_URL: ${{ vars.FRONTEND_CALLBACK_URL }}
       FRONTEND_LOGOUT_URL: ${{ vars.FRONTEND_LOGOUT_URL }}
+      FRONTEND_SPA_BUCKET_NAME: ${{ vars.FRONTEND_SPA_BUCKET_NAME }}
+      FRONTEND_DISTRIBUTION_ID: ${{ vars.FRONTEND_DISTRIBUTION_ID }}
+      FRONTEND_DEPLOYMENT_ENVIRONMENT: ${{ inputs.artifact_approval_environment }}
+      GITHUB_OIDC_SUBJECT_PREFIX: repo:${{ github.repository }}
       EXPECTED_AWS_ACCOUNT_ID: ${{ vars.EXPECTED_AWS_ACCOUNT_ID }}
     steps:
       - name: Check out approved repository revision
@@ -303,6 +307,14 @@ jobs:
               || { echo "DEPLOYMENT_RUNTIME_JSON is required alongside DEPLOYMENT_GITHUB_SECRET_ARNS"; exit 1; }
             test -n "${DEPLOYMENT_GITHUB_SECRET_ARNS}" \
               || { echo "DEPLOYMENT_GITHUB_SECRET_ARNS is required alongside DEPLOYMENT_RUNTIME_JSON"; exit 1; }
+          fi
+          if [[ -n "${FRONTEND_SPA_BUCKET_NAME}" || -n "${FRONTEND_DISTRIBUTION_ID}" ]]; then
+            test -n "${FRONTEND_SPA_BUCKET_NAME}" \
+              || { echo "FRONTEND_SPA_BUCKET_NAME is required alongside FRONTEND_DISTRIBUTION_ID"; exit 1; }
+            test -n "${FRONTEND_DISTRIBUTION_ID}" \
+              || { echo "FRONTEND_DISTRIBUTION_ID is required alongside FRONTEND_SPA_BUCKET_NAME"; exit 1; }
+            test "${FRONTEND_SPA_BUCKET_NAME}" = "${PROJECT_NAME}-${STACK_ENVIRONMENT}-frontend-${EXPECTED_AWS_ACCOUNT_ID}"
+            [[ "${FRONTEND_DISTRIBUTION_ID}" =~ ^[A-Z0-9]{13,14}$ ]]
           fi
 
       - name: Validate assessment deployment configuration
@@ -369,6 +381,10 @@ jobs:
               "PolicyAuthoringModelProfileJson=${POLICY_AUTHORING_MODEL_PROFILE_JSON}" \
               "FrontendCallbackUrl=${FRONTEND_CALLBACK_URL:-http://localhost:5173}" \
               "FrontendLogoutUrl=${FRONTEND_LOGOUT_URL:-http://localhost:5173}" \
+              "FrontendSpaBucketName=${FRONTEND_SPA_BUCKET_NAME}" \
+              "FrontendDistributionId=${FRONTEND_DISTRIBUTION_ID}" \
+              "FrontendDeploymentEnvironment=${FRONTEND_DEPLOYMENT_ENVIRONMENT}" \
+              "GitHubOidcSubjectPrefix=${GITHUB_OIDC_SUBJECT_PREFIX}" \
             --no-fail-on-empty-changeset
 
       - name: Diagnose failed CloudFormation deployment
