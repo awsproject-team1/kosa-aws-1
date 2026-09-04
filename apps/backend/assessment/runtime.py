@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Protocol
 
 from agent.context import AssessmentInputCollector, AwsResourceSelector, SnapshotReadRequest
-from agent.runtime import AwsResourceTool, GitHubRestSnapshotTool, build_actual_resource_tool
+from agent.runtime import (
+    AwsResourceTool,
+    GitHubAppTokenProvider,
+    GitHubRestSnapshotTool,
+    build_actual_resource_tool,
+)
 from apps.backend.assessment import (
     ActualBedrockEvaluator,
     ActualEvidenceLoader,
@@ -457,8 +462,12 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
             customer_id=target.customer_id,
             repository_id=target.repository_id,
             repository_full_name=target.github_repository,
-            token_provider=lambda secrets=secrets, secret_id=target.github_token_secret_id: (
-                _secret_string(secrets, secret_id)
+            # 저장된 자격이 App private key면 여기서 installation token을 발급한다. 예전처럼
+            # token이 들어 있으면 그대로 쓴다 — secret 교체와 배포가 서로를 기다리지 않는다.
+            token_provider=GitHubAppTokenProvider(
+                secret_reader=lambda secrets=secrets, secret_id=target.github_token_secret_id: (
+                    _secret_string(secrets, secret_id)
+                )
             ),
         )
         aws = _actual_resource_tool(

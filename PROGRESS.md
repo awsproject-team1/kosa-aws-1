@@ -2,6 +2,21 @@
 
 ## Current
 
+- **GitHub installation token을 worker가 스스로 발급한다 (2026-09-04).** 지금까지 Secrets Manager에는
+  1시간짜리 token이 들어 있었고, 만료되면 worker가 `LOAD_IAC`에서 401로 죽었다 — 평가를 돌릴 때마다
+  사람이 재발급해 넣어야 했다. 자격의 정체를 token에서 **App private key**로 바꿔, 필요할 때
+  worker가 발급하고 만료 5분 전까지 재사용한다.
+  - **표준 라이브러리만 쓴다.** 함수 ZIP은 third-party 의존성을 갖지 않고(결정적 빌드의 전제),
+    배포된 Lambda Layer에도 `cryptography`가 없다(top-level 패키지 76개를 실제로 확인). RS256은
+    결정적인 RSA PKCS#1 v1.5 서명이므로 `pow`와 `hashlib`로 충분하다. 서명이 참조 구현과 같은지는
+    **openssl이 만든 서명과 바이트로 대조**해 고정했다(PKCS#1·PKCS#8 두 모양 모두).
+  - **호출자 계약은 그대로다.** `token_provider: Callable[[], str]` 하나만 바뀌므로 조립 지점 다섯
+    곳(api·assessment·remediation·deployment×2)이 같은 provider를 쓴다.
+  - **secret은 두 모양을 모두 읽는다.** 예전처럼 token 문자열이 들어 있으면 그대로 쓴다. 단
+    **배포가 secret 교체보다 먼저**여야 한다 — 예전 코드는 자격 JSON을 token으로 착각해 401을 낸다.
+  - **더 단단하게 하려면** private key를 KMS에 두고 `kms:Sign`을 쓴다. key가 Secrets Manager를
+    떠나지 않고 서명이 CloudTrail에 남는다. 이 모듈의 서명 함수 하나를 바꾸는 후속 작업이다.
+
 - **`internal-cloud-security-standard.md` 기반 평가가 실제로 되는지 확인하다 런타임 결함 둘을 찾아
   고쳤다 (2026-09-04).** `profile@v1`(자동 평가 Rule 9 + MANUAL 1)로 만든 Assessment가 결과 0건으로
   QUEUED에 멈춰 있었다.

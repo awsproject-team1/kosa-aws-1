@@ -84,7 +84,17 @@ patch 생성까지 라이브 폐루프를 완주**했다.
 - slug `awsproject-team1-kosa-reader`, **App ID 4813609**, **installation 158679675**
 - `awsproject-team1/test`에만 설치. perms: contents:write, pull_requests:write, metadata:read.
 - private key: 로컬 `./awsproject-team1-kosa-reader.2026-09-02.private-key.pem` (**gitignore, 저장소에 없음** — 보관자에게 요청).
-- installation token은 **1시간 만료**. 재발급(private key 필요):
+- **(2026-09-04부터) worker가 token을 스스로 발급한다.** secret
+  `kosa-governance-sandbox/m1/github-token`에 token 대신 App 자격 JSON을 넣는다:
+  ```json
+  {"app_id":"4813609","installation_id":"158679675","private_key":"-----BEGIN RSA PRIVATE KEY-----\n..."}
+  ```
+  `GitHubAppTokenProvider`가 이 자격을 읽어 App JWT를 만들고 installation token을 받아
+  만료 5분 전까지 재사용한다. 서명은 표준 라이브러리만으로 한다(함수 ZIP은 third-party
+  의존성을 갖지 않고 Layer에도 `cryptography`가 없다). secret에 예전처럼 token 문자열이
+  들어 있으면 그대로 쓰므로, secret 교체와 배포 순서는 자유롭다 — 단 **배포가 먼저**여야
+  한다. 예전 코드는 JSON을 token으로 착각해 401을 낸다.
+- 아래는 사람이 직접 발급하던 예전 절차다. token은 **1시간 만료**:
   ```bash
   APP_ID=4813609; INSTALL_ID=158679675; PEM=./awsproject-team1-kosa-reader.2026-09-02.private-key.pem
   b64url(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }

@@ -583,6 +583,7 @@ class ConfiguredDeploymentCommitResolver:
     def resolve_default_branch_commit(
         self, *, customer_id: str, repository_id: str, patch: object
     ) -> str | None:
+        from agent.runtime.github_app_token import GitHubAppTokenProvider
         from agent.runtime.live_deployment_commit_resolver import LiveDeploymentCommitResolver
 
         target = self._configuration.resolve(customer_id=customer_id, repository_id=repository_id)
@@ -590,7 +591,9 @@ class ConfiguredDeploymentCommitResolver:
             customer_id=target.customer_id,
             repository_id=target.repository_id,
             repository_full_name=target.repository_full_name,
-            token_provider=lambda: _secret_value(target.github_token_secret_id),
+            token_provider=GitHubAppTokenProvider(
+                secret_reader=lambda: _secret_value(target.github_token_secret_id)
+            ),
         )
         return resolver.resolve_default_branch_commit(
             customer_id=customer_id, repository_id=repository_id, patch=patch

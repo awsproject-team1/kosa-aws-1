@@ -25,6 +25,7 @@ import json
 import os
 from collections.abc import Mapping
 
+from agent.runtime.github_app_token import GitHubAppTokenProvider
 from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
 from agent.runtime.github_tool import IaCDocumentReader
 from agent.runtime.live_github_write_tool import LiveGitHubWriteTool
@@ -167,7 +168,9 @@ def _iac_document_reader(boto3: object, target: DeploymentTarget) -> IaCDocument
         customer_id=target.customer_id,
         repository_id=target.repository_id,
         repository_full_name=target.repository_full_name,
-        token_provider=lambda: _secret_string(secrets, target.github_token_secret_id),
+        token_provider=GitHubAppTokenProvider(
+            secret_reader=lambda: _secret_string(secrets, target.github_token_secret_id)
+        ),
     )
 
 
@@ -194,7 +197,9 @@ def _pull_request_action_for(
         customer_id=target.customer_id,
         repository_id=target.repository_id,
         repository_full_name=target.repository_full_name,
-        token_provider=lambda: _secret_string(secrets, target.github_token_secret_id),
+        token_provider=GitHubAppTokenProvider(
+            secret_reader=lambda: _secret_string(secrets, target.github_token_secret_id)
+        ),
     )
     return PatchPullRequestAction(
         writer=writer, content_store=content_store, iac_documents=iac_documents

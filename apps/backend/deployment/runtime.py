@@ -39,6 +39,7 @@ from agent.runtime.actual_resource_tool_factory import (
     ClientFactoryProvider,
     build_actual_resource_tool,
 )
+from agent.runtime.github_app_token import GitHubAppTokenProvider
 from agent.runtime.live_deployment_ports import (
     LiveActualRereadPort,
     LiveApplyDispatchPort,
@@ -172,8 +173,11 @@ def _live_worker(
         raise DeploymentRuntimeError("live deployment worker requires exactly one approved target")
     target = targets[0]
 
-    def github_token() -> str:
-        return secret_reader(target.github_token_secret_id)
+    # 하나의 provider를 두 소비자가 공유한다. 발급한 token을 그 실행 안에서 재사용하려면
+    # 인스턴스가 하나여야 한다.
+    github_token = GitHubAppTokenProvider(
+        secret_reader=lambda: secret_reader(target.github_token_secret_id)
+    )
 
     # Post-deploy verification re-reads Actual through the same routing tool the Assessment
     # Worker uses. Hardwiring one service adapter here would either refuse the target's other

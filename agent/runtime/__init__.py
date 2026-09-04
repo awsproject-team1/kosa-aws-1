@@ -31,6 +31,11 @@ from agent.runtime.aws_resource_tool import (
     require_read_operation,
     require_scope,
 )
+from agent.runtime.github_app_token import (
+    GitHubAppCredentials,
+    GitHubAppTokenError,
+    GitHubAppTokenProvider,
+)
 from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
 from agent.runtime.github_tool import (
     GitHubSnapshotNotFoundError,
@@ -106,6 +111,9 @@ __all__ = [
     "DeploymentPortScopeError",
     "EC2_INSTANCE_RESOURCE_TYPE",
     "GitHubSnapshotNotFoundError",
+    "GitHubAppCredentials",
+    "GitHubAppTokenError",
+    "GitHubAppTokenProvider",
     "GitHubRestSnapshotTool",
     "GitHubTool",
     "GitHubToolError",
