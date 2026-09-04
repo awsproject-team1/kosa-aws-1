@@ -94,6 +94,9 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 
 `GET .../candidates`는 `limit`(1–50)과 opaque `cursor`로 페이지네이션한다. 완결되지 않은 실행은
 상태와 provenance만 돌려주고 후보는 비운다 — 부분 결과를 전체로 착각한 승인을 막는다.
+관리자 콘솔은 `QUEUED`와 `PROCESSING`을 모두 진행 중 상태로 처리하고, `READY`가 된 뒤에는
+`cursor == null`이 될 때까지 모든 페이지를 읽는다. 승인 가능한 `candidates`, `unsupported`,
+`rejected`는 서로 다른 섹션으로 표시하며 첫 50건만 보여주고 나머지를 숨기지 않는다.
 
 후보 항목은 모델이 쓴 재진술(`requirement`, `requirement_summary`, `mapping_reason`), 매핑된
 Control과 실행 유형, evidence capability, 그리고 **서버가 만든** locator + `content_sha256`를

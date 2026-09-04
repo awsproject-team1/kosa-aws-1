@@ -1,13 +1,12 @@
 # Customer Policy Ingestion
 
-> Status: Partially implemented — 형식 allow-list, 정규화 Schema, 5개 형식 Parser, 승인 판정과
-> Profile publication 거부 규칙은 `apps/backend/policy/ingestion/`에 구현됐다 (B). A의 injected
-> upload-session/finalize/normalization/status storage boundary는 구현됐지만 public Lambda route,
-> 비동기 dispatcher, 후보 추출·approval/profile DynamoDB 배선은 아직 남아 있다.
+> Status: Implemented for the current M1 boundary — 형식 allow-list, 정규화 Schema와 5개 Parser,
+> customer-scoped upload/finalize/status 저장, public Lambda route, 비동기 후보 추출 Worker,
+> approval/profile DynamoDB 경로와 Assessment profile pin이 배선돼 있다. 관리자 콘솔은 완결된
+> 후보 결과를 끝 페이지까지 읽고 `CandidateReviewEntry`의 Rule·평가·근거 형식을 표시한다.
 >
-> Delivery gate: this boundary must be implemented and integration-tested before the service claims
-> that a customer can evaluate against an uploaded internal policy. 현재 `policies-local/`과
-> `fixtures/rules/`는 여전히 개발 seed이며 고객 업로드 경로가 아니다.
+> Boundary: “임의 문서”는 아래 allow-list의 지원 형식과 현재 Governance Control Catalog 범위 안을
+> 뜻한다. `policies-local/`과 `fixtures/rules/`는 개발 seed일 뿐 고객 업로드를 대체하지 않는다.
 >
 > Decision record: `docs/decisions/ADR-0015-customer-policy-ingestion.md`
 

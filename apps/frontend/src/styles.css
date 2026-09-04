@@ -121,7 +121,7 @@ body {
 .chat-input input:focus { border-color: var(--accent); }
 
 /* ---------- Generic panels / forms ---------- */
-.panel { max-width: 820px; margin: 24px; }
+.panel { max-width: 1080px; margin: 24px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 18px; }
 .card h2 { margin: 0 0 4px; font-size: 16px; }
 .card .hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
@@ -134,9 +134,39 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .alert { color: var(--err); font-size: 13px; }
 .status { color: var(--ok); font-size: 13px; }
-.candidate { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 8px; background: var(--panel-2); }
-.candidate label { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: 13px; }
-.badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+.candidate { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 10px; background: var(--panel-2); }
+.candidate-heading { display: flex; gap: 12px; align-items: flex-start; }
+.candidate-heading > input[type="checkbox"] { width: 17px; height: 17px; margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.candidate-heading-main { min-width: 0; flex: 1; }
+.candidate-heading-main h3 { margin: 9px 0 4px; font-size: 15px; line-height: 1.45; }
+.candidate-identity { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; align-items: baseline; }
+.candidate-identity > span { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.candidate-identity code { overflow-wrap: anywhere; }
+.candidate-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+.badge.severity { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.candidate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 12px 0 0; }
+.candidate-fields.compact { margin-left: 29px; }
+.candidate-field { min-width: 0; border-top: 1px solid var(--line); padding: 9px 0; }
+.candidate-field.wide { grid-column: 1 / -1; }
+.candidate-field dt { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px; }
+.candidate-field dd { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.candidate-field code { white-space: normal; overflow-wrap: anywhere; }
+.candidate-details { margin: 8px 0 0 29px; border-top: 1px solid var(--line); padding-top: 9px; }
+.candidate-details summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
+.candidate-values, .candidate-references { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 5px; }
+.candidate-references li { display: flex; flex-direction: column; gap: 3px; }
+.candidate-references span { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; overflow-wrap: anywhere; }
+.candidate-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0 20px; }
+.candidate-summary > span { display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 9px; }
+.candidate-summary strong { font-size: 15px; }
+.candidate-summary small { color: var(--muted); font-size: 10px; }
+.candidate-section { margin-top: 22px; }
+.candidate-section > h3 { margin: 0 0 10px; font-size: 13px; }
+.candidate.non-approvable { margin-left: 0; }
+.candidate.non-approvable.unsupported { border-left: 3px solid var(--warn); }
+.candidate.non-approvable.rejected { border-left: 3px solid var(--err); }
+.candidate.non-approvable .candidate-fields.compact { margin-left: 0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 9px; border-bottom: 1px solid var(--line); font-size: 13px; }
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
@@ -145,3 +175,10 @@ code { background: var(--panel-2); padding: 1px 6px; border-radius: 5px; font-si
 /* inline text-button: an action that reads as part of a sentence (session reset hint) */
 button.linklike { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
 .topbar button.ghost { padding: 5px 10px; font-size: 12px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer; }
+
+@media (max-width: 760px) {
+  .candidate-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .candidate-fields { grid-template-columns: 1fr; }
+  .candidate-field { grid-column: 1; }
+  .candidate-fields.compact, .candidate-details { margin-left: 0; }
+}

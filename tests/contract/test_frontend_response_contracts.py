@@ -30,6 +30,10 @@ _RESPONSE_CONTRACTS = {
     "Report": ("apps/backend/assessment/reporting.py", "AssessmentReport"),
     "UploadSession": ("apps/backend/api/policy_sources.py", "PolicySourceUploadSession"),
     "NormalizedDoc": ("packages/contracts/policy_ingestion.py", "NormalizedPolicyDocument"),
+    "SourceReference": ("packages/contracts/policy.py", "SourceReference"),
+    "ExtractedRequirement": ("packages/contracts/policy_authoring.py", "ExtractedRequirement"),
+    "Candidate": ("packages/contracts/policy_authoring.py", "CandidateReviewEntry"),
+    "RejectedRequirement": ("packages/contracts/policy_authoring.py", "RejectedRequirement"),
     "CandidatePage": ("apps/backend/api/policy_candidates.py", "PolicyCandidatePage"),
 }
 
@@ -115,6 +119,24 @@ class FrontendResponseContractTest(unittest.TestCase):
         """
         declared = set(re.findall(r"^type (\w+) = \{", self.source, flags=re.MULTILINE))
         self.assertLessEqual(set(_RESPONSE_CONTRACTS), declared)
+
+    def test_candidate_review_types_keep_the_complete_backend_shape(self) -> None:
+        """후보 검토 화면은 축약 카드가 아니라 이미 정의한 전체 검토 형식을 받아야 한다."""
+        for ts_type in (
+            "SourceReference",
+            "ExtractedRequirement",
+            "Candidate",
+            "RejectedRequirement",
+        ):
+            with self.subTest(response=ts_type):
+                self.assertEqual(
+                    _ts_type_fields(self.source, ts_type),
+                    _to_dict_keys(*_RESPONSE_CONTRACTS[ts_type]),
+                )
+
+    def test_candidate_polling_recognizes_every_non_terminal_status(self) -> None:
+        """PROCESSING을 완료로 오인하면 빈 결과가 최종 후보 화면으로 굳는다."""
+        self.assertIn('new Set(["QUEUED", "PROCESSING"])', self.source)
 
     def test_a_field_no_contract_emits_is_detected(self) -> None:
         """이 검사가 실제로 무언가를 잡는지 확인한다 (통과만 하는 검사가 아니다)."""
