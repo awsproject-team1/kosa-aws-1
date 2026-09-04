@@ -759,9 +759,35 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
 function ReportPanel({ session, assessmentId }: { session: Session; assessmentId: string }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api<Report>(`/assessments/${enc(assessmentId)}?limit=50`, session.accessToken).then(setRep).catch(e => setErr((e as Error).message)); }, [assessmentId, session.accessToken]);
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    // POST /assessments only queues the job (202); the worker writes the report record
+    // asynchronously, so an immediate GET returns 404 until it lands. Poll through the initial
+    // "not found yet" window instead of surfacing a 404 the user cannot act on.
+    let cancelled = false;
+    setRep(null); setErr(null); setWaiting(true);
+    (async () => {
+      for (let i = 0; i < 40 && !cancelled; i++) {
+        try {
+          const r = await api<Report>(`/assessments/${enc(assessmentId)}?limit=50`, session.accessToken);
+          if (!cancelled) { setRep(r); setWaiting(false); }
+          return;
+        } catch (e) {
+          const msg = (e as Error).message;
+          // Keep polling only while the report is not yet created; surface anything else.
+          if (!msg.includes("404") && !msg.includes("NOT_FOUND")) {
+            if (!cancelled) { setErr(msg); setWaiting(false); }
+            return;
+          }
+          await sleep(3000);
+        }
+      }
+      if (!cancelled) { setErr("평가 결과가 아직 준비되지 않았습니다. 잠시 후 다시 열어주세요."); setWaiting(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [assessmentId, session.accessToken]);
   if (err) return <div className="panel"><div className="card"><p className="alert">{err}</p></div></div>;
-  if (!rep) return <div className="panel"><div className="card"><p className="obs-empty">Assessment 결과를 불러오는 중…</p></div></div>;
+  if (!rep) return <div className="panel"><div className="card"><p className="obs-empty">{waiting ? "평가 실행 중… 결과를 기다리는 중입니다." : "Assessment 결과를 불러오는 중…"}</p></div></div>;
   return <div className="panel">
     <div className="card"><h2>Assessment 결과</h2>
       <div className="row"><span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations})</span><span>Readiness <strong>{rep.readiness_score?.score ?? "계산 대기"}</strong></span></div>
