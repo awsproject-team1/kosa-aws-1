@@ -32,6 +32,16 @@ class WorkflowDispatchError(RuntimeError):
     """Raised after a persisted Job is compensated following dispatch failure."""
 
 
+class OrchestrationUnavailableError(RuntimeError):
+    """Raised when the Parent Orchestrator cannot produce a decision for one turn.
+
+    This is not the caller's fault (their message parsed fine) and not a stored-state fault: the
+    upstream model call failed or returned a shape the router could not accept. It maps to 502 so
+    the client sees "the assistant is temporarily unavailable" and can retry, distinct from a 400
+    (bad request) or a 500 (an unclassified server bug we still want to surface loudly in logs).
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class PublicFailure:
     """HTTP status and public-safe error selected from one trusted mapping."""
@@ -81,6 +91,10 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(409, "CONFLICT", "The request conflicts with current state")
     if isinstance(error, (RepositoryError, WorkflowDispatchError)):
         return _failure(503, "EXECUTION_ERROR", "The service is temporarily unavailable")
+    if isinstance(error, OrchestrationUnavailableError):
+        return _failure(
+            502, "ORCHESTRATION_UNAVAILABLE", "The assistant could not process this request"
+        )
     return _failure(500, "EXECUTION_ERROR", "An internal error occurred")
 
 
