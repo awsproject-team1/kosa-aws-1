@@ -179,6 +179,75 @@ class BedrockPatchGeneratorTest(unittest.TestCase):
         )
         self.assertIn("terraform_files", client.calls[0]["system"][0]["text"])
 
+    def test_the_model_sees_the_control_and_the_attributes_the_plan_check_will_read(self) -> None:
+        """rationale만으로는 AWS 경로를 Terraform attribute로 혼자 번역해야 했다. 매핑은 Catalog에 있다."""
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        self.generator(client).generate(context=context(), decision=decision())
+        body = json.loads(client.calls[0]["messages"][0]["content"][0]["text"])
+        guidance = body["remediation_guidance"]
+        self.assertEqual(guidance["control"]["control_key"], "S3_BLOCK_PUBLIC_ACCESS")
+        self.assertEqual(
+            {check["attribute_path"] for check in guidance["plan_checks"]},
+            {
+                "block_public_acls",
+                "ignore_public_acls",
+                "block_public_policy",
+                "restrict_public_buckets",
+            },
+        )
+        self.assertTrue(
+            all(
+                check["terraform_resource_type"] == "aws_s3_bucket_public_access_block"
+                and check["expectation"] == "ALL_TRUE"
+                for check in guidance["plan_checks"]
+            )
+        )
+        self.assertIn("plan_checks", client.calls[0]["system"][0]["text"])
+        # legacy Rule에는 승인된 rubric이 없다. 없는 것을 지어내지 않는다.
+        self.assertNotIn("evaluation_rubric", guidance)
+
+    def test_an_approved_rule_lends_its_rubric_to_the_guidance(self) -> None:
+        from packages.contracts import (
+            AssessmentPhase,
+            PolicyRule,
+            RuleEvaluationType,
+            RuleSeverity,
+            SourceReference,
+        )
+
+        rule = PolicyRule(
+            rule_id="S3-PUBLIC-001",
+            version="2026-08-31",
+            title="Buckets block public access",
+            severity=RuleSeverity.CRITICAL,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=("AWS::S3::Bucket",),
+            source_references=(
+                SourceReference(
+                    source_id="p", source_version="v1", locator="p#1", content_sha256="x"
+                ),
+            ),
+            control_key="S3_BLOCK_PUBLIC_ACCESS",
+            control_catalog_version="governance-control-catalog/2026-09-05",
+            evaluation_type=RuleEvaluationType.AWS,
+            required_evidence=("S3.PUBLIC_ACCESS_BLOCK",),
+            evaluation_rubric="Fail when any block-public-access flag is false.",
+        )
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        generator = BedrockPatchGenerator(
+            client=client,
+            model_profile=REMEDIATION_PROFILE,
+            content_store=self.content_store,
+            iac_documents=iac_documents(),
+            rule_lookup=lambda rule_id, version: rule,
+        )
+        generator.generate(context=context(), decision=decision())
+        body = json.loads(client.calls[0]["messages"][0]["content"][0]["text"])
+        self.assertEqual(
+            body["remediation_guidance"]["evaluation_rubric"],
+            "Fail when any block-public-access flag is false.",
+        )
+
     def test_refuses_to_run_without_a_terraform_source_reader(self) -> None:
         client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
         generator = BedrockPatchGenerator(

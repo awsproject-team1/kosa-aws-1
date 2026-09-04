@@ -79,7 +79,12 @@ def context():
     )
 
 
-def plan_input(*, destructive: bool = False, refreshed: bool = True) -> PlanReadinessInput:
+def plan_input(
+    *,
+    destructive: bool = False,
+    refreshed: bool = True,
+    plan_evidence: dict[str, dict[str, tuple[object, ...]]] | None = None,
+) -> PlanReadinessInput:
     return PlanReadinessInput(
         plan=TerraformPlan(
             deployment_id="deployment-001",
@@ -96,7 +101,24 @@ def plan_input(*, destructive: bool = False, refreshed: bool = True) -> PlanRead
         refreshed=refreshed,
         has_destructive_changes=destructive,
         mapped_resource_ids=("bucket-001",),
+        plan_evidence={} if plan_evidence is None else plan_evidence,
     )
+
+
+def _pab_evidence(**flags: bool) -> dict[str, dict[str, tuple[object, ...]]]:
+    return {
+        "bucket-001": {
+            f"aws_s3_bucket_public_access_block:{name}": (value,) for name, value in flags.items()
+        }
+    }
+
+
+def _s3_rule_control():
+    from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
+
+    control = MVP_CONTROL_CATALOG.control("S3_BLOCK_PUBLIC_ACCESS")
+    assert control is not None
+    return control, control.baseline_required_evidence
 
 
 class RemediationContextTest(unittest.TestCase):
@@ -141,6 +163,67 @@ class RemediationContextTest(unittest.TestCase):
             context=context(), plan_input=plan_input(refreshed=False)
         )
         self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
+
+
+class PlanResolvesFindingTest(unittest.TestCase):
+    """The patch's plan is judged by the same predicate the Assessment used (ADR-0024 §E)."""
+
+    def test_a_plan_that_still_violates_the_rule_blocks_approval(self) -> None:
+        """네 플래그 중 셋만 true인 patch를 승인하면 위반을 배포한다."""
+        readiness = evaluate_deployment_readiness(
+            context=context(),
+            plan_input=plan_input(
+                plan_evidence=_pab_evidence(
+                    block_public_acls=True,
+                    ignore_public_acls=True,
+                    block_public_policy=True,
+                    restrict_public_buckets=False,
+                )
+            ),
+            rule_control=_s3_rule_control(),
+            resource_type="AWS::S3::Bucket",
+        )
+        self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
+        self.assertIn("FINDING_UNRESOLVED_IN_PLAN", readiness.reason_codes)
+
+    def test_a_plan_that_satisfies_the_rule_says_so(self) -> None:
+        readiness = evaluate_deployment_readiness(
+            context=context(),
+            plan_input=plan_input(
+                plan_evidence=_pab_evidence(
+                    block_public_acls=True,
+                    ignore_public_acls=True,
+                    block_public_policy=True,
+                    restrict_public_buckets=True,
+                )
+            ),
+            rule_control=_s3_rule_control(),
+            resource_type="AWS::S3::Bucket",
+        )
+        self.assertIs(readiness.status, DeploymentReadinessStatus.READY_FOR_APPROVAL)
+        self.assertEqual(
+            readiness.reason_codes,
+            ("REFRESHED_PLAN_BOUND_TO_REMEDIATION_CONTEXT", "FINDING_RESOLVED_IN_PLAN"),
+        )
+
+    def test_no_plan_evidence_means_no_claim_either_way(self) -> None:
+        """ "판정 없음"은 "해소됨"이 아니다 — 어느 code도 남지 않는다."""
+        readiness = evaluate_deployment_readiness(
+            context=context(),
+            plan_input=plan_input(),
+            rule_control=_s3_rule_control(),
+            resource_type="AWS::S3::Bucket",
+        )
+        self.assertIs(readiness.status, DeploymentReadinessStatus.READY_FOR_APPROVAL)
+        self.assertEqual(readiness.reason_codes, ("REFRESHED_PLAN_BOUND_TO_REMEDIATION_CONTEXT",))
+
+    def test_without_the_rule_control_the_plan_is_not_judged(self) -> None:
+        readiness = evaluate_deployment_readiness(
+            context=context(),
+            plan_input=plan_input(plan_evidence=_pab_evidence(block_public_acls=False)),
+        )
+        self.assertIs(readiness.status, DeploymentReadinessStatus.READY_FOR_APPROVAL)
+        self.assertNotIn("FINDING_UNRESOLVED_IN_PLAN", readiness.reason_codes)
 
 
 class SinglePerspectiveContextTest(unittest.TestCase):

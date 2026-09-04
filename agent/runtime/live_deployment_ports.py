@@ -144,6 +144,7 @@ class LivePlanRequestPort(PlanRequestPort):
         repository_full_name: str,
         fetch_outputs: Callable[[str, str], PlanRunOutputs],
         artifact_id_factory: Callable[[str, str], str] | None = None,
+        evidence_projector: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None,
     ) -> None:
         self._customer_id = _require_non_empty(customer_id, "customer_id")
         self._repository_id = _require_non_empty(repository_id, "repository_id")
@@ -151,6 +152,13 @@ class LivePlanRequestPort(PlanRequestPort):
         if not callable(fetch_outputs):
             raise TypeError("fetch_outputs must be callable")
         self._fetch_outputs = fetch_outputs
+        if evidence_projector is not None and not callable(evidence_projector):
+            raise TypeError("evidence_projector must be callable")
+        # Catalog가 선언한 plan 위치의 `after` 값을 뽑는 C의 투영. composition root가 주입한다 —
+        # 이 port(agent.runtime)가 apps.backend.policy를 import하면 순환이 된다. 없으면 요약에
+        # plan 근거가 없고 readiness는 Finding 해소를 판정하지 않는다("판정 없음"이지 "해소됨"이
+        # 아니다).
+        self._evidence_projector = evidence_projector
         # artifact_id는 결정적으로 유도한다(같은 배포·commit이면 같은 id). 재실행이 새 artifact
         # 참조를 만들지 않게 하려는 것으로, 실제 저장 내용이 아니라 참조 식별자다.
         self._artifact_id_factory = artifact_id_factory or (
@@ -222,10 +230,14 @@ class LivePlanRequestPort(PlanRequestPort):
             raise LiveDeploymentPortError("recovered canonical plan is not projectable") from error
         if recomputed != outputs.plan_hash:
             raise LiveDeploymentPortError("recovered canonical plan does not match plan_hash")
+        plan_evidence: Mapping[str, object] = (
+            {} if self._evidence_projector is None else self._evidence_projector(document)
+        )
         return PlanSummary(
             refreshed=outputs.refreshed,
             has_destructive_changes=has_destructive_changes(document),
             mapped_resource_ids=mapped_resource_ids(document),
+            plan_evidence=plan_evidence,  # type: ignore[arg-type] - validated by the contract
         )
 
 

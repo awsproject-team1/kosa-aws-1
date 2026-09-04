@@ -24,10 +24,11 @@ Boundary, mirroring the Assessment evaluator:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Protocol
 
 from agent.runtime.github_tool import IaCDocument, IaCDocumentReader, IaCSnapshotRequest
+from apps.backend.policy.control_catalog import control_for_finding
 from apps.backend.remediation.patch_content import (
     PatchContentError,
     PatchContentStore,
@@ -41,12 +42,18 @@ from apps.backend.remediation.terraform_change import (
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
+    EvaluationPerspective,
+    Finding,
     ModelProfile,
     ModelProfileRole,
+    PolicyRule,
     RemediationContext,
     RemediationDecision,
     RemediationPatch,
 )
+
+#: `(rule_id, rule_version) → PolicyRule | None`. 조치 prompt에 Rule 문언을 싣기 위한 조회.
+RuleLookup = Callable[[str, str], PolicyRule | None]
 
 
 class BedrockPatchError(ValueError):
@@ -74,6 +81,7 @@ class BedrockPatchGenerator:
         model_profile: ModelProfile,
         content_store: PatchContentStore,
         iac_documents: IaCDocumentReader | None,
+        rule_lookup: RuleLookup | None = None,
     ) -> None:
         if client is None:
             raise TypeError("client is required")
@@ -81,6 +89,12 @@ class BedrockPatchGenerator:
             raise TypeError("model_profile must be a ModelProfile")
         if model_profile.role is not ModelProfileRole.REMEDIATION:
             raise BedrockPatchError("model profile is not approved for remediation")
+        if rule_lookup is not None and not callable(rule_lookup):
+            raise TypeError("rule_lookup must be callable")
+        # Rule 문언(`evaluation_rubric`)을 prompt에 싣기 위한 조회. 없으면 legacy Catalog 매핑의
+        # Control 설명과 Terraform 매핑만 싣는다 — 그것만으로도 "어느 attribute를 바꿔야 하는가"는
+        # 답이 된다.
+        self._rule_lookup = rule_lookup
         if content_store is None:
             # digest만 남기고 내용을 버리면 PR write는 만들 것이 없고 digest는 아무것도 가리키지
             # 않는다. 저장소 없이 생성기를 만들 수 없게 한다.
@@ -192,6 +206,9 @@ class BedrockPatchGenerator:
     def _request_body(self, context: RemediationContext, document: IaCDocument) -> str:
         finding = context.finding
         snapshot = context.snapshot
+        rule = None
+        if self._rule_lookup is not None:
+            rule = self._rule_lookup(finding.rule_id, finding.rule_version)
         return json.dumps(
             {
                 "terraform_files": [
@@ -206,12 +223,15 @@ class BedrockPatchGenerator:
                     "severity": finding.severity,
                     "rationale": finding.rationale,
                 },
+                "remediation_guidance": remediation_guidance(finding, rule),
                 "snapshot": {
                     "repository_id": snapshot.repository_id,
                     "commit_sha": snapshot.commit_sha,
                 },
                 "evidence_references": list(context.evidence_references),
             },
+            # Rule 문언과 Control 설명은 한국어일 수 있다. 평가 어댑터와 같은 이유로 escape하지 않는다.
+            ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -228,10 +248,69 @@ _SYSTEM_PROMPT = (
     "Finding requires: keep every other resource, block, attribute, comment, and ordering "
     "exactly as supplied, do not add files, do not add resources unrelated to the "
     "Finding, never delete or rename an existing resource block, and only use attributes "
-    "that exist for that Terraform resource type. Every path must be repository-relative "
-    "(no leading slash and no '..' segment). Do not perform any AWS write or apply, and do "
-    "not wrap the JSON in code fences or add prose."
+    "that exist for that Terraform resource type. remediation_guidance states the control "
+    "the rule implements, the rule's own criterion when known, the Terraform resource types "
+    "and attributes that carry it, and — under plan_checks — the exact attributes a "
+    "deterministic check will read from the plan together with the value they must hold; "
+    "a change that leaves any plan_check unsatisfied does not resolve the Finding. Every "
+    "path must be repository-relative (no leading slash and no '..' segment). Do not perform "
+    "any AWS write or apply, and do not wrap the JSON in code fences or add prose."
 )
+
+
+def remediation_guidance(finding: Finding, rule: PolicyRule | None) -> dict[str, object]:
+    """What the model needs beyond the rationale to make the *right* minimal change.
+
+    조치 prompt는 처음에 Finding의 `rationale`만 실었다. 결정적 판정의 rationale은 AWS API 투영
+    경로(`attributes.public_access_block.RestrictPublicBuckets`)라서 모델이 그것을 Terraform
+    attribute(`restrict_public_buckets`)로 혼자 번역해야 했다 — Catalog가 그 매핑을 이미 갖고
+    있는데도. 여기서 Control 설명, Rule 문언, IaC hint, 그리고 plan에서 검사할 attribute와
+    기대값을 함께 싣는다. 모두 Catalog와 승인된 Rule의 값이고 고객 데이터가 아니다.
+    """
+    resolved = control_for_finding(finding.rule_id, rule)
+    guidance: dict[str, object] = {
+        "rule_id": finding.rule_id,
+        "rule_version": finding.rule_version,
+    }
+    if rule is not None:
+        guidance["rule_title"] = rule.title
+        if rule.evaluation_rubric:
+            guidance["evaluation_rubric"] = rule.evaluation_rubric
+    if resolved is None:
+        return guidance
+    control, required = resolved
+    guidance["control"] = {
+        "control_key": control.control_key,
+        "title": control.title,
+        "description": control.description,
+    }
+    terraform: list[dict[str, object]] = []
+    plan_checks: list[dict[str, object]] = []
+    for binding in control.available_evidence_capabilities:
+        if binding.perspective is EvaluationPerspective.IAC:
+            terraform.append(
+                {
+                    "terraform_resource_types": list(binding.terraform_resource_types),
+                    "terraform_attribute_names": list(binding.terraform_attribute_names),
+                }
+            )
+            continue
+        if binding.capability_key not in required or not binding.is_decidable:
+            continue
+        for entry in binding.plan_paths:
+            check: dict[str, object] = {
+                "terraform_resource_type": entry.terraform_resource_type,
+                "attribute_path": entry.path,
+                "expectation": binding.expectation.value,  # type: ignore[union-attr]
+            }
+            if binding.expected_value is not None:
+                check["expected_value"] = binding.expected_value
+            if binding.expected_values:
+                check["allowed_values"] = list(binding.expected_values)
+            plan_checks.append(check)
+    guidance["terraform"] = terraform
+    guidance["plan_checks"] = plan_checks
+    return guidance
 
 
 def _response_object(response: Mapping[str, object]) -> dict[str, object]:

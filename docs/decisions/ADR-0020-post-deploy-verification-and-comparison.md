@@ -329,3 +329,11 @@ MANUAL 결과는 `MANUAL_REVIEW` 상태이므로 이 ADR의 Resolution 규칙에
 새 규칙이 아니라 기존 규칙의 적용이다. readiness 숫자 평균에서만 제외되고(`DRIFT`와 같은 이유로,
 `_NON_SCORING_PERSPECTIVES`), Coverage와 plan 완료에는 포함된다. **제외 기준은 Perspective이지
 status가 아니다** — 기존 IAC/AWS_ACTUAL 결과의 `MANUAL_REVIEW` 점수 의미는 바뀌지 않는다.
+
+## 보완 2026-09-05 — readiness가 Finding 해소를 apply 전에 판정한다 (ADR-0024 §E)
+
+§9의 "Deployment 단계에는 LLM을 두지 않는다"는 그대로다. `evaluate_deployment_readiness`가
+`PlanSummary.plan_evidence`에 Finding의 Rule 술어(코드)를 돌려 FAIL이면
+`FINDING_UNRESOLVED_IN_PLAN`으로 `BLOCKED`, PASS면 `FINDING_RESOLVED_IN_PLAN`을 정보로 남긴다.
+답할 수 없으면(근거 없음, Rule을 Catalog가 모름) 어느 code도 남지 않는다. Post-Deploy
+Verification은 여전히 실제 AWS 상태를 재조회해 확정한다 — plan 판정은 그 전의 게이트다.

@@ -146,6 +146,18 @@ def decide(
                 )
             for value in values:
                 observations.append(_Observation(path=path, satisfied=_satisfies(binding, value)))
+    return verdict_from_observations(observations)
+
+
+def observe(binding: EvidenceCapabilityBinding, path: str, value: object) -> _Observation:
+    """One judged value, for callers that resolve values themselves (the plan evaluator)."""
+    return _Observation(path=path, satisfied=_satisfies(binding, value))
+
+
+def verdict_from_observations(observations: list[_Observation]) -> DeterministicVerdict:
+    """Combine judged observations into the outcome, whatever document they came from."""
+    if not observations:
+        raise DeterministicEvaluationError("a deterministic verdict requires observations")
     satisfied = [observation for observation in observations if observation.satisfied]
     unsatisfied = [observation for observation in observations if not observation.satisfied]
     if not unsatisfied:
@@ -188,8 +200,11 @@ def _satisfies(binding: EvidenceCapabilityBinding, value: object) -> bool:
             return len(value) > 0
         return value is not None
     if expectation in (EvidenceExpectation.ALL_EQUAL, EvidenceExpectation.NONE_EQUAL):
+        # AWS attribute API는 `"true"`/`"false"` 문자열을, terraform plan은 boolean을 준다. 둘은
+        # 같은 사실이다. 그 외의 타입(숫자, 식별자)은 여전히 문자열과 같지 않다.
+        text = _bool_text(value) if isinstance(value, bool) else value
         matches = (
-            isinstance(value, str) and value.casefold() == (binding.expected_value or "").casefold()
+            isinstance(text, str) and text.casefold() == (binding.expected_value or "").casefold()
         )
         return matches if expectation is EvidenceExpectation.ALL_EQUAL else not matches
     if expectation is EvidenceExpectation.ALL_IN:
@@ -198,6 +213,10 @@ def _satisfies(binding: EvidenceCapabilityBinding, value: object) -> bool:
     if expectation is EvidenceExpectation.NO_PUBLIC_INGRESS:
         return _no_public_ingress(value)
     raise DeterministicEvaluationError(f"unsupported expectation {expectation!r}")
+
+
+def _bool_text(value: bool) -> str:
+    return "true" if value else "false"
 
 
 #: 인터넷 전체를 뜻하는 CIDR. 이보다 좁은 범위("/8이 넓은가")는 판단이며 여기서 정하지 않는다.

@@ -172,6 +172,18 @@ ownership이 설정되지 않았으면 S3의 문서화된 기본값 `ObjectWrite
 투영한다. 이 값들이 field 부재로 표현되면 근거 게이트가 위반을 근거 부족으로 읽는다. 반대로
 sub-read가 거부되면(권한 없음) 그것은 값이 아니라 read 실패이며 adapter는 전체 read를 거부한다.
 
+**`PlanSummary.plan_evidence` (2026-09-05, ADR-0024 §E).** `resource_id → {"<terraform type>:<after
+경로>": [values]}`. D의 plan port가 Catalog의 `plan_paths`가 선언한 위치의 `after` 값만 싣는다
+(allow-list, `plan_hash`와 같은 canonical 변경에서). C의 readiness가 Finding의 Rule 술어를 이 값에
+돌려 `FINDING_UNRESOLVED_IN_PLAN`(BLOCKED) 또는 `FINDING_RESOLVED_IN_PLAN`(정보)을 낸다. 비어
+있으면 어느 code도 남지 않는다 — "판정 없음"은 "해소됨"이 아니다. 이 필드 이전에 저장된 요약은
+비어 있는 것으로 복원된다.
+
+**조치 prompt의 `remediation_guidance` (§G).** Control 설명, 승인된 Rule의 `evaluation_rubric`
+(고객 partition에서 읽을 수 있을 때), IaC hint(`terraform_resource_types`/`terraform_attribute_names`),
+그리고 plan 검사가 읽을 attribute와 기대값(`plan_checks`). 모두 Catalog와 승인된 Rule의 값이며
+고객 데이터가 아니다.
+
 여러 유형을 평가하는 배포는 `ResourceTypeRoutingAwsResourceTool`로 `resource_type`을 담당 adapter에
 분배한다. 등록되지 않은 유형은 빈 결과가 아니라 실패다 — 배선되지 않은 유형이 조용히 통과하면 "위반
 없음"과 구별할 수 없다. **Assessment Worker와 Deployment Worker는 같은 factory로 이 도구를 만든다.**

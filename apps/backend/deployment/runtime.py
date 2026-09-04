@@ -47,6 +47,7 @@ from agent.runtime.live_deployment_ports import (
     LiveWorkflowRunReader,
     PlanRunOutputs,
 )
+from apps.backend.assessment.plan_facts import project_plan_evidence
 from apps.backend.assessment.reporting import DynamoDbAssessmentReportStore
 from apps.backend.deployment.runtime_config import (
     DeploymentRuntimeConfiguration,
@@ -57,6 +58,7 @@ from apps.backend.deployment.worker import DeploymentWorker
 from apps.backend.jobs.outbox import OutboxDispatcher, WorkflowDispatcher
 from apps.backend.jobs.sqs import SqsWorkflowDispatcher
 from apps.backend.policy import DynamoDbPolicyCatalog, PolicyContextResolver
+from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbDeploymentPlanStore,
@@ -200,6 +202,9 @@ def _live_worker(
         fetch_outputs=lambda deployment_id, commit_sha: plan_outputs_fetcher(
             target, deployment_id, commit_sha
         ),
+        # Catalog가 선언한 plan 위치의 `after` 값을 요약에 싣는다. readiness가 그 값으로 "이 plan이
+        # Finding을 해소하는가"를 apply 전에 판정한다(ADR-0024 §E).
+        evidence_projector=lambda document: project_plan_evidence(document, MVP_CONTROL_CATALOG),
     )
     apply_port = LiveApplyDispatchPort(
         customer_id=target.customer_id,

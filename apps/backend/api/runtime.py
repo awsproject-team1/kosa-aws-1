@@ -281,7 +281,14 @@ def _deployment_components(
         table_name=table_name, transaction_client=boto3.client("dynamodb")
     )
     comparisons = DynamoDbComparisonInputReader(reports)
-    plans = DynamoDbDeploymentPlanReader(_metadata_table(), deployments=deployment_repository)
+    plans = DynamoDbDeploymentPlanReader(
+        _metadata_table(),
+        deployments=deployment_repository,
+        # readiness가 Finding의 Rule을 읽어 "이 plan이 Finding을 해소하는가"를 판정한다.
+        rules=lambda customer_id, rule_id, version: DynamoDbPolicyCatalog(
+            _metadata_table(), customer_id=customer_id
+        ).get_rule(rule_id, version),
+    )
     return DeploymentApiService(
         approvals=DeploymentApprovalService(approval_repository),
         plans=plans,

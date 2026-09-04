@@ -176,6 +176,29 @@ _RESOURCE_IDENTITY_ATTRIBUTES: dict[str, str] = {
 }
 
 
+def resource_identity(entry: Mapping[str, object]) -> str | None:
+    """The Finding-vocabulary resource id one projected change names, or `None`.
+
+    `mapped_resource_ids`와 같은 규칙이다 — 같은 allow-list, `after` 먼저 `before` 다음, 계산 중인
+    값은 건너뛴다. plan 근거 투영(`plan_facts`)이 같은 identity로 값을 묶어야 readiness가 "이
+    Finding의 리소스"에 대해 판정한다.
+    """
+    attribute = _RESOURCE_IDENTITY_ATTRIBUTES.get(_resource_type(entry))
+    if attribute is None:
+        return None
+    change = entry.get("change")
+    if not isinstance(change, Mapping):
+        return None
+    for state in ("after", "before"):
+        value = change.get(state)
+        if not isinstance(value, Mapping):
+            continue
+        candidate = value.get(attribute)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+    return None
+
+
 def mapped_resource_ids(show_json: Mapping[str, object]) -> tuple[str, ...]:
     """Return the AWS resource ids this plan touches, in the Finding vocabulary.
 

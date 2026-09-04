@@ -414,6 +414,49 @@ class LivePlanRequestPortTest(unittest.TestCase):
             fetch_outputs=fetch or self._outputs,
         )
 
+    def test_the_summary_carries_the_projected_plan_evidence(self) -> None:
+        """C의 투영이 주입되면 요약에 plan 근거가 실린다. 없으면 비어 있고, 그것은 "판정 없음"이다."""
+        seen: list[object] = []
+
+        def projector(document):
+            seen.append(document)
+            return {
+                "bucket-public-001": {
+                    "aws_s3_bucket_public_access_block:block_public_acls": (True,)
+                }
+            }
+
+        port = LivePlanRequestPort(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            repository_full_name=REPO_FULL,
+            fetch_outputs=self._outputs,
+            evidence_projector=projector,
+        )
+        result = port.request_plan(
+            customer_id=CUSTOMER_ID,
+            deployment_id=DEPLOYMENT_ID,
+            repository_id=REPOSITORY_ID,
+            commit_sha=COMMIT,
+        )
+        self.assertEqual(
+            result.summary.plan_evidence,
+            {"bucket-public-001": {"aws_s3_bucket_public_access_block:block_public_acls": (True,)}},
+        )
+        # 투영은 hash된 바로 그 canonical 변경을 본다.
+        self.assertEqual(seen, [{"resource_changes": CANONICAL_CHANGES}])
+        self.assertEqual(
+            self._port()
+            .request_plan(
+                customer_id=CUSTOMER_ID,
+                deployment_id=DEPLOYMENT_ID,
+                repository_id=REPOSITORY_ID,
+                commit_sha=COMMIT,
+            )
+            .summary.plan_evidence,
+            {},
+        )
+
     def test_assembles_a_plan_execution_result(self) -> None:
         result = self._port().request_plan(
             customer_id=CUSTOMER_ID,

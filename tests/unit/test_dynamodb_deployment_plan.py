@@ -216,6 +216,42 @@ class DeploymentPlanReaderTest(unittest.TestCase):
         self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
         self.assertIn("PLAN_NOT_REFRESHED", readiness.reason_codes)
 
+    def test_a_stored_plan_that_leaves_the_finding_unresolved_blocks_approval(self) -> None:
+        """D가 저장한 plan 근거에 C가 Assessment와 같은 술어를 돌린다 — 승인 전에, LLM 없이."""
+        remediation = _remediation_item()
+        locator = f"aws:s3:bucket/{RESOURCE_ID}#read-resource"
+        remediation["context"]["finding"]["evidence_references"] = [locator]
+        remediation["context"]["evidence_references"] = [locator]
+        items = _items(
+            **{
+                f"DEPLOYMENT#{DEPLOYMENT_ID}": _deployment_item(
+                    summary={
+                        "refreshed": True,
+                        "has_destructive_changes": False,
+                        "mapped_resource_ids": [RESOURCE_ID],
+                        "plan_evidence": {
+                            RESOURCE_ID: {
+                                "aws_s3_bucket_public_access_block:block_public_acls": [True],
+                                "aws_s3_bucket_public_access_block:ignore_public_acls": [True],
+                                "aws_s3_bucket_public_access_block:block_public_policy": [True],
+                                "aws_s3_bucket_public_access_block:restrict_public_buckets": [
+                                    False
+                                ],
+                            }
+                        },
+                    }
+                ),
+                f"REMEDIATION#{REMEDIATION_ID}": remediation,
+            }
+        )
+
+        _, readiness = _reader(items).get_approval_input(
+            customer_id=CUSTOMER_ID, deployment_id=DEPLOYMENT_ID
+        )
+
+        self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
+        self.assertIn("FINDING_UNRESOLVED_IN_PLAN", readiness.reason_codes)
+
     def test_a_deployment_without_a_plan_has_nothing_to_approve(self) -> None:
         items = _items(**{f"DEPLOYMENT#{DEPLOYMENT_ID}": _deployment_item(with_plan=False)})
         with self.assertRaises(DeploymentPlanNotReadyError):

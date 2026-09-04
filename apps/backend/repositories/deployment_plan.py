@@ -13,8 +13,10 @@ readiness를 저장하지 않는 이유는 M1 Readiness Score와 같다 — 저�
 가능한 것으로 보여준다.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
+from apps.backend.assessment.actual import resource_type_for_evidence_reference
+from apps.backend.policy.control_catalog import control_for_finding
 from apps.backend.remediation.readiness import evaluate_deployment_readiness
 from apps.backend.repositories.deployment import DynamoDbDeploymentRepository
 from apps.backend.repositories.dynamodb import DynamoTable
@@ -23,9 +25,14 @@ from apps.backend.repositories.remediation_work import remediation_context_from_
 from packages.contracts import (
     DeploymentReadinessSignal,
     PlanReadinessInput,
+    PolicyRule,
     TerraformPlan,
 )
-from packages.contracts.remediation import DeploymentReadiness
+from packages.contracts.remediation import DeploymentReadiness, RemediationContext
+
+#: `(customer_id, rule_id, rule_version) → PolicyRule | None`. authored Rule의 Control은 Rule
+#: 자신만 안다. 없으면 legacy 매핑만 쓴다.
+RuleLookup = Callable[[str, str, str], PolicyRule | None]
 
 
 class DeploymentPlanNotReadyError(LookupError):
@@ -35,13 +42,22 @@ class DeploymentPlanNotReadyError(LookupError):
 class DynamoDbDeploymentPlanReader:
     """Return the stored plan and C's readiness verdict over it."""
 
-    def __init__(self, table: DynamoTable, *, deployments: DynamoDbDeploymentRepository) -> None:
+    def __init__(
+        self,
+        table: DynamoTable,
+        *,
+        deployments: DynamoDbDeploymentRepository,
+        rules: RuleLookup | None = None,
+    ) -> None:
         if table is None:
             raise TypeError("table is required")
         if deployments is None:
             raise TypeError("deployments repository is required")
+        if rules is not None and not callable(rules):
+            raise TypeError("rules must be callable")
         self._table = table
         self._deployments = deployments
+        self._rules = rules
 
     def get_approval_input(
         self, *, customer_id: str, deployment_id: str
@@ -101,11 +117,29 @@ class DynamoDbDeploymentPlanReader:
                     refreshed=record.plan_summary.refreshed,
                     has_destructive_changes=record.plan_summary.has_destructive_changes,
                     mapped_resource_ids=record.plan_summary.mapped_resource_ids,
+                    plan_evidence=record.plan_summary.plan_evidence,
                 ),
+                rule_control=self._rule_control(customer_id, context),
+                resource_type=_resource_type(context),
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("stored readiness inputs are invalid") from error
         return plan, readiness
+
+    def _rule_control(self, customer_id: str, context: RemediationContext):
+        """The Control the Finding's Rule implements, when the reader can establish it.
+
+        Rule을 읽을 수 있으면 그것이 정본이다. 읽기가 배선되지 않았거나 Rule이 없으면 legacy
+        매핑만 남고, authored Rule은 그 경우 `None`이다 — readiness는 판정을 건너뛴다.
+        """
+        finding = context.finding
+        rule = None
+        if self._rules is not None:
+            try:
+                rule = self._rules(customer_id, finding.rule_id, finding.rule_version)
+            except Exception:
+                raise RepositoryError("policy rule read failed") from None
+        return control_for_finding(finding.rule_id, rule)
 
     def _remediation_context(self, customer_id: str, remediation_id: str) -> Mapping[str, object]:
         try:
@@ -125,3 +159,12 @@ class DynamoDbDeploymentPlanReader:
         if not isinstance(context, Mapping):
             raise StoredDataError("stored remediation context is invalid")
         return context
+
+
+def _resource_type(context: RemediationContext) -> str | None:
+    """The Finding's AWS resource type, recovered from its Actual read locator."""
+    for reference in context.evidence_references:
+        resource_type = resource_type_for_evidence_reference(reference)
+        if resource_type is not None:
+            return resource_type
+    return None

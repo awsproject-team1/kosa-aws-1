@@ -755,10 +755,25 @@ def _plan_summary_from(value: object) -> PlanSummary:
     resource_ids = data.get("mapped_resource_ids")
     if not isinstance(resource_ids, list):
         raise StoredDataError("stored plan summary mapped_resource_ids is invalid")
+    raw_evidence = data.get("plan_evidence")
+    plan_evidence: dict[str, dict[str, tuple[object, ...]]] = {}
+    if raw_evidence is not None:
+        if not isinstance(raw_evidence, Mapping):
+            raise StoredDataError("stored plan summary plan_evidence is invalid")
+        for resource_id, facts in raw_evidence.items():
+            if not isinstance(facts, Mapping):
+                raise StoredDataError("stored plan summary plan_evidence is invalid")
+            plan_evidence[str(resource_id)] = {
+                str(location): tuple(values) if isinstance(values, list | tuple) else (values,)
+                for location, values in facts.items()
+            }
     return PlanSummary(
         refreshed=bool(data["refreshed"]),
         has_destructive_changes=bool(data["has_destructive_changes"]),
         mapped_resource_ids=tuple(str(resource_id) for resource_id in resource_ids),
+        # 이 필드 이전에 저장된 요약은 plan 근거가 없다 — readiness는 그 경우 Finding 해소를
+        # 판정하지 않는다.
+        plan_evidence=plan_evidence,
     )
 
 

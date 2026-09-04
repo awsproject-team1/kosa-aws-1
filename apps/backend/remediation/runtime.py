@@ -33,6 +33,7 @@ from apps.backend.deployment.runtime_config import (
     DeploymentRuntimeConfiguration,
     DeploymentTarget,
 )
+from apps.backend.policy import DynamoDbPolicyCatalog
 from apps.backend.remediation.patch_content import PatchContentStore
 from apps.backend.remediation.pull_request import PatchPullRequestAction
 from apps.backend.remediation.sync import SnapshotSyncAction
@@ -107,9 +108,15 @@ def _live_worker() -> RemediationWorker:
     # 평가가 IaC를 읽은 것과 같은 read-only GitHub 경계로 같은 commit의 본문을 읽는다. patch
     # 생성과 PR 본문의 diff가 같은 원본을 본다.
     iac_documents = None if target is None else _iac_document_reader(boto3, target)
+    # 조치 prompt에 Rule 문언을 싣는다. Rule은 고객 partition의 승인 판본이다.
+    rule_lookup = (
+        None
+        if target is None
+        else DynamoDbPolicyCatalog(table, customer_id=target.customer_id).get_rule
+    )
     return RemediationWorker(
         work_repository=DynamoDbRemediationWorkRepository(table),
-        patch_action=_patch_action(boto3, content_store, iac_documents),
+        patch_action=_patch_action(boto3, content_store, iac_documents, rule_lookup),
         sync_action=SnapshotSyncAction(),
         result_store=DynamoDbRemediationResultStore(
             table_name=table_name, transaction_client=boto3.client("dynamodb")
@@ -123,7 +130,10 @@ def _live_worker() -> RemediationWorker:
 
 
 def _patch_action(
-    boto3: object, content_store: PatchContentStore, iac_documents: IaCDocumentReader | None
+    boto3: object,
+    content_store: PatchContentStore,
+    iac_documents: IaCDocumentReader | None,
+    rule_lookup: object = None,
 ) -> object:
     """Build the C Remediation Agent that generates the Terraform patch (ADR-0018).
 
@@ -141,6 +151,7 @@ def _patch_action(
         model_profile=profile,
         content_store=content_store,
         iac_documents=iac_documents,
+        rule_lookup=rule_lookup,  # type: ignore[arg-type]
     )
 
 

@@ -4,12 +4,13 @@ These contracts consume immutable findings, policy decisions, and D-produced
 artifacts. They never represent a customer-workload write or an Apply request.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
 from packages.contracts.assessments import Finding
-from packages.contracts.deployments import IaCSnapshot, TerraformPlan
+from packages.contracts.deployments import IaCSnapshot, TerraformPlan, require_plan_evidence
 from packages.contracts.jobs import JobResponse
 from packages.contracts.remediation_policy import RemediationDecision
 
@@ -124,6 +125,9 @@ class PlanReadinessInput:
     refreshed: bool
     has_destructive_changes: bool
     mapped_resource_ids: tuple[str, ...]
+    #: `PlanSummary.plan_evidence`와 같은 모양. 비어 있으면 plan으로는 Finding 해소를 판정하지
+    #: 않는다 — "해소됨"이 아니라 "판정 없음"이다.
+    plan_evidence: Mapping[str, Mapping[str, tuple[object, ...]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, TerraformPlan):
@@ -136,6 +140,7 @@ class PlanReadinessInput:
             raise TypeError("mapped_resource_ids must be a tuple")
         for resource_id in self.mapped_resource_ids:
             require_non_empty_string(resource_id, "mapped_resource_ids item")
+        require_plan_evidence(self.plan_evidence)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

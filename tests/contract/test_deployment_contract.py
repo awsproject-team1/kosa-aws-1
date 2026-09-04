@@ -154,6 +154,8 @@ class PlanSummaryContractTest(unittest.TestCase):
                 "refreshed": True,
                 "has_destructive_changes": False,
                 "mapped_resource_ids": ["bucket-public-001"],
+                # plan 근거는 additive다. 비어 있으면 "판정 없음"이지 "해소됨"이 아니다.
+                "plan_evidence": {},
             },
         )
 

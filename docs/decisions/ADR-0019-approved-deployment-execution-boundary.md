@@ -385,3 +385,12 @@ DynamoDB에 content-addressed로 저장한다 — Artifact bucket은 ADR-0014의
   계획 표기를 구현 표기로 옮긴다. Blocks에 묶여 있던 구현 커밋(M2 A audit 정본화, M2/M3 D live
   plan/apply, M3 A Deployment 생성·상태 API)은 이 서명 이후 A(PR #40)와 D 브랜치에서 병렬로
   시작한다.
+
+## 보완 2026-09-05 — `PlanSummary.plan_evidence` (ADR-0024 §E)
+
+`PlanSummary`가 네 번째 사실을 싣는다: Catalog가 `plan_paths`로 선언한 위치의 `after` 값
+(`resource_id → {"<terraform type>:<after 경로>": [values]}`). §1-a의 `mapped_resource_ids`와 같은
+identity 규칙(`resource_identity`), 같은 canonical 변경에서 파생된다. allow-list다 — 새 provider
+attribute가 조용히 근거가 되지 않는다. C의 readiness가 이 값에 Assessment와 같은 술어를 돌려
+"이 plan이 Finding을 해소하는가"를 apply 전에 판정한다. D port는 투영 함수를 composition root에서
+주입받는다(`evidence_projector`) — agent.runtime이 apps.backend.policy를 import하면 순환이다.

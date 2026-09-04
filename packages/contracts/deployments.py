@@ -1,6 +1,7 @@
 """GitHub, read-only AWS, and approved Terraform deployment contracts."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from packages.contracts._validation import require_non_empty_string
@@ -231,6 +232,13 @@ class PlanSummary:
     refreshed: bool
     has_destructive_changes: bool
     mapped_resource_ids: tuple[str, ...]
+    #: `resource_id → {"<terraform type>:<after path>": [values]}` — the plan's `after` values at
+    #: the locations the Catalog declares for its decidable AWS capabilities (`plan_paths`),
+    #: keyed by the Finding-vocabulary resource id. C's readiness evaluator applies the same
+    #: predicate the Assessment used, so "does this plan actually resolve the Finding" is
+    #: answered before apply (ADR-0024 §E). Derived from the same canonical projection as
+    #: `plan_hash`; an empty mapping means the producer projected nothing, never "resolved".
+    plan_evidence: Mapping[str, Mapping[str, tuple[object, ...]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("refreshed", "has_destructive_changes"):
@@ -242,13 +250,32 @@ class PlanSummary:
             require_non_empty_string(resource_id, "mapped_resource_ids item")
         if len(set(self.mapped_resource_ids)) != len(self.mapped_resource_ids):
             raise ValueError("mapped_resource_ids must not contain duplicates")
+        require_plan_evidence(self.plan_evidence)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "refreshed": self.refreshed,
             "has_destructive_changes": self.has_destructive_changes,
             "mapped_resource_ids": list(self.mapped_resource_ids),
+            "plan_evidence": {
+                resource_id: {location: list(values) for location, values in facts.items()}
+                for resource_id, facts in self.plan_evidence.items()
+            },
         }
+
+
+def require_plan_evidence(value: object) -> None:
+    """Validate the `plan_evidence` shape shared by `PlanSummary` and `PlanReadinessInput`."""
+    if not isinstance(value, Mapping):
+        raise TypeError("plan_evidence must be a mapping")
+    for resource_id, facts in value.items():
+        require_non_empty_string(resource_id, "plan_evidence resource id")
+        if not isinstance(facts, Mapping):
+            raise TypeError("plan_evidence facts must be a mapping")
+        for location, values in facts.items():
+            require_non_empty_string(location, "plan_evidence location")
+            if not isinstance(values, tuple):
+                raise TypeError("plan_evidence values must be a tuple")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

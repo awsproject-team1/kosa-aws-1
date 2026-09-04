@@ -82,3 +82,32 @@ legacy Rule(`evaluation_type is None`)도 같은 게이트를 지난다. `LEGACY
 - Catalog가 AWS 근거를 선언하지 않은 Control(S3 ACL·Bucket Policy·TLS·Logging, EC2 서브넷)은
   이제 미판정으로 **보이게** 됐다. 그 빈 곳을 메우는 것(adapter 투영·read role 권한·술어 어휘)은
   별도 작업이다 — 보이지 않게 통과시키는 선택지는 없다.
+
+## 보완 2026-09-05 — §E: plan은 사실이고, 조치는 그 사실을 미리 안다
+
+### E. 같은 술어를 terraform plan의 `after` 값에 돌린다
+
+IaC 원문(HCL)에 대한 판단은 그대로 모델의 몫이다(ADR-0023 §2·§3). 그러나 `terraform show -json`의
+`resource_changes[].change.after`는 provider가 해석을 끝낸 구조화된 값이고, 이 저장소는 그것을
+이미 결정적으로 투영해 `plan_hash`를 만든다(ADR-0019 §1). 그 위에서는 AWS 문서에 선언한 **같은
+술어**를 같은 경로 문법으로 판정할 수 있다.
+
+- `EvidenceCapabilityBinding.plan_paths`: AWS capability의 술어를 plan에서 재사용할 위치
+  `(terraform type, after 경로)`. plan의 모양이 AWS 문서와 달라 술어가 맞지 않는 capability(SG
+  ingress block, logging block의 존재 자체가 활성)는 비워 둔다 — 억지로 맞추면 다른 술어다.
+- D의 plan port는 Catalog가 선언한 위치의 `after` 값만 `PlanSummary.plan_evidence`로 싣는다
+  (allow-list). C의 readiness(`evaluate_deployment_readiness`)가 Finding의 Rule 술어를 그 값에
+  돌린다: FAIL이면 `FINDING_UNRESOLVED_IN_PLAN`으로 **승인을 막고**, PASS면
+  `FINDING_RESOLVED_IN_PLAN`을 정보로 남기며, 답할 수 없으면 아무 code도 남기지 않는다 — "판정
+  없음"은 "해소됨"이 아니다. LLM은 이 단계에 없다(ADR-0020 §9).
+- 이것이 §E의 구현이다. Assessment의 IAC 좌표(INITIAL, 원문 HCL)는 그대로 모델이 판단하고, 그
+  판정과 코드 AWS 판정의 불일치는 §4대로 `MANUAL_REVIEW`다. plan이 있는 단계에서 IaC 사실이
+  코드로 판정되므로, "patch가 실제로 고치는가"는 apply 전에 닫힌다.
+
+### G. 조치 prompt는 Rule 문언과 plan 검사 항목을 본다
+
+조치 생성 prompt는 처음에 Finding의 `rationale`만 실었다. 결정적 판정의 rationale은 AWS API 투영
+경로라서 모델이 그것을 Terraform attribute로 혼자 번역해야 했다 — Catalog가 그 매핑을 이미
+갖고 있는데도. `remediation_guidance`가 Control 설명, 승인된 Rule의 `evaluation_rubric`(읽을 수
+있을 때), IaC hint, 그리고 **plan 검사가 읽을 attribute와 기대값**(`plan_checks`)을 싣는다. 모델이
+만든 변경이 그 검사를 만족하지 못하면 §E가 승인을 막는다 — 두 단계가 같은 술어를 본다.

@@ -32,6 +32,7 @@ from packages.contracts import (
     EvidenceExpectation,
     GovernanceControl,
     GovernanceControlCatalog,
+    PlanEvidencePath,
     PolicyRule,
     RuleEvaluationType,
     RuleSeverity,
@@ -61,14 +62,21 @@ def _aws(
     expected_value: str | None = None,
     expected_values: tuple[str, ...] = (),
     expectation_paths: tuple[str, ...] = (),
+    plan_paths: tuple[tuple[str, str], ...] = (),
 ) -> EvidenceCapabilityBinding:
     """Declare one AWS_ACTUAL capability, and — when its evidence decides the control — how.
 
     `expectation`이 있으면 Runtime이 모델 없이 그 capability를 판정한다. 없으면 지금처럼 모델이
     문서를 읽고 판단한다. 근거만으로 통제를 **확정할 수 있을 때만** 붙인다.
+
+    `plan_paths`는 `(terraform resource type, after 경로)` 쌍이다: 같은 술어를 terraform plan의
+    `after` 값에서 판정할 수 있는 위치. plan의 모양이 AWS 문서와 달라 술어가 맞지 않으면(SG
+    ingress block, logging block의 존재 자체가 활성) 비워 둔다 — 억지로 맞추면 다른 술어다.
     """
     for path in document_paths:
         parse_document_path(path)  # 오타 난 경로는 import 시점에 실패한다.
+    for _, path in plan_paths:
+        parse_document_path(path)
     return EvidenceCapabilityBinding(
         capability_key=capability_key,
         perspective=EvaluationPerspective.AWS_ACTUAL,
@@ -78,6 +86,9 @@ def _aws(
         expected_value=expected_value,
         expected_values=expected_values,
         expectation_paths=expectation_paths,
+        plan_paths=tuple(
+            PlanEvidencePath(terraform_resource_type=kind, path=path) for kind, path in plan_paths
+        ),
     )
 
 
@@ -124,6 +135,12 @@ _S3_BLOCK_PUBLIC_ACCESS = GovernanceControl(
             "attributes.public_access_block.BlockPublicPolicy",
             "attributes.public_access_block.RestrictPublicBuckets",
             expectation=EvidenceExpectation.ALL_TRUE,
+            plan_paths=(
+                ("aws_s3_bucket_public_access_block", "block_public_acls"),
+                ("aws_s3_bucket_public_access_block", "ignore_public_acls"),
+                ("aws_s3_bucket_public_access_block", "block_public_policy"),
+                ("aws_s3_bucket_public_access_block", "restrict_public_buckets"),
+            ),
         ),
         _iac(
             "S3.IAC_PUBLIC_ACCESS_BLOCK",
@@ -164,6 +181,12 @@ _S3_ENCRYPTION_AT_REST = GovernanceControl(
             # 받아들이는 세 알고리즘만 허용한다 — AES256이 통과하는 것은 라이브에서 확인된 정답이다.
             expectation=EvidenceExpectation.ALL_IN,
             expected_values=("AES256", "aws:kms", "aws:kms:dsse"),
+            plan_paths=(
+                (
+                    "aws_s3_bucket_server_side_encryption_configuration",
+                    "rule[].apply_server_side_encryption_by_default[].sse_algorithm",
+                ),
+            ),
         ),
         _iac(
             "S3.IAC_ENCRYPTION",
@@ -234,6 +257,7 @@ _S3_BUCKET_ACL_DISABLED = GovernanceControl(
             # 작동하는 상태다.
             expectation=EvidenceExpectation.ALL_EQUAL,
             expected_value="BucketOwnerEnforced",
+            plan_paths=(("aws_s3_bucket_ownership_controls", "rule[].object_ownership"),),
         ),
         _iac(
             "S3.IAC_OBJECT_OWNERSHIP",
@@ -379,6 +403,13 @@ _EC2_EBS_ENCRYPTION = GovernanceControl(
             expectation=EvidenceExpectation.ALL_TRUE,
             # VolumeId는 근거의 좌표이지 기준이 아니다. 판정 대상은 암호화 여부뿐이다.
             expectation_paths=("attributes.volumes[].Encrypted",),
+            # `aws_instance.id`는 생성 시 계산 중이므로 갱신 plan에서만 identity가 잡힌다 — 아직
+            # 없는 인스턴스에 대한 Finding은 없으므로 맞다. 선언되지 않은 block은 plan에 아예
+            # 없으므로 둘 중 값이 있는 쪽만 판정한다(`plan_facts`).
+            plan_paths=(
+                ("aws_instance", "root_block_device[].encrypted"),
+                ("aws_instance", "ebs_block_device[].encrypted"),
+            ),
         ),
         _iac(
             "EC2.IAC_VOLUME_ENCRYPTION",
@@ -467,6 +498,7 @@ _RDS_NOT_PUBLIC = GovernanceControl(
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.PubliclyAccessible",
             expectation=EvidenceExpectation.ALL_FALSE,
+            plan_paths=(("aws_db_instance", "publicly_accessible"),),
         ),
         _iac(
             "RDS.IAC_PUBLICLY_ACCESSIBLE",
@@ -541,6 +573,7 @@ _RDS_ENCRYPTION_AT_REST = GovernanceControl(
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.StorageEncrypted",
             expectation=EvidenceExpectation.ALL_TRUE,
+            plan_paths=(("aws_db_instance", "storage_encrypted"),),
         ),
         _iac(
             "RDS.IAC_STORAGE_ENCRYPTED",
@@ -573,6 +606,7 @@ _RDS_LOG_EXPORTS = GovernanceControl(
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.EnabledCloudwatchLogsExports",
             expectation=EvidenceExpectation.NON_EMPTY,
+            plan_paths=(("aws_db_instance", "enabled_cloudwatch_logs_exports"),),
         ),
         _iac(
             "RDS.IAC_LOG_EXPORTS",
@@ -613,6 +647,8 @@ _ALB_HTTPS_ONLY = GovernanceControl(
             expected_value="HTTP",
             # ListenerArn은 좌표다. HTTPS 전용 여부는 Protocol만이 답한다.
             expectation_paths=("attributes.listeners[].Protocol",),
+            # 리스너는 plan에서 로드밸런서와 별개 리소스이며 `load_balancer_arn`으로 부모를 가리킨다.
+            plan_paths=(("aws_lb_listener", "protocol"), ("aws_alb_listener", "protocol")),
         ),
         _iac(
             "ALB.IAC_LISTENER_PROTOCOL",
@@ -646,6 +682,8 @@ _ALB_ACCESS_LOGGING = GovernanceControl(
             "attributes.load_balancer_attributes.{access_logs.s3.enabled}",
             expectation=EvidenceExpectation.ALL_EQUAL,
             expected_value="true",
+            # plan은 boolean `true`를 준다. 술어는 boolean을 "true"/"false"로 읽는다.
+            plan_paths=(("aws_lb", "access_logs[].enabled"), ("aws_alb", "access_logs[].enabled")),
         ),
         _iac(
             "ALB.IAC_ACCESS_LOGS",
@@ -769,4 +807,26 @@ def control_for_rule(
     control = catalog.control(control_key)
     if control is None:  # pragma: no cover - the catalog test pins every mapped key
         raise RuleControlLookupError(f"legacy rule {rule.rule_id!r} maps to an unknown control")
+    return control, control.baseline_required_evidence
+
+
+def control_for_finding(
+    rule_id: str,
+    rule: PolicyRule | None,
+    catalog: GovernanceControlCatalog = MVP_CONTROL_CATALOG,
+) -> tuple[GovernanceControl, tuple[str, ...]] | None:
+    """`control_for_rule` for callers that hold a Finding, not necessarily the Rule.
+
+    조치·readiness는 Finding의 `rule_id`/`rule_version`만 갖는다. Rule을 읽을 수 있으면
+    (`rule`) 그것이 정본이고, 읽을 수 없으면 legacy 매핑만 남는다 — authored Rule은 Catalog 매핑에
+    없으므로 그 경우 `None`이며, 호출자는 "판정 없음"으로 다룬다.
+    """
+    if rule is not None:
+        return control_for_rule(rule, catalog)
+    control_key = LEGACY_RULE_CONTROL_KEYS.get(rule_id)
+    if control_key is None:
+        return None
+    control = catalog.control(control_key)
+    if control is None:  # pragma: no cover - the catalog test pins every mapped key
+        return None
     return control, control.baseline_required_evidence

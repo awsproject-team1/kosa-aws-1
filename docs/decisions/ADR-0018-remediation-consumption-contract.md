@@ -139,3 +139,11 @@ runtime identity가 준비된 뒤 통합한다.
 이 ADR의 소유권·command·single-source 결정은 확정됐다. 자동 batch remediation은 M2 범위 밖이며,
 단건 사용자 트리거만 지원한다. D live adapter나 외부 AWS/GitHub/Terraform E2E를 이 결정의 완료
 조건으로 포함하지 않는다.
+
+## 보완 2026-09-05 — 조치 prompt의 `remediation_guidance` (ADR-0024 §G)
+
+C Remediation Agent의 prompt는 Finding의 `rationale` 외에 Control 설명, 승인된 Rule의
+`evaluation_rubric`(고객 partition에서 읽을 수 있을 때), IaC hint, 그리고 plan 검사가 읽을
+attribute·기대값(`plan_checks`)을 싣는다. 결정적 판정의 rationale은 AWS API 투영 경로라서 모델이
+그것을 Terraform attribute로 혼자 번역해야 했다 — 매핑은 Catalog에 있다. 경계는 그대로다: 모델은
+여전히 바뀔 파일과 내용만 정하고, 변경이 검사를 만족하는지는 readiness의 코드가 판정한다.

@@ -174,6 +174,30 @@ _VALUES_BEARING_EXPECTATIONS = frozenset({EvidenceExpectation.ALL_IN})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PlanEvidencePath:
+    """Where a `terraform show -json` plan carries the same fact an AWS capability judges.
+
+    IaC 원문(HCL)은 파일 단위 근거이고 값의 위치가 authoritative하지 않다(ADR-0023 §2). 그러나
+    plan의 `resource_changes[].change.after`는 provider가 해석을 끝낸 구조화된 값이며, 이 저장소는
+    그것을 이미 결정적으로 투영해 `plan_hash`를 만든다(ADR-0019 §1). 그 위에서는 AWS 문서에 대해
+    선언한 **같은 술어**를 같은 문법의 경로로 판정할 수 있다 — "이 patch가 실제로 Finding을
+    해소하는가"를 apply 전에 코드가 답한다(ADR-0024 §E).
+
+    `path`는 `after` 객체 기준이다(`rule[].object_ownership`). AWS 문서 경로와 같은 문법이다.
+    """
+
+    terraform_resource_type: str
+    path: str
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.terraform_resource_type, "terraform_resource_type")
+        require_non_empty_string(self.path, "path")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"terraform_resource_type": self.terraform_resource_type, "path": self.path}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class EvidenceCapabilityBinding:
     """One piece of evidence the product can actually obtain for a Control.
 
@@ -197,6 +221,10 @@ class EvidenceCapabilityBinding:
     expected_value: str | None = None
     #: `ALL_IN`의 허용 집합. 대소문자를 무시하고 비교한다.
     expected_values: tuple[str, ...] = ()
+    #: 같은 술어를 terraform plan의 `after` 값에서 판정할 수 있는 위치. AWS_ACTUAL 전용이며
+    #: `expectation`이 있을 때만 뜻이 있다. 비어 있으면 plan으로는 이 capability를 판정하지 않는다
+    #: — plan의 모양이 AWS 문서와 달라 술어가 맞지 않는 capability(SG ingress, logging)가 그렇다.
+    plan_paths: tuple[PlanEvidencePath, ...] = ()
     #: 술어가 판정하는 경로. 비어 있으면 `document_paths` 전체다. capability는 식별자 경로
     #: (`volumes[].VolumeId`)를 함께 선언하는데 그것은 근거의 좌표이지 기준이 아니므로,
     #: 기준을 담은 경로만 골라야 한다.
@@ -227,6 +255,12 @@ class EvidenceCapabilityBinding:
                 # IaC 근거는 파일 단위이고 값의 위치가 authoritative하지 않다. 그 위에서 술어를
                 # 판정하면 HCL을 파싱하지도 않은 채 사실을 주장하게 된다.
                 raise ValueError("an IAC capability must not declare an expectation")
+            if self.plan_paths:
+                # plan 경로는 AWS capability의 술어를 plan에서 재사용하는 선언이다. IaC hint에
+                # 붙이면 hint가 authoritative처럼 읽힌다.
+                raise ValueError(
+                    "plan_paths belong to the AWS_ACTUAL capability whose predicate they reuse"
+                )
             return
         raise ValueError("an evidence capability must bind to IAC or AWS_ACTUAL")
 
@@ -238,6 +272,13 @@ class EvidenceCapabilityBinding:
         _require_unique_strings(
             self.expected_values, "expected_values", limit=MAX_EVIDENCE_CAPABILITIES
         )
+        if not isinstance(self.plan_paths, tuple) or not all(
+            isinstance(entry, PlanEvidencePath) for entry in self.plan_paths
+        ):
+            raise TypeError("plan_paths must be a tuple of PlanEvidencePath values")
+        locations = {(entry.terraform_resource_type, entry.path) for entry in self.plan_paths}
+        if len(locations) != len(self.plan_paths):
+            raise ValueError("plan_paths must not repeat a location")
         if self.expectation is None:
             if self.expected_value is not None:
                 raise ValueError("expected_value requires an expectation")
@@ -245,6 +286,8 @@ class EvidenceCapabilityBinding:
                 raise ValueError("expected_values requires an expectation")
             if self.expectation_paths:
                 raise ValueError("expectation_paths requires an expectation")
+            if self.plan_paths:
+                raise ValueError("plan_paths requires an expectation to reuse")
             return
         unknown = [path for path in self.expectation_paths if path not in self.document_paths]
         if unknown:
@@ -292,6 +335,7 @@ class EvidenceCapabilityBinding:
             "expected_value": self.expected_value,
             "expected_values": list(self.expected_values),
             "expectation_paths": list(self.expectation_paths),
+            "plan_paths": [entry.to_dict() for entry in self.plan_paths],
         }
 
 

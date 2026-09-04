@@ -41,8 +41,20 @@
     고정한다. dry-run: **14 CODE / 10 MODEL, Bedrock 호출 20회**(원래 48). 모델에 남은 AWS 좌표는
     EC2 공인 IP 둘뿐이며 의도된 것이다("private tier인가"는 해석) — 이제 그 해석에 필요한 서브넷
     사실이 문서에 있다. 고객 read Role에 새 action 넷이 필요하다(`docs/M1-SANDBOX-INTEGRATION.md`).
-  - **다음.** (1) plan `after` 값으로 IaC 관점도 코드가 판정한다. (2) 조치 prompt에 Rule 문언과
-    Terraform 매핑을 넘긴다.
+  - **plan은 사실이다 — 조치가 Finding을 실제로 고치는지 apply 전에 코드가 답한다 (ADR-0024 §E).**
+    AWS capability의 술어를 terraform plan의 `after` 값에서 재사용할 위치를 Catalog가 선언하고
+    (`plan_paths`, 결정적 capability 9개 중 SG ingress·logging을 뺀 7개), D의 plan port가 그
+    위치의 값만 `PlanSummary.plan_evidence`로 싣는다(allow-list, `plan_hash`와 같은 canonical
+    변경에서). C의 deployment readiness가 Finding의 Rule 술어를 그 값에 돌려 FAIL이면
+    `FINDING_UNRESOLVED_IN_PLAN`으로 승인을 막는다. 답할 수 없으면 code를 남기지 않는다 —
+    "판정 없음"은 "해소됨"이 아니다. INITIAL의 IaC 좌표는 그대로 모델이며 drift 규칙(§4)이 그
+    불일치를 `MANUAL_REVIEW`로 낮춘다.
+  - **조치 prompt가 Rule 문언과 plan 검사 항목을 본다 (§G).** `remediation_guidance`에 Control
+    설명, 승인된 Rule의 `evaluation_rubric`(고객 partition에서 읽을 수 있을 때), IaC hint, 그리고
+    plan 검사가 읽을 attribute·기대값(`plan_checks`)을 싣는다. rationale의 AWS 경로를 모델이 혼자
+    Terraform attribute로 번역하던 것을 Catalog 매핑으로 대신한다. 두 단계가 같은 술어를 본다.
+  - **다음.** 라이브 회귀 측정(`score-boundary-20260905.md` §3)과 고객 read Role 권한 추가.
+    IAC INITIAL 좌표의 결정적 판정은 HCL parser/projection 계층이 생길 때까지 모델에 남는다.
 
 - **사실은 코드가 판정하고, 판단만 모델에 맡긴다 (2026-09-05).** ISMS-P 준비도 평가의 비용과
   시간을 줄이는 것이 이 서비스의 목적이므로, 측정으로 드러난 세 가지 손실을 한 곳에서 없앤다.
