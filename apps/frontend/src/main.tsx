@@ -204,7 +204,7 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
     setTurns(t => [...t, { role: "user", text }]);
     obs.lightNode("parent", "active");
     try {
-      const d = await api<OrchestrationDecision>("/orchestrate", session.accessToken, { method: "POST", body: JSON.stringify({ message: text }) });
+      const d = await api<OrchestrationDecision>("/orchestrate", session.accessToken, { method: "POST", body: JSON.stringify(profileId ? { message: text, policy_profile_id: profileId } : { message: text }) });
       obs.lightNode("parent", "done");
       const sub: Record<string, GraphNodeId> = { POLICY_QA: "policy_qa", ASSESSMENT: "assessment", REMEDIATION: "remediation", DEPLOYMENT: "deployment" };
       const node = sub[d.intent];
@@ -541,7 +541,13 @@ function App() {
   useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
   const isAdmin = !!session?.groups.includes("Admin");
   useEffect(() => {
-    if (!session || !isAdmin) return;
+    if (!session) return;
+    // A regular user cannot call the admin list; show only their own assignment, which they
+    // already carry in the token. An admin loads the full roster and connected scope.
+    if (!isAdmin) {
+      observer.setUserProfiles([{ email: session.email, profile: session.profile }]);
+      return;
+    }
     void (async () => {
       try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); observer.setRepos(r.repositories); } catch { /* keep panel */ }
       try { const r = await api<{ users: { email: string; profile: string | null }[] }>("/admin/users", session.accessToken); observer.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); } catch { /* keep panel */ }

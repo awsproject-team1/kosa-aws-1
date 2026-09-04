@@ -42,7 +42,11 @@ route 없이 남아 있었다).
 Parent Orchestrator가 메시지를 분류해 다음 중 하나를 돌려준다. **Parent는 워크플로를 시작하지
 않는다** — Job 생성·scope 검증·승인은 각 endpoint가 JWT로 다시 검증한다.
 
-- 요청: `{"message": "<자연어>"}`
+- 요청: `{"message": "<자연어>", "policy_profile_id?": "<Profile ID>"}`
+  - `policy_profile_id`는 선택이다. 주면 Backend가 **호출자 customer partition 안에서** 그 Profile의
+    게시된 Rule을 조회해 Parent에 읽기 전용 grounding으로 넘긴다 — POLICY_QA 답변이 일반 개념이 아니라
+    그 Profile의 실제 Rule(rule_id·title·requirement·rubric)에 근거하게 된다. 다른 customer의 Profile을
+    지정해도 자기 partition에서만 조회하므로 scope가 넓어지지 않고, 미해결 Profile은 grounding 없이 라우팅만 한다.
 - 응답 `200`: `{intent, rationale, answer?, selector?, requires_confirmation}`
   - `intent` ∈ `POLICY_QA` | `ASSESSMENT` | `REMEDIATION` | `DEPLOYMENT` | `UNSUPPORTED`
   - `POLICY_QA`면 `answer`에 직접 답변, 워크플로 intent면 `selector`에 후보

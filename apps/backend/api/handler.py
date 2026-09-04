@@ -503,9 +503,16 @@ def _orchestration_request(raw_body: object) -> OrchestrationRequest:
     if not isinstance(raw_body, str):
         raise ValueError("body must be a JSON string")
     body = _mapping(json.loads(raw_body))
-    if set(body) != {"message"}:
+    allowed = {"message", "policy_profile_id"}
+    if set(body) - allowed or "message" not in body:
         raise ValueError("orchestrate body fields are invalid")
-    return OrchestrationRequest(message=_non_empty_string(body["message"], "message"))
+    profile_id = body.get("policy_profile_id")
+    return OrchestrationRequest(
+        message=_non_empty_string(body["message"], "message"),
+        policy_profile_id=(
+            _non_empty_string(profile_id, "policy_profile_id") if profile_id is not None else None
+        ),
+    )
 
 
 def _remediation_exception_request(raw_body: object) -> RemediationExceptionRequest:

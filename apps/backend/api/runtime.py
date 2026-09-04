@@ -358,7 +358,26 @@ def _orchestration_components() -> object | None:
         return None
     profile = _parent_model_profile()
     client = boto3.client("bedrock-runtime", region_name=profile.region)
-    return OrchestrationApiService(router=ParentOrchestrator(client=client), model_profile=profile)
+
+    # Ground Policy Q&A in the caller's published rules. The catalog is customer-scoped, so the
+    # factory is keyed by the caller's own customer_id — a caller cannot read another customer's
+    # rules by naming their Profile. If the metadata table is not configured, skip grounding
+    # rather than fail the route.
+    catalog_factory = None
+    table_name = os.environ.get("METADATA_TABLE_NAME")
+    if table_name and table_name.strip():
+        from apps.backend.policy.dynamodb_catalog import DynamoDbPolicyCatalog
+
+        resource = boto3.resource("dynamodb").Table(table_name)
+
+        def catalog_factory(customer_id: str) -> object:
+            return DynamoDbPolicyCatalog(resource, customer_id=customer_id)
+
+    return OrchestrationApiService(
+        router=ParentOrchestrator(client=client),
+        model_profile=profile,
+        catalog_factory=catalog_factory,
+    )
 
 
 def _parent_model_profile() -> object:

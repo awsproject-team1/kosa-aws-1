@@ -128,6 +128,44 @@ class ParentOrchestratorTest(unittest.TestCase):
         with self.assertRaisesRegex(OrchestrationError, "not approved for the Parent"):
             ParentOrchestrator(client=Client({})).route(request(), model_profile=ASSESSMENT_PROFILE)
 
+    def test_policy_context_is_passed_to_the_model_as_system_grounding(self) -> None:
+        client = Client(
+            {
+                "intent": "POLICY_QA",
+                "rationale": "The user asks what a listed rule requires.",
+                "answer": "S3-PUBLIC-001 requires blocking public access.",
+                "selector": None,
+            }
+        )
+
+        decision = ParentOrchestrator(client=client).route(
+            request("what does our public access rule require?"),
+            model_profile=PARENT_PROFILE,
+            policy_context="rule_id: S3-PUBLIC-001\ntitle: S3 block public access",
+        )
+
+        self.assertIs(decision.intent, OrchestrationIntent.POLICY_QA)
+        system_texts = " ".join(block["text"] for block in client.calls[0]["system"])
+        self.assertIn("POLICY CONTEXT —", system_texts)
+        self.assertIn("S3-PUBLIC-001", system_texts)
+
+    def test_without_policy_context_no_grounding_block_is_sent(self) -> None:
+        client = Client(
+            {
+                "intent": "POLICY_QA",
+                "rationale": "general question",
+                "answer": "Encryption at rest protects stored data.",
+                "selector": None,
+            }
+        )
+
+        ParentOrchestrator(client=client).route(
+            request("what is encryption at rest?"), model_profile=PARENT_PROFILE
+        )
+
+        system_texts = " ".join(block["text"] for block in client.calls[0]["system"])
+        self.assertNotIn("POLICY CONTEXT —", system_texts)
+
     def test_rejects_extra_model_fields(self) -> None:
         client = Client(
             {
