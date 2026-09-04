@@ -884,6 +884,15 @@ class HttpApiCorsTest(unittest.TestCase):
         for branch in self._origin_branches():
             self.assertNotIn("*", branch)
 
+    def test_oauth_scopes_carry_the_profile_claim(self) -> None:
+        """The per-user Policy Profile lives on the Cognito standard `profile` attribute, and the
+        SPA reads it from the ID token. Cognito only emits that claim when the client requests the
+        `profile` scope, so dropping it silently strips every user's assigned Profile — the console
+        shows "profile 미지정" even after an admin assigns one and the user signs in again.
+        """
+        client = _properties(_template()["Resources"]["UserPoolClient"])
+        self.assertIn("profile", client["AllowedOAuthScopes"])
+
 
 class CloudFormationTemplateDeliveryTest(unittest.TestCase):
     """The template has to reach CloudFormation by a route that fits its size.

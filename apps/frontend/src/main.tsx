@@ -59,8 +59,20 @@ async function startLogin() {
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   sessionStorage.setItem(verifierKey, verifier);
   sessionStorage.setItem(stateKey, state);
-  const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, response_type: "code", scope: "openid email", redirect_uri: REDIRECT_URI, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
+  // prompt=login forces the Hosted UI to re-authenticate every time instead of silently reusing
+  // its session cookie. Without it, clicking "일반 사용자로 로그인" after an admin session just
+  // lands back in the same account, so a role switch is impossible without a full logout.
+  const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, response_type: "code", scope: "openid email profile", redirect_uri: REDIRECT_URI, state, prompt: "login", code_challenge_method: "S256", code_challenge: await sha256(verifier) });
   window.location.assign(`https://${COGNITO_DOMAIN}/oauth2/authorize?${q}`);
+}
+function logout() {
+  // Clear any in-flight PKCE state, then hand off to the Hosted UI logout endpoint so Cognito
+  // also drops its session cookie — otherwise the next login would silently reuse this session.
+  // logout_uri must be a registered LogoutURL on the app client (see FrontendLogoutUrl in IaC).
+  sessionStorage.removeItem(verifierKey);
+  sessionStorage.removeItem(stateKey);
+  const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, logout_uri: REDIRECT_URI });
+  window.location.assign(`https://${COGNITO_DOMAIN}/logout?${q}`);
 }
 type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null; profile: string | null };
 function decodeJwt(token: string): Record<string, unknown> {
@@ -456,6 +468,16 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
       await refresh();
     } catch (e) { setError(`지정 실패: ${(e as Error).message}`); }
   }
+  async function deleteUser(u: User) {
+    setError(null); setNotice(null);
+    if (u.email === session.email) { setError("현재 로그인한 사용자는 삭제할 수 없습니다."); return; }
+    if (!confirm(`사용자 '${u.email}'을(를) 삭제할까요? Cognito 계정과 그룹 소속이 영구 삭제됩니다.`)) return;
+    try {
+      await api("/admin/users", session.accessToken, { method: "DELETE", body: JSON.stringify({ email: u.email }) });
+      setNotice(`삭제됨: ${u.email}`);
+      await refresh();
+    } catch (e) { setError(`삭제 실패: ${(e as Error).message}`); }
+  }
 
   return <div className="panel">
     <div className="card">
@@ -475,9 +497,10 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
         <label style={{ flex: 2 }}>Profile<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
         <button onClick={() => void assign()}>지정</button>
       </div>
-      <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 Profile</th></tr></thead>
-        <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td><td>{u.profile ? <code>{u.profile}</code> : "-"}</td></tr>)}
-          {users.length === 0 && <tr><td colSpan={3} className="obs-empty">사용자가 없습니다.</td></tr>}</tbody></table>
+      <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 Profile</th><th></th></tr></thead>
+        <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td><td>{u.profile ? <code>{u.profile}</code> : "-"}</td>
+          <td><button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} disabled={u.email === session.email} onClick={() => void deleteUser(u)}>삭제</button></td></tr>)}
+          {users.length === 0 && <tr><td colSpan={4} className="obs-empty">사용자가 없습니다.</td></tr>}</tbody></table>
       <p className="hint">Profile 목록은 이 브라우저에서 게시한 것을 보여줍니다(백엔드 list-profiles 미구현).</p>
     </div>
     {notice && <p className="status">{notice}</p>}
@@ -544,6 +567,7 @@ function App() {
         </nav>
         <span className="spacer" />
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
+        <button className="logout-btn" onClick={() => logout()}>로그아웃</button>
       </div>
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}

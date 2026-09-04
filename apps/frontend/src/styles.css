@@ -54,6 +54,8 @@ body {
 .topbar nav button.active, .topbar nav button:hover { color: var(--text); background: var(--panel-2); border-color: var(--line); }
 .topbar .spacer { flex: 1; }
 .topbar .who { color: var(--muted); font-size: 12px; }
+.topbar .logout-btn { margin-left: 12px; background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.topbar .logout-btn:hover { color: var(--err); border-color: var(--err); }
 
 /* ---------- Observer panel ---------- */
 .obs-title { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 22px 0 10px; }

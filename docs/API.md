@@ -84,6 +84,7 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 | `POST` | `/admin/users` | 배선됨 | Admin이 customer scope의 사용자 생성(`{email, role, temporary_password}` → `201 {email, role, customer_id}`). role은 `Admin`/`User`, 새 사용자는 호출자의 `custom:customer_id`로 고정. `temporary_password`는 영구 비밀번호로 설정된다(콘솔에 첫 로그인 변경 flow가 없다). pool 전역에서 이미 쓰이는 email이면 `400` |
 | `GET` | `/admin/users` | 배선됨 | Admin이 자기 customer의 사용자 목록 조회(`{users:[{username, email, customer_id, profile, status, enabled}]}`). 비밀번호는 반환하지 않는다 |
 | `POST` | `/admin/users/profile` | 배선됨 | Admin이 사용자에게 기본 Policy Profile 지정(`{email, policy_profile_id}`). Cognito 표준 `profile` 속성에 저장되어 사용자가 로그인 시 자기 token에서 읽는다. 대상 사용자가 호출자 customer 소속이 아니거나 존재하지 않으면 동일하게 `403` — 존재 여부를 customer 경계 너머로 알리지 않는다 |
+| `DELETE` | `/admin/users` | 배선됨 | Admin이 자기 customer scope의 사용자 삭제(`{email}` → `200 {email, deleted:true}`). 삭제 전에 대상의 `custom:customer_id`를 읽어 호출자 customer 소속임을 확인한다. 대상이 호출자 customer 소속이 아니거나 존재하지 않으면 동일하게 `403` — 존재 여부를 customer 경계 너머로 알리지 않는다. 과거 audit event는 지우지 않는다 |
 
 ### 후보 조회 응답
 

@@ -88,6 +88,11 @@ class FakeCognito:
             ],
         }
 
+    def admin_delete_user(self, **kwargs):
+        self.calls.append(("admin_delete_user", kwargs))
+        self.users.pop(kwargs["Username"], None)
+        return {}
+
     def list_users(self, **kwargs):
         self.calls.append(("list_users", kwargs))
         if self.pages is not None:
@@ -293,6 +298,57 @@ class AssignProfileTest(unittest.TestCase):
             _service(client).assign_profile(
                 ADMIN, email="not-an-email", policy_profile_id="profile-1"
             )
+
+
+class DeleteUserTest(unittest.TestCase):
+    def test_a_user_is_deleted_within_the_callers_customer(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        result = _service(client).delete_user(ADMIN, email="a@example.com")
+        self.assertNotIn("a@example.com", client.users)
+        self.assertEqual(result, {"email": "a@example.com", "deleted": True})
+
+    def test_another_customers_user_cannot_be_deleted(self) -> None:
+        """The regression this pins: a delete aimed at a foreign account by address alone."""
+        client = FakeCognito({"victim@example.com": "cust-b"})
+        with self.assertRaises(AuthorizationDenied):
+            _service(client).delete_user(ADMIN, email="victim@example.com")
+        self.assertIn("victim@example.com", client.users)
+        self.assertNotIn("admin_delete_user", [method for method, _ in client.calls])
+
+    def test_an_unknown_user_fails_the_same_way_as_a_foreign_one(self) -> None:
+        """Same denial for both, so the endpoint is not a cross-tenant existence oracle."""
+        client = FakeCognito({"victim@example.com": "cust-b"})
+        foreign = self._denial(client, "victim@example.com")
+        missing = self._denial(client, "nobody@example.com")
+        self.assertEqual(str(foreign), str(missing))
+
+    @staticmethod
+    def _denial(client: FakeCognito, email: str) -> BaseException:
+        try:
+            _service(client).delete_user(ADMIN, email=email)
+        except AuthorizationDenied as error:
+            return error
+        raise AssertionError("expected AuthorizationDenied")
+
+    def test_an_infrastructure_failure_is_not_reported_as_a_denial(self) -> None:
+        """A missing IAM grant on the boundary read must surface as a server fault, not a 403."""
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.get_user_error = ClientError("AccessDeniedException")
+        with self.assertRaises(ClientError):
+            _service(client).delete_user(ADMIN, email="a@example.com")
+        self.assertIn("a@example.com", client.users)
+        self.assertNotIn("admin_delete_user", [method for method, _ in client.calls])
+
+    def test_a_non_admin_cannot_delete_a_user(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        with self.assertRaises(AuthorizationDenied):
+            _service(client).delete_user(USER, email="a@example.com")
+        self.assertEqual(client.calls, [])
+
+    def test_an_invalid_email_is_a_client_error(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        with self.assertRaises(UserManagementError):
+            _service(client).delete_user(ADMIN, email="not-an-email")
 
 
 class ServiceConstructionTest(unittest.TestCase):
