@@ -1,6 +1,7 @@
 """Semantic security checks for the canonical M0 CloudFormation template."""
 
 import ast
+import json
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -792,6 +793,70 @@ def _actions(statement: dict) -> list[str]:
     value = statement["Action"]
     actions = value if isinstance(value, list) else [value]
     return [action for action in actions if isinstance(action, str)]
+
+
+class HttpApiCorsTest(unittest.TestCase):
+    """CORS origins are enumerated in the template, so a duplicate is a deploy-time failure.
+
+    API Gateway refuses a repeated allow-origin outright ("Duplicated values are not allowed in
+    allow-origins") and takes the whole stack update down with it. The list is assembled from a
+    parameter plus a literal, so whether the two collide depends on a value the template does not
+    see — it is decided by a deploy Environment variable. That makes it exactly the kind of thing
+    that passes review and fails in CloudFormation, which is where this check earns its place.
+    """
+
+    #: The Vite dev server origin the sandbox branch appends.
+    LOCAL_DEVELOPMENT_ORIGIN = "http://localhost:5173"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        template = _template()
+        resources = template["Resources"]
+        conditions = template["Conditions"]
+        if not isinstance(resources, dict) or not isinstance(conditions, dict):
+            raise TypeError("CloudFormation resources and conditions must be mappings")
+        cls.conditions = conditions
+        cls.cors = _properties(resources["HttpApi"])["CorsConfiguration"]
+
+    def _origin_branches(self) -> list[list[str]]:
+        """Every origin list the template can render, one per branch of the `Fn::If`."""
+        origins = self.cors["AllowOrigins"]
+        if all(isinstance(entry, str) for entry in origins):
+            return [list(origins)]
+        # `!If [condition, then, else]` loads as a three-element list.
+        self.assertEqual(len(origins), 3, "unexpected AllowOrigins shape")
+        return [list(origins[1]), list(origins[2])]
+
+    def test_no_branch_can_repeat_an_origin(self) -> None:
+        for branch in self._origin_branches():
+            with self.subTest(branch=branch):
+                self.assertEqual(len(branch), len(set(branch)))
+
+    def test_the_local_origin_is_guarded_against_matching_the_callback(self) -> None:
+        """The parameter defaults to this same URL, so equality is the expected case, not the edge.
+
+        Without the guard, a sandbox deploy with no `FRONTEND_CALLBACK_URL` configured renders the
+        origin twice and API Gateway rejects the stack. That is how it failed once.
+        """
+        branch = next(
+            branch for branch in self._origin_branches() if self.LOCAL_DEVELOPMENT_ORIGIN in branch
+        )
+        if branch == [self.LOCAL_DEVELOPMENT_ORIGIN]:
+            return  # a lone literal cannot collide with anything
+        parameters = [entry for entry in branch if entry != self.LOCAL_DEVELOPMENT_ORIGIN]
+        condition = json.dumps(self.conditions["LocalDevelopmentOriginAllowed"])
+        for parameter in parameters:
+            with self.subTest(parameter=parameter):
+                self.assertIn(parameter, condition)
+                self.assertIn(self.LOCAL_DEVELOPMENT_ORIGIN, condition)
+
+    def test_credentials_stay_off(self) -> None:
+        """A Bearer token is sent explicitly; allowing credentials would invite cookie CSRF."""
+        self.assertFalse(self.cors["AllowCredentials"])
+
+    def test_no_wildcard_origin(self) -> None:
+        for branch in self._origin_branches():
+            self.assertNotIn("*", branch)
 
 
 if __name__ == "__main__":
