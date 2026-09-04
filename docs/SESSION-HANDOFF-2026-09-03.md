@@ -238,7 +238,7 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   | --- | --- | --- |
   | Secret | `DEPLOYMENT_RUNTIME_JSON` | `[{"customer_id":"kosa-sandbox","repository_id":"test-s3-sandbox","repository_full_name":"awsproject-team1/test","github_token_secret_id":"kosa-governance-sandbox/m1/github-token","aws_account_id":"369676914736","aws_read_role_arn":"arn:aws:iam::369676914736:role/kosa-governance-sandbox-m1-read","aws_external_id_secret_id":"kosa-governance-sandbox/m1/aws-external-id","resource_types":["AWS::S3::Bucket"]}]` |
   | Secret | `DEPLOYMENT_GITHUB_SECRET_ARNS` | `arn:aws:secretsmanager:us-east-1:369676914736:secret:kosa-governance-sandbox/m1/github-token-*` |
-  | Variable | `POLICY_AUTHORING_MODEL_PROFILE_JSON` | `{"model_profile_id":"policy-authoring-nova-lite-m4-v1","role":"POLICY_AUTHORING","region":"us-east-1","model_id":"amazon.nova-lite-v1:0","prompt_version":"policy-authoring/2026-09-03","rubric_version":"policy-authoring-rubric/1","golden_dataset_version":"policy-authoring-golden/0-ungated"}` |
+  | Variable | `POLICY_AUTHORING_MODEL_PROFILE_JSON` | `{"model_profile_id":"policy-authoring-nova-lite-m4-v1","role":"POLICY_AUTHORING","region":"us-east-1","model_id":"amazon.nova-lite-v1:0","prompt_version":"policy-authoring/2026-09-04","rubric_version":"policy-authoring-rubric/1","golden_dataset_version":"policy-authoring-golden/0-ungated"}` |
 
   세 값은 운영 파서(`DeploymentRuntimeConfiguration.from_json`, authoring `_model_profile()`, 템플릿
   `AllowedPattern`)로 로컬 검증했다. 식별자만 있고 credential은 없다. 주의 두 가지:

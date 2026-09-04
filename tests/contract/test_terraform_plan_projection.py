@@ -2,6 +2,7 @@
 
 import unittest
 
+from ci.terraform.canonical_plan_hash import _project as customer_project_plan_changes
 from packages.contracts import (
     ArtifactType,
     PlanProjectionError,
@@ -86,6 +87,12 @@ class TerraformPlanProjectionTest(unittest.TestCase):
         self.assertFalse(payload.endswith(b"\n"))
         self.assertNotIn(b", ", payload)
         self.assertNotIn(b": ", payload)
+
+    def test_customer_helper_matches_when_optional_fields_are_absent(self) -> None:
+        """Copied customer repositories must hash the same null-filled allow-list projection."""
+        document = show_json([change("aws_s3_bucket.logs", ["update"])])
+
+        self.assertEqual(customer_project_plan_changes(document), project_plan_changes(document))
 
     def test_destructive_when_change_deletes(self) -> None:
         # ADR-0019 불변식 #8: delete는 파괴적이다.

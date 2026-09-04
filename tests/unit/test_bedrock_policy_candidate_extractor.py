@@ -16,6 +16,7 @@ from apps.backend.policy.authoring import (
 )
 from apps.backend.policy.authoring.bedrock_extractor import (
     MAX_REQUIREMENTS_PER_CHUNK,
+    PROMPT_VERSION,
     _catalog_prompt_view,
     _chunks,
     _redacted,
@@ -37,7 +38,7 @@ AUTHORING_PROFILE = ModelProfile(
     role=ModelProfileRole.POLICY_AUTHORING,
     region="us-east-1",
     model_id="anthropic.claude",
-    prompt_version="policy-authoring/2026-09-03",
+    prompt_version=PROMPT_VERSION,
     rubric_version="policy-authoring-rubric/1",
     golden_dataset_version="policy-authoring-golden/1",
 )
@@ -88,7 +89,30 @@ class _Source:
         return {"Body": BytesIO(normalized_artifact_bytes())}
 
 
-def _extract(payload: object, **kwargs: object):
+def _response(requirements: list[object], locators: list[str] | None = None) -> dict[str, object]:
+    allowed = locators or [locator for locator, _kind, _text in UNIT_TEXTS]
+    cited = {
+        locator
+        for requirement in requirements
+        if isinstance(requirement, dict)
+        for locator in requirement.get("source_locators", [])
+        if isinstance(locator, str) and locator in allowed
+    }
+    return {
+        "requirements": requirements,
+        "non_requirement_locators": [locator for locator in allowed if locator not in cited],
+    }
+
+
+def _extract(payload: object, *, complete: bool = True, **kwargs: object):
+    if (
+        complete
+        and isinstance(payload, dict)
+        and "requirements" in payload
+        and "non_requirement_locators" not in payload
+    ):
+        completed = _response(payload["requirements"])
+        payload = {**payload, "non_requirement_locators": completed["non_requirement_locators"]}
     client = FakeBedrock(payload)
     extractor = BedrockPolicyCandidateExtractor(
         client=client,  # type: ignore[arg-type]
@@ -116,7 +140,24 @@ class ApprovedProfileTest(unittest.TestCase):
         identity = extractor.identity
 
         self.assertEqual(identity.model_id, "anthropic.claude")
-        self.assertEqual(identity.prompt_version, "policy-authoring/2026-09-03")
+        self.assertEqual(identity.prompt_version, PROMPT_VERSION)
+
+    def test_a_stale_prompt_profile_is_refused(self) -> None:
+        stale = ModelProfile(
+            model_profile_id="policy-authoring-stale",
+            role=ModelProfileRole.POLICY_AUTHORING,
+            region="us-east-1",
+            model_id="anthropic.claude",
+            prompt_version="policy-authoring/2026-09-03",
+            rubric_version="policy-authoring-rubric/1",
+            golden_dataset_version="policy-authoring-golden/1",
+        )
+
+        with self.assertRaisesRegex(BedrockExtractionError, "prompt version"):
+            BedrockPolicyCandidateExtractor(
+                client=FakeBedrock(),  # type: ignore[arg-type]
+                model_profile=stale,
+            )
 
 
 class RequestTest(unittest.TestCase):
@@ -155,7 +196,7 @@ class ResponseGateTest(unittest.TestCase):
 
     def test_a_json_response_wrapped_in_a_code_fence_is_accepted(self) -> None:
         """Nova는 완결된 JSON을 ```json ... ``` 펜스로 감싸 반환한다. 감싼 펜스만 벗겨 파싱한다."""
-        body = json.dumps({"requirements": [VALID_REQUIREMENT]})
+        body = json.dumps(_response([VALID_REQUIREMENT]))
         fenced = f"```json\n{body}\n```"
         requirements, _client = _extract(fenced)
 
@@ -164,12 +205,16 @@ class ResponseGateTest(unittest.TestCase):
 
     def test_a_non_json_response_is_refused(self) -> None:
         """자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다."""
-        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
             _extract("Here are the requirements I found: ...")
 
     def test_an_unexpected_top_level_key_is_refused(self) -> None:
-        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
             _extract({"requirements": [], "notes": "extra"})
+
+    def test_the_locator_accounting_field_is_required(self) -> None:
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
+            _extract({"requirements": []}, complete=False)
 
     def test_an_evaluation_outcome_field_rejects_the_whole_response(self) -> None:
         """조용히 버리면 모델이 판정을 시도했다는 사실 자체가 사라진다."""
@@ -181,71 +226,101 @@ class ResponseGateTest(unittest.TestCase):
                 ):
                     _extract({"requirements": [entry]})
 
-    def test_an_unknown_requirement_field_is_skipped_not_fatal(self) -> None:
-        # fail-soft: 한 후보의 알 수 없는 필드는 그 후보만 건너뛰고, 같은 응답의 정상 후보는 남는다.
+    def test_an_unknown_requirement_field_fails_the_run(self) -> None:
         bad = {**VALID_REQUIREMENT, "confidence": 0.9, "source_locators": [DATABASE_LOCATOR]}
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_an_invented_locator_is_skipped_not_fatal(self) -> None:
-        """모델이 지어낸 locator를 가진 후보만 버린다. 정상 후보는 유지한다."""
+    def test_an_invented_locator_fails_the_run(self) -> None:
         bad = {**VALID_REQUIREMENT, "source_locators": ["heading/invented/item/1"]}
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "outside this chunk"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_a_control_key_outside_the_catalog_is_skipped_not_fatal(self) -> None:
+    def test_a_control_key_outside_the_catalog_fails_the_run(self) -> None:
         bad = {
             **VALID_REQUIREMENT,
             "mapped_control_key": "NOT_A_CONTROL",
             "source_locators": [DATABASE_LOCATOR],
         }
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_evidence_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
+    def test_evidence_outside_the_control_boundary_fails_the_run(self) -> None:
         bad = {
             **VALID_REQUIREMENT,
             "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"],
             "source_locators": [DATABASE_LOCATOR],
         }
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_a_resource_type_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
+    def test_a_resource_type_outside_the_control_boundary_fails_the_run(self) -> None:
         bad = {
             **VALID_REQUIREMENT,
             "resource_types": ["AWS::RDS::DBInstance"],
             "source_locators": [DATABASE_LOCATOR],
         }
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_an_overlong_field_is_skipped_not_fatal(self) -> None:
+    def test_an_overlong_field_fails_the_run(self) -> None:
         bad = {
             **VALID_REQUIREMENT,
             "requirement": "x" * 5000,
             "source_locators": [DATABASE_LOCATOR],
         }
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "longer than"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
     def test_too_many_requirements_in_one_chunk_are_refused(self) -> None:
         entries = [
             {**VALID_REQUIREMENT, "requirement": f"Requirement number {index}."}
             for index in range(MAX_REQUIREMENTS_PER_CHUNK + 1)
         ]
-        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
+        with self.assertRaisesRegex(BedrockExtractionError, "more requirements"):
             _extract({"requirements": entries})
 
     def test_a_shape_the_classification_invariants_reject_is_refused(self) -> None:
-        """분류가 말하는 것과 채워진 필드가 어긋나는 후보만 건너뛰고, 정상 후보는 남는다."""
+        """분류가 말하는 것과 채워진 필드가 어긋나면 부분 결과를 남기지 않는다."""
         bad = {
             **VALID_REQUIREMENT,
             "classification": "UNSUPPORTED",
             "source_locators": [DATABASE_LOCATOR],
         }
-        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
-        self.assertEqual(len(requirements), 1)
+        with self.assertRaisesRegex(BedrockExtractionError, "invalid requirement shape"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
+
+    def test_every_policy_unit_must_be_classified(self) -> None:
+        payload = {
+            "requirements": [VALID_REQUIREMENT],
+            "non_requirement_locators": [DATABASE_LOCATOR],
+        }
+
+        with self.assertRaisesRegex(BedrockExtractionError, "classify every policy unit"):
+            _extract(payload, complete=False)
+
+    def test_a_locator_cannot_be_requirement_and_non_requirement(self) -> None:
+        payload = _response([VALID_REQUIREMENT])
+        payload["non_requirement_locators"] = [
+            *payload["non_requirement_locators"],  # type: ignore[list-item]
+            STORAGE_LOCATOR,
+        ]
+
+        with self.assertRaisesRegex(BedrockExtractionError, "both a requirement"):
+            _extract(payload, complete=False)
+
+    def test_non_requirement_locators_cannot_repeat_or_be_invented(self) -> None:
+        all_locators = [locator for locator, _kind, _text in UNIT_TEXTS]
+        for invalid, message in (
+            ([*all_locators, all_locators[0]], "must not repeat"),
+            ([*all_locators, "heading/invented/item/1"], "outside this chunk"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(BedrockExtractionError, message):
+                    _extract(
+                        {"requirements": [], "non_requirement_locators": invalid},
+                        complete=False,
+                    )
 
 
 class ChunkingTest(unittest.TestCase):
@@ -279,9 +354,9 @@ class ChunkingTest(unittest.TestCase):
             "required_evidence": ["RDS.STORAGE_ENCRYPTED"],
         }
         client = FakeBedrock(
-            {"requirements": [overlapping]},
-            {"requirements": [overlapping]},
-            {"requirements": []},
+            _response([overlapping], [UNIT_TEXTS[0][0], UNIT_TEXTS[1][0]]),
+            _response([overlapping], [UNIT_TEXTS[1][0], UNIT_TEXTS[2][0]]),
+            _response([], [UNIT_TEXTS[2][0], UNIT_TEXTS[3][0]]),
         )
         extractor = BedrockPolicyCandidateExtractor(
             client=client,  # type: ignore[arg-type]
@@ -296,6 +371,23 @@ class ChunkingTest(unittest.TestCase):
 
         self.assertEqual(len(client.calls), 3)
         self.assertEqual(len(requirements), 1)
+
+    def test_one_failed_middle_chunk_fails_the_whole_document(self) -> None:
+        client = FakeBedrock(
+            _response([], [UNIT_TEXTS[0][0], UNIT_TEXTS[1][0]]),
+            "truncated response",
+            _response([], [UNIT_TEXTS[2][0], UNIT_TEXTS[3][0]]),
+        )
+        extractor = BedrockPolicyCandidateExtractor(
+            client=client,  # type: ignore[arg-type]
+            model_profile=AUTHORING_PROFILE,
+            units_per_chunk=2,
+            chunk_overlap=1,
+        )
+
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
+        self.assertEqual(len(client.calls), 2)
 
     def test_the_merged_order_does_not_depend_on_the_model_output_order(self) -> None:
         second = {
@@ -314,19 +406,13 @@ class ChunkingTest(unittest.TestCase):
 
 
 class RejectionLoggingTest(unittest.TestCase):
-    """A skipped candidate is only visible in a log line, so that line must stay safe to keep.
-
-    The rejection reason is what makes fail-soft debuggable. Contract invariant messages are rule
-    text today, but a few embed the offending value with `!r`, and a locator carries a slug of the
-    customer's own headings. The reason is logged through a redaction that keeps rule text and
-    drops quoted values, so a future Contract message cannot turn this line into a leak.
-    """
+    """A rejected model response is logged without exposing customer policy text."""
 
     def test_the_rejection_reason_is_logged_without_the_policy_sentence(self) -> None:
         bad = {**VALID_REQUIREMENT, "classification": "UNSUPPORTED"}
         with self.assertLogs("governance.authoring", level="WARNING") as logs:
-            requirements, _client = _extract({"requirements": [bad, VALID_REQUIREMENT]})
-        self.assertEqual(len(requirements), 1)
+            with self.assertRaises(BedrockExtractionError):
+                _extract({"requirements": [bad, VALID_REQUIREMENT]})
         rejection = next(line for line in logs.output if "requirement rejected" in line)
         self.assertIn("must not carry rule semantics", rejection)
         self.assertNotIn(VALID_REQUIREMENT["requirement"], rejection)

@@ -59,7 +59,7 @@ CHUNK_OVERLAP_UNITS = 1
 MAX_REQUIREMENTS_PER_DOCUMENT = 150
 MAX_REQUIREMENTS_PER_CHUNK = 40
 
-_RESPONSE_KEYS = frozenset({"requirements"})
+_RESPONSE_KEYS = frozenset({"requirements", "non_requirement_locators"})
 _REQUIRED_FIELDS = frozenset(
     {"source_locators", "requirement", "requirement_summary", "classification", "mapping_reason"}
 )
@@ -78,14 +78,18 @@ _OPTIONAL_FIELDS = frozenset(
     }
 )
 
-PROMPT_VERSION = "policy-authoring/2026-09-03"
+PROMPT_VERSION = "policy-authoring/2026-09-04"
 
 _SYSTEM_PROMPT = (
     "You extract compliance requirements from policy text and map each to a governance control "
     "catalog. You propose rules; you never evaluate anything.\n"
     "\n"
-    "Return ONE JSON object only, no prose and no code fence, with exactly one key "
-    '"requirements" whose value is a list of requirement objects. Each requirement object MUST '
+    "Return ONE JSON object only, no prose and no code fence, with exactly two keys: "
+    '"requirements" (a list of requirement objects) and "non_requirement_locators" (a list of '
+    "locator strings for headings, context, or other units that state no requirement). Every "
+    "locator supplied in policy_units MUST appear either in one or more requirements or in "
+    "non_requirement_locators. Never put the same locator in both places and never omit a "
+    "locator. Each requirement object MUST "
     "have these fields:\n"
     '- "source_locators": array of one or more locator strings, each copied verbatim from the '
     "supplied policy_units in THIS request (never invent a locator and never cite a locator that "
@@ -136,14 +140,7 @@ class BedrockExtractionError(ValueError):
 
 
 class PoisonedResponseError(BedrockExtractionError):
-    """A response the whole chunk must be rejected for, not just one requirement.
-
-    Skipping a single malformed requirement is safe (fail-soft): the run keeps the good ones and
-    records the bad ones. But some failures poison the entire response — the model attempted an
-    evaluation outcome (`judgment`/`severity`/`score`/...), which means it stopped proposing and
-    started deciding. That is a boundary violation, not a quality glitch, so the chunk is refused
-    whole rather than silently keeping its other entries.
-    """
+    """The model attempted an evaluation outcome instead of proposing a requirement."""
 
 
 class BedrockConverseClient(Protocol):
@@ -169,6 +166,10 @@ class BedrockPolicyCandidateExtractor:
             # Assessment용으로 승인된 모델이 정책 추출에도 쓰이면, 승인 경계가 역할별로
             # 존재하지 않게 된다.
             raise BedrockExtractionError("model profile is not approved for policy authoring")
+        if model_profile.prompt_version != PROMPT_VERSION:
+            raise BedrockExtractionError(
+                "model profile prompt version does not match the deployed extractor"
+            )
         if units_per_chunk <= 0 or chunk_overlap < 0 or chunk_overlap >= units_per_chunk:
             raise ValueError("chunk sizing must be positive with a smaller overlap")
         self._client = client
@@ -202,19 +203,10 @@ class BedrockPolicyCandidateExtractor:
 
         merged: dict[str, ExtractedRequirement] = {}
         chunks = list(_chunks(units, self._units_per_chunk, self._chunk_overlap))
-        failed_chunks = 0
         for chunk in chunks:
-            try:
-                chunk_requirements = self._extract_chunk(chunk, catalog)
-            except PoisonedResponseError:
-                # 모델이 판정을 시도한 경계 위반은 청크를 건너뛰는 대신 run 전체를 실패시킨다.
-                raise
-            except BedrockExtractionError as error:
-                # 청크 단위 실패(응답 truncation, 비-JSON, 청크 상한 초과 등)는 그 청크만 버리고
-                # 나머지 청크로 계속한다. 큰 문서에서 한 청크가 잘려도 전체 추출이 죽지 않는다.
-                failed_chunks += 1
-                logging.getLogger("governance.authoring").warning("chunk skipped: %s", error)
-                continue
+            # 한 청크라도 누락되면 문서 전체를 추출했다고 말할 수 없다. 호출자가 재시도할 수
+            # 있도록 오류를 그대로 올리고, 부분 결과를 READY로 저장하지 않는다.
+            chunk_requirements = self._extract_chunk(chunk, catalog)
             for requirement in chunk_requirements:
                 # deterministic merge: 겹치는 unit에서 같은 Requirement가 두 번 나올 수 있다.
                 # digest가 같으면 같은 것이므로 먼저 본 것을 유지한다.
@@ -223,17 +215,6 @@ class BedrockPolicyCandidateExtractor:
                     raise BedrockExtractionError(
                         "the model proposed more requirements than one document may carry"
                     )
-        if failed_chunks:
-            logging.getLogger("governance.authoring").info(
-                "extraction kept %d requirement(s); %d/%d chunk(s) skipped",
-                len(merged),
-                failed_chunks,
-                len(chunks),
-            )
-        if not merged and failed_chunks == len(chunks) and chunks:
-            # 모든 청크가 실패했다면 추출 자체가 신뢰할 수 없다. 빈 결과를 "후보 없음"으로
-            # 잘못 표시하지 않도록 실패시킨다.
-            raise BedrockExtractionError("every chunk failed to extract")
         # canonical order: digest 순. 모델의 출력 순서에 의존하지 않는다.
         return tuple(merged[digest] for digest in sorted(merged))
 
@@ -253,23 +234,26 @@ class BedrockPolicyCandidateExtractor:
         if len(entries) > MAX_REQUIREMENTS_PER_CHUNK:
             raise BedrockExtractionError("the model proposed more requirements than one chunk may")
         allowed_locators = frozenset(unit.locator for unit in chunk)
-        # fail-soft: 후보 하나가 검증에 걸려도 청크 전체를 버리지 않는다. 그 항목만 건너뛰고
-        # (사유를 로그에 남기고) 나머지 좋은 후보는 유지한다. 다만 PoisonedResponseError(모델이
-        # 판정 필드를 낸 경계 위반)는 청크 전체를 거부하도록 그대로 올린다.
+        non_requirement_locators = _non_requirement_locators(
+            payload["non_requirement_locators"], allowed_locators
+        )
         kept: list[ExtractedRequirement] = []
-        skipped = 0
         for entry in entries:
-            try:
-                kept.append(_requirement_from_response(entry, allowed_locators, catalog))
-            except PoisonedResponseError:
-                raise
-            except BedrockExtractionError as error:
-                skipped += 1
-                logging.getLogger("governance.authoring").warning("requirement skipped: %s", error)
-        if skipped:
-            logging.getLogger("governance.authoring").info(
-                "chunk kept %d requirement(s), skipped %d", len(kept), skipped
+            # 후보 하나가 잘못돼도 해당 locator의 요구사항이 사라질 수 있으므로 청크 전체를
+            # 실패시킨다. 부분 후보를 저장하는 fail-soft 경로는 허용하지 않는다.
+            kept.append(_requirement_from_response(entry, allowed_locators, catalog))
+
+        requirement_locators = {
+            locator for requirement in kept for locator in requirement.source_locators
+        }
+        overlap = requirement_locators & non_requirement_locators
+        if overlap:
+            raise BedrockExtractionError(
+                "a locator cannot be both a requirement and a non-requirement"
             )
+        classified = requirement_locators | non_requirement_locators
+        if classified != allowed_locators:
+            raise BedrockExtractionError("the model did not classify every policy unit")
         return tuple(kept)
 
     def _request_body(
@@ -399,6 +383,22 @@ def _strip_json_code_fence(text: str) -> str:
     if len(lines) >= 2 and lines[-1].strip() == "```":
         return "\n".join(lines[1:-1])
     return text
+
+
+def _non_requirement_locators(value: object, allowed_locators: frozenset[str]) -> frozenset[str]:
+    """Validate the model's explicit accounting for context-only units."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise BedrockExtractionError("non_requirement_locators must be a list")
+    locators: list[str] = []
+    for locator in value:
+        if not isinstance(locator, str) or not locator.strip():
+            raise BedrockExtractionError("non_requirement_locators items must be non-empty strings")
+        if locator in locators:
+            raise BedrockExtractionError("non_requirement_locators must not repeat a locator")
+        locators.append(locator)
+    if set(locators) - allowed_locators:
+        raise BedrockExtractionError("non_requirement_locators cite units outside this chunk")
+    return frozenset(locators)
 
 
 def _requirement_from_response(
