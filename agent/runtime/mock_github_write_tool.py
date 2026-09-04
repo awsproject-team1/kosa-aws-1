@@ -29,6 +29,8 @@ class MockGitHubWriteTool:
         self._customer_id = customer_id
         self._repository_id = repository_id
         self.opened: list[tuple[RemediationPatch, dict[str, str]]] = []
+        #: 각 open 호출에 전달된 검토용 설명. 테스트가 diff가 PR 본문까지 도달했는지 확인한다.
+        self.descriptions: list[str | None] = []
 
     def propose_pull_request(self, patch: RemediationPatch) -> ProposedPullRequest:
         """tool scope 안에 있는 patch에 대한 결정적 PR 제안을 반환한다."""
@@ -51,13 +53,18 @@ class MockGitHubWriteTool:
         )
 
     def open_pull_request(
-        self, patch: RemediationPatch, changes: Mapping[str, str]
+        self,
+        patch: RemediationPatch,
+        changes: Mapping[str, str],
+        *,
+        description: str | None = None,
     ) -> OpenedPullRequest:
         """Record the write that a live adapter would perform and return a deterministic PR."""
         proposal = self.propose_pull_request(patch)
         if tuple(sorted(changes)) != tuple(sorted(patch.changed_paths)):
             raise ValueError("changes do not match the patch's changed paths")
         self.opened.append((patch, dict(changes)))
+        self.descriptions.append(description)
         return OpenedPullRequest(
             customer_id=proposal.customer_id,
             repository_id=proposal.repository_id,

@@ -23,7 +23,11 @@ from packages.contracts.policy_ingestion import (
 )
 
 MARKDOWN_PARSER_ID = "markdown-parser"
-MARKDOWN_PARSER_VERSION = "1.0.1"
+#: 1.1.0: 빈 줄 없이 이어진 최상위 목록 항목을 각각 별도 unit으로 나눈다. 1.0.1은 tight list 전체를
+#: unit 하나로 묶어 요구사항 여러 개가 locator 하나를 공유했다 — 승인·Evidence가 가리키는 단위가
+#: "문장"이 아니라 "목록 전체"가 되는 문제다. parser version이 바뀌었으므로 같은 원본도 새 Source
+#: version으로 정규화된다(`docs/POLICY_INGESTION.md` Evidence identity).
+MARKDOWN_PARSER_VERSION = "1.1.0"
 PLAIN_TEXT_PARSER_ID = "plain-text-parser"
 PLAIN_TEXT_PARSER_VERSION = "1.0.1"
 CSV_PARSER_ID = "csv-parser"
@@ -31,6 +35,9 @@ CSV_PARSER_VERSION = "1.0.1"
 
 _HEADING = re.compile(r"^(?P<level>#{1,6})\s+(?P<title>.+?)\s*#*\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+#: 들여쓰기 없는 목록 마커. 이 줄에서 새 unit이 시작한다. 들여쓴 하위 항목은 상위 항목의 일부다 —
+#: 사내 체크리스트의 "확인 방법" 하위 목록이 항목과 떨어지면 locator 하나가 문장 절반만 가리킨다.
+_TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
 
 
@@ -110,6 +117,10 @@ def parse_markdown(payload: bytes) -> ParsedPolicyDocument:
             flush(index - 1)
             block_line = 0
             continue
+        if block and not in_fence and _TOP_LEVEL_LIST_ITEM.match(line):
+            # 빈 줄 없이 이어진 목록: 최상위 항목마다 unit을 끊는다. 항목 하나가 요구사항 하나다.
+            flush(index - 1)
+            block_line = 0
         if not block:
             block_line = index
         block.append(line)

@@ -177,6 +177,29 @@ class RemediationContextReaderTest(unittest.TestCase):
         self.assertEqual(target.iac_perspective, EvaluationPerspective.IAC)
         self.assertEqual(target.iac_commit_sha, COMMIT)
 
+    def test_get_target_restores_the_resource_type_from_the_actual_read_locator(self):
+        """An RDS Finding must not produce an S3 target — the locator says what was read."""
+        table = Table()
+        actual_sk = (
+            f"ASSESSMENT#{ASSESSMENT}#RESULT#tfsbx-bucket#RULE#S3-PUBLIC-001#PERSPECTIVE#AWS_ACTUAL"
+        )
+        table.items[actual_sk]["evidence_references"] = [
+            "aws:rds:db-instance/tfsbx-bucket#read-resource",
+            "isms-p-2023@2023-10-31#control/2.10.2",
+        ]
+
+        target = DynamoDbRemediationContextReader(table).get_target(
+            customer_id=CUSTOMER, finding_id=FINDING_ID
+        )
+
+        self.assertEqual(target.resource_type, "AWS::RDS::DBInstance")
+
+    def test_get_target_keeps_the_legacy_s3_type_without_a_recognized_locator(self):
+        target = DynamoDbRemediationContextReader(Table()).get_target(
+            customer_id=CUSTOMER, finding_id=FINDING_ID
+        )
+        self.assertEqual(target.resource_type, "AWS::S3::Bucket")
+
     def test_finding_query_is_scoped_to_customer_partition(self):
         table = Table()
 

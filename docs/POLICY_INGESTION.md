@@ -137,7 +137,10 @@ Rule과 Control의 `SourceReference`, 그리고 평가 결과의 Evidence는 모
 Locator는 파일 형식과 무관하게 추적 가능해야 한다. 지원 형식은 모두 문서 구조에서 locator가
 직접 나오므로, 원문이 재조판돼도 같은 단위를 다시 가리킬 수 있다. 예시는 다음과 같다.
 
-- `heading/access-control/item/5` — Markdown, DOCX
+- `heading/access-control/item/5` — Markdown, DOCX. Markdown parser 1.1.0부터 빈 줄 없이 이어진
+  최상위 목록 항목도 각각 별도 `item/{n}`이다(1.0.1은 tight list 전체를 unit 하나로 묶어 요구사항
+  여러 개가 locator 하나를 공유했다). 들여쓴 하위 항목과 이어지는 줄은 상위 항목의 일부다.
+  parser version이 바뀌었으므로 같은 원본도 새 Source version으로 정규화된다.
 - `sheet/Security/row/27` — XLSX
 - `table/2/row/8` — XLSX, DOCX
 

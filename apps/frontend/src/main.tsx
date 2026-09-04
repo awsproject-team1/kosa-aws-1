@@ -66,7 +66,13 @@ type CandidatePage = {
   rejected: RejectedRequirement[];
   cursor: string | null;
 };
-type Report = { assessment_id: string; results: { resource_id: string; rule_id: string; perspective: string; status: string; score: number }[]; findings: { finding_id: string; resource_id: string; rule_id: string; status: string; severity: string; score: number; rationale: string }[]; readiness_score: { score: number } | null; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number } };
+type ResultRow = { resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; model_profile_id: string; rubric_version: string };
+type FindingRow = ResultRow & { finding_id: string };
+type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string };
+type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: { score: number; evaluated_evaluations: number } | null; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
+type RemediationDecision = { action: string; manual_review_code: string | null; exception_id: string | null };
+type RemediationStart = { decision: RemediationDecision; job: { job_id: string; remediation_id: string | null } | null };
+type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null };
 
 /* =========================================================================
  * Observability store — the whole point: show what's happening inside.
@@ -580,10 +586,15 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       for (const [sid, e] of bySource) {
         await api(`/policy-sources/${enc(sid)}/versions/${enc(e.source_version)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ approved_rules: e.rules }) });
       }
+      if (bySource.size > 1) {
+        // POST /policy-profiles publishes the approved rules of ONE source version. Publishing only
+        // the first source while telling the admin "N documents" would silently drop the rest.
+        throw new Error(`Profile 하나는 문서 하나의 승인 Rule로 게시됩니다. 장바구니에 문서 ${bySource.size}개가 섞여 있습니다 — 문서별로 나누어 게시하세요.`);
+      }
       const [firstSid, firstE] = [...bySource.entries()][0];
       await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify({ source_id: firstSid, source_version: firstE.source_version, policy_profile_id: profileId.trim(), version: "v1" }) });
       addProfile(profileId.trim());
-      setNotice(`Profile '${profileId.trim()}' 게시 완료 (${cart.length}개 rule, ${bySource.size}개 문서). '사용자 관리'에서 지정하세요.`);
+      setNotice(`Profile '${profileId.trim()}' 게시 완료 (${cart.length}개 rule 승인, 문서 ${firstSid.slice(0, 12)}의 승인된 Rule 전체가 v1으로 게시됨). '사용자 관리'에서 지정하세요.`);
       setCart([]);
     } catch (e) { setError(`게시 실패: ${(e as Error).message}`); }
   }
@@ -754,24 +765,54 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
 }
 
 /* =========================================================================
- * Assessment report
+ * Assessment report — polls to completion, shows evidence, requests remediation
  * =======================================================================*/
+const REPORT_PAGE = 100;
+const FOLLOW_UP = new Set(["FAIL", "MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
+
+/** Read the whole immutable report: follow both opaque cursors (results, findings). */
+async function fetchFullReport(token: string, assessmentId: string): Promise<Report> {
+  const first = await api<Report>(`/assessments/${enc(assessmentId)}?limit=${REPORT_PAGE}`, token);
+  const results = [...first.results];
+  const findings = [...first.findings];
+  const suppressions = [...(first.suppressions ?? [])];
+  let cursor = first.next_cursor ?? null;
+  let findingsCursor = first.findings_next_cursor ?? null;
+  for (let guard = 0; (cursor || findingsCursor) && guard < 50; guard++) {
+    const q = new URLSearchParams({ limit: String(REPORT_PAGE) });
+    if (cursor) q.set("cursor", cursor);
+    if (findingsCursor) q.set("findings_cursor", findingsCursor);
+    const page = await api<Report>(`/assessments/${enc(assessmentId)}?${q}`, token);
+    if (cursor) results.push(...page.results);
+    if (findingsCursor) { findings.push(...page.findings); suppressions.push(...(page.suppressions ?? [])); }
+    cursor = cursor ? (page.next_cursor ?? null) : null;
+    findingsCursor = findingsCursor ? (page.findings_next_cursor ?? null) : null;
+  }
+  return { ...first, results, findings, suppressions, next_cursor: null, findings_next_cursor: null };
+}
+
+function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
+
 function ReportPanel({ session, assessmentId }: { session: Session; assessmentId: string }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    // POST /assessments only queues the job (202); the worker writes the report record
-    // asynchronously, so an immediate GET returns 404 until it lands. Poll through the initial
-    // "not found yet" window instead of surfacing a 404 the user cannot act on.
+    // POST /assessments only queues the job (202); the worker writes the plan first and then one
+    // immutable result per Resource × Rule × Perspective. Poll through the initial 404 window and
+    // then keep refreshing until coverage reaches the planned denominator — the Job record is not
+    // advanced by the worker, so coverage is the only completion signal the API exposes.
     let cancelled = false;
-    setRep(null); setErr(null); setWaiting(true);
+    setRep(null); setErr(null); setWaiting(true); setAttempt(0);
     (async () => {
-      for (let i = 0; i < 40 && !cancelled; i++) {
+      for (let i = 0; i < 200 && !cancelled; i++) {
+        setAttempt(i + 1);
         try {
-          const r = await api<Report>(`/assessments/${enc(assessmentId)}?limit=50`, session.accessToken);
-          if (!cancelled) { setRep(r); setWaiting(false); }
-          return;
+          const r = await fetchFullReport(session.accessToken, assessmentId);
+          if (cancelled) return;
+          setRep(r);
+          if (isComplete(r)) { setWaiting(false); return; }
         } catch (e) {
           const msg = (e as Error).message;
           // Keep polling only while the report is not yet created; surface anything else.
@@ -779,24 +820,114 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
             if (!cancelled) { setErr(msg); setWaiting(false); }
             return;
           }
-          await sleep(3000);
         }
+        await sleep(3000);
       }
-      if (!cancelled) { setErr("평가 결과가 아직 준비되지 않았습니다. 잠시 후 다시 열어주세요."); setWaiting(false); }
+      if (!cancelled) { setWaiting(false); if (!rep) setErr("평가 결과가 아직 준비되지 않았습니다. 잠시 후 다시 열어주세요."); }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line
   }, [assessmentId, session.accessToken]);
-  if (err) return <div className="panel"><div className="card"><p className="alert">{err}</p></div></div>;
-  if (!rep) return <div className="panel"><div className="card"><p className="obs-empty">{waiting ? "평가 실행 중… 결과를 기다리는 중입니다." : "Assessment 결과를 불러오는 중…"}</p></div></div>;
+
+  if (err && !rep) return <div className="panel"><div className="card"><p className="alert">{err}</p></div></div>;
+  if (!rep) return <div className="panel"><div className="card"><p className="obs-empty">{waiting ? `평가 실행 중… 결과를 기다리는 중입니다 (조회 ${attempt}회).` : "Assessment 결과를 불러오는 중…"}</p></div></div>;
+
+  const complete = isComplete(rep);
+  const countStatus = (s: string) => rep.results.filter(r => r.status === s).length;
+  const severe = rep.findings.filter(f => f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH")).length;
+  const rules = new Set(rep.results.map(r => `${r.rule_id}@${r.rule_version}`));
+  const resources = new Set(rep.results.map(r => r.resource_id));
+  const modelProfiles = new Set(rep.results.map(r => `${r.model_profile_id} · rubric ${r.rubric_version}`));
+  const suppressed = new Map((rep.suppressions ?? []).map(s => [s.finding_id, s]));
+  const sorted = [...rep.results].sort((a, b) => a.resource_id.localeCompare(b.resource_id) || a.rule_id.localeCompare(b.rule_id) || a.perspective.localeCompare(b.perspective));
+
   return <div className="panel">
-    <div className="card"><h2>Assessment 결과</h2>
-      <div className="row"><span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations})</span><span>Readiness <strong>{rep.readiness_score?.score ?? "계산 대기"}</strong></span></div>
+    <div className="card"><h2>Assessment 결과 <code>{rep.assessment_id}</code></h2>
+      <div className="row">
+        <span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
+        <span>Readiness Score <strong>{rep.readiness_score ? rep.readiness_score.score : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>
+      </div>
+      <p className="disclaimer">Readiness Score는 0–100 연속 점수의 severity 가중 평균으로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아니며, Customer Policy와 ISMS-P는 각각의 Profile로 따로 평가합니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
+      <div className="candidate-summary" aria-label="평가 집계">
+        <span><strong>{resources.size}</strong><small>평가 리소스</small></span>
+        <span><strong>{rules.size}</strong><small>평가 Rule</small></span>
+        <span><strong>{severe}</strong><small>CRITICAL/HIGH FAIL</small></span>
+        <span><strong>{countStatus("MANUAL_REVIEW")}</strong><small>수동 검토</small></span>
+        <span><strong>{countStatus("INSUFFICIENT_EVIDENCE")}</strong><small>근거 부족</small></span>
+      </div>
+      {countStatus("EXECUTION_ERROR") > 0 && <p className="alert">EXECUTION_ERROR {countStatus("EXECUTION_ERROR")}건 — 평가가 실행되지 못한 좌표입니다. 비준수와 다르며 Coverage 분모에 남습니다.</p>}
+      <p className="hint">Model Profile: {[...modelProfiles].join(", ") || "-"}</p>
     </div>
+
     <div className="card"><h2>Findings ({rep.findings.length})</h2>
-      {rep.findings.map(f => <div key={f.finding_id} className="candidate"><strong>{f.severity}</strong> · {f.status} · {f.resource_id} · {f.rule_id} · score {f.score}<br /><span className="hint">{f.rationale}</span></div>)}
-      {rep.findings.length === 0 && <p className="obs-empty">Finding이 없습니다.</p>}
+      <p className="hint">FAIL·MANUAL_REVIEW·INSUFFICIENT_EVIDENCE 결과만 Finding이 됩니다. Evidence는 평가기가 인용한 정책 locator와 read-only IaC/AWS 조회 locator입니다.</p>
+      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} />)}
+      {rep.findings.length === 0 && <p className="obs-empty">{complete ? "Finding이 없습니다." : "아직 Finding이 없습니다 (평가 진행 중)."}</p>}
+    </div>
+
+    <div className="card"><h2>Resource × Rule × Perspective 결과 ({rep.results.length})</h2>
+      <div style={{ overflowX: "auto" }}>
+      <table><thead><tr><th>Resource</th><th>Rule</th><th>관점</th><th>상태</th><th>Score</th><th>Severity</th></tr></thead>
+        <tbody>{sorted.map(r => <tr key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} title={r.rationale}>
+          <td><code>{r.resource_id}</code></td><td>{r.rule_id}@{r.rule_version}</td><td>{r.perspective}</td>
+          <td><span className={`badge status-${r.status.toLowerCase()}`}>{r.status}</span></td>
+          <td>{FOLLOW_UP.has(r.status) || r.status === "PASS" ? r.score : "-"}</td><td>{r.severity}</td>
+        </tr>)}
+        {sorted.length === 0 && <tr><td colSpan={6} className="obs-empty">결과가 아직 없습니다.</td></tr>}</tbody></table>
+      </div>
     </div>
   </div>;
+}
+
+function FindingCard({ finding: f, suppression, session }: { finding: FindingRow; suppression?: Suppression; session: Session }) {
+  const [start, setStart] = useState<RemediationStart | null>(null);
+  const [view, setView] = useState<RemediationView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function request() {
+    setBusy(true); setError(null); setStart(null); setView(null);
+    try {
+      const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
+      setStart(r);
+      const remediationId = r.job?.remediation_id;
+      if (remediationId) {
+        // The worker generates the patch and opens the PR asynchronously; read the stored record
+        // until the result (and, for a patch, the pull request) lands.
+        for (let i = 0; i < 60; i++) {
+          await sleep(3000);
+          try {
+            const v = await api<RemediationView>(`/remediations/${enc(remediationId)}`, session.accessToken);
+            setView(v);
+            if (v.result && (v.result.kind !== "TERRAFORM_PATCH" || v.pull_request)) break;
+          } catch (e) { const msg = (e as Error).message; if (!msg.includes("404")) throw e; }
+        }
+      }
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  const code = start?.decision.manual_review_code;
+  return <article className="candidate">
+    <div className="candidate-badges"><span className="badge severity">{f.severity}</span><span className={`badge status-${f.status.toLowerCase()}`}>{f.status}</span><span className="badge">{f.perspective}</span><span className="badge">score {f.score}</span>{suppression && <span className="badge">억제됨 · {suppression.reason}</span>}</div>
+    <h3><code>{f.resource_id}</code> · {f.rule_id}@{f.rule_version}</h3>
+    <p style={{ margin: "6px 0" }}>{f.rationale}</p>
+    <dl className="candidate-fields"><div className="candidate-field wide"><dt>Evidence</dt><dd><CodeValues values={f.evidence_references} /></dd></div></dl>
+    <div className="finding-actions row">
+      <button className="ghost" disabled={busy || !!suppression} onClick={() => void request()}>{busy ? "조치 판정 중…" : "조치 요청"}</button>
+      {start && <span className="hint">판정: <strong>{start.decision.action}</strong>{code ? ` (${code})` : ""}{start.job ? ` · job ${start.job.job_id}` : " · Job 없음(사람 검토)"}</span>}
+    </div>
+    {start && start.decision.action === "MANUAL_REVIEW" && <p className="hint">자동 조치 대상이 아닙니다{code === "RULE_NOT_IN_SCOPE" ? " — 이 Rule은 자동 patch 허용 범위(remediation eligibility)에 등록되어 있지 않습니다" : ""}. 담당자가 직접 검토합니다.</p>}
+    {view && <div className="remediation-result">
+      <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : " · Worker 결과 대기 중"}</div>
+      {view.result?.patch && <div className="hint">변경 파일: <CodeValues values={view.result.patch.changed_paths} /> base commit <code>{view.result.patch.base_commit_sha.slice(0, 12)}</code> · patch digest <code>{view.result.patch.artifact.content_sha256.slice(0, 16)}</code></div>}
+      {view.result?.sync_target && <div className="hint">IaC는 이미 안전합니다. 배포 대상 commit <code>{view.result.sync_target.commit_sha.slice(0, 12)}</code>로 Actual 동기화를 진행합니다.</div>}
+      {view.pull_request
+        ? <p className="status">Pull Request #{view.pull_request.number} 생성됨 — <a href={view.pull_request.url} target="_blank" rel="noreferrer">{view.pull_request.url}</a> (branch <code>{view.pull_request.head_branch}</code>). PR 본문에 unified diff가 있습니다. 사람이 검토·머지한 뒤에만 배포 승인과 apply가 진행됩니다.</p>
+        : view.result?.kind === "TERRAFORM_PATCH" && <p className="hint">PR 생성 대기 중…</p>}
+    </div>}
+    {error && <p className="alert">{error}</p>}
+  </article>;
 }
 
 /* =========================================================================

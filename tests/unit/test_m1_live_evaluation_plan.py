@@ -11,6 +11,7 @@ MANUAL Rule은 Repository 단위 governance 좌표에서 MANUAL 관점 하나를
 import unittest
 
 from apps.backend.assessment.runtime import (
+    _evaluable_works,
     _with_complete_evaluation_plan,
     _with_governance_work,
 )
@@ -189,6 +190,54 @@ class LivePlanFollowsThePlannerTest(unittest.TestCase):
         the worker would retry."""
         with self.assertRaises(NoApplicablePolicyRulesError):
             _with_complete_evaluation_plan((_work(),), Resolver({}))
+
+
+class EvaluableWorksTest(unittest.TestCase):
+    """The evaluation loop must only see works the immutable plan names.
+
+    #89 skipped the unplanned resource in `_with_complete_evaluation_plan` but left it in the
+    work list. `_m1_handler` then still read that resource and `AssessmentWorker.handle`
+    re-resolved its type, raised `NoApplicablePolicyRulesError`, and the SQS message retried
+    into the DLQ — the exact failure #89 set out to fix.
+    """
+
+    def test_a_resource_without_planned_coordinates_is_dropped_before_evaluation(self) -> None:
+        resolver = Resolver({GOVERNANCE_ASSESSMENT_RESOURCE_TYPE: (MANUAL,)})  # no S3 rule
+        works = _with_governance_work((_work(),), resolver, repository_id=REPOSITORY)
+        works = _with_complete_evaluation_plan(works, resolver)
+
+        evaluable = _evaluable_works(works)
+
+        self.assertEqual(
+            [(work.resource_type, work.resource_id) for work in evaluable],
+            [(GOVERNANCE_ASSESSMENT_RESOURCE_TYPE, f"governance:{REPOSITORY}")],
+        )
+
+    def test_every_planned_resource_stays(self) -> None:
+        resolver = Resolver({S3: (LEGACY,), GOVERNANCE_ASSESSMENT_RESOURCE_TYPE: (MANUAL,)})
+        works = _with_governance_work((_work(),), resolver, repository_id=REPOSITORY)
+        works = _with_complete_evaluation_plan(works, resolver)
+
+        self.assertEqual(_evaluable_works(works), works)
+
+    def test_a_multi_resource_plan_keeps_only_the_covered_resources(self) -> None:
+        """A Profile with RDS rules only must not make the worker read S3/EC2/ALB."""
+        rds = "AWS::RDS::DBInstance"
+        rds_rule = _rule("RDS-PUBLIC-001", resource_types=(rds,))
+        resolver = Resolver({rds: (rds_rule,)})
+        works = (
+            _work(resource_id="bucket-001", resource_type=S3),
+            _work(resource_id="db-001", resource_type=rds),
+        )
+        works = _with_complete_evaluation_plan(works, resolver)
+
+        evaluable = _evaluable_works(works)
+
+        self.assertEqual([work.resource_id for work in evaluable], ["db-001"])
+
+    def test_a_plan_that_names_no_resource_is_refused(self) -> None:
+        with self.assertRaises(NoApplicablePolicyRulesError):
+            _evaluable_works((_work(planned_coordinates=None),))
 
 
 class GovernanceWorkTest(unittest.TestCase):

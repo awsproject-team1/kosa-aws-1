@@ -102,7 +102,7 @@ class BedrockStructuredEvaluator:
         )
         output = _response_object(response)
         status = _status(output.get("status"))
-        score = _score(output.get("score"))
+        score = _normalized_score(status, _score(output.get("score")))
         rationale = _non_empty_string(output.get("rationale"), "rationale")
         evidence = _response_evidence(output.get("evidence_references"), allowed_evidence)
         return EvaluationResult(
@@ -162,8 +162,29 @@ _SYSTEM_PROMPT = (
     "rationale must state why the rule does not apply. When the rule applies, use PASS "
     "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
     "a human must decide and INSUFFICIENT_EVIDENCE when the supplied evidence cannot "
-    "support a judgment. score must be 0 through 100, and every evidence reference must "
-    "come from allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
+    "support a judgment. score is a compliance judgment and exists only for PASS and FAIL: "
+    "for MANUAL_REVIEW, INSUFFICIENT_EVIDENCE, and OUT_OF_SCOPE return score 0 because no "
+    "judgment was made. For PASS and FAIL, score must be 0 through 100 and must agree "
+    "with the status: FAIL means the resource does not satisfy the rule, so its score "
+    "must stay low, and PASS means it does, so its score must stay high; grade within "
+    "those bands by how completely the evidence satisfies or violates the rubric. "
+    "Every evidence reference must come from allowed_evidence_references. Do not wrap "
+    "the JSON in code fences or add prose."
+)
+
+#: 판정이 아닌 status의 점수. 모델이 이 status와 함께 어떤 숫자를 내더라도 Runtime이 이 값으로
+#: 고정한다. 근거가 없거나 사람이 정해야 하는 좌표에 모델의 숫자를 남기면 (1) 같은 입력이
+#: 실행마다 다른 점수를 갖고, (2) readiness 평균에 판정 아닌 숫자가 섞이며, (3) Code가 만드는
+#: `INSUFFICIENT_EVIDENCE`(`actual_evaluator.INSUFFICIENT_EVIDENCE_SCORE`)와 `MANUAL_REVIEW`
+#: (`manual_review.MANUAL_REVIEW_SCORE`)의 0.0과 같은 status가 다른 값을 갖게 된다. 새로운 anchor가
+#: 아니라 이미 존재하는 Code 쪽 규약을 모델 응답에도 같게 적용하는 것이다.
+NON_JUDGMENT_SCORE = 0.0
+_NON_JUDGMENT_STATUSES = frozenset(
+    {
+        EvaluationStatus.MANUAL_REVIEW,
+        EvaluationStatus.INSUFFICIENT_EVIDENCE,
+        EvaluationStatus.OUT_OF_SCOPE,
+    }
 )
 
 #: 모델이 돌려줄 수 없는 status. `EXECUTION_ERROR`는 "평가가 실행되지 못했다"는 Code의 사실이지
@@ -264,18 +285,52 @@ def _status(value: object) -> EvaluationStatus:
 
 
 def _score(value: object) -> float:
+    """Accept only a finite number in [0, 100].
+
+    `0 <= nan <= 100`은 False이므로 NaN은 여기서 걸리고, ±inf도 마찬가지다. 문자열 "80"과 bool은
+    숫자가 아니다 — JSON이 숫자를 문자열로 감싸 보낸 응답을 관대하게 받으면 같은 모델 출력이
+    파서 버전에 따라 다른 결과가 된다.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
         raise BedrockEvaluationError("score must be a number from 0 through 100")
     return value
+
+
+def _normalized_score(status: EvaluationStatus, score: float) -> float:
+    """Pin the score of a non-judgment status to the runtime's fixed value."""
+    if status in _NON_JUDGMENT_STATUSES:
+        return NON_JUDGMENT_SCORE
+    return score
 
 
 def _response_evidence(value: object, allowed: tuple[str, ...]) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise BedrockEvaluationError("evidence_references must be a list")
     evidence = _unique_non_empty_strings(tuple(value), "evidence_references")
-    if any(reference not in allowed for reference in evidence):
-        raise BedrockEvaluationError("evidence reference is outside approved evidence")
+    outside = [reference for reference in evidence if not _is_allowed(reference, allowed)]
+    if outside:
+        raise BedrockEvaluationError(
+            "evidence reference is outside approved evidence: " + ", ".join(outside)
+        )
     return evidence
+
+
+def _is_allowed(reference: str, allowed: tuple[str, ...]) -> bool:
+    """An approved locator, or a resource anchor inside an approved resource locator.
+
+    Golden Case가 기대하는 IaC evidence는 `terraform:{path}#{resource address}` 형태다
+    (`fixtures/m1/golden_dataset_cases.json`). 허용 목록에는 파일 단위 `terraform:{path}`만 있으므로
+    모델이 그 파일 안의 리소스 주소를 `#`로 붙여 인용하면 이전에는 통째로 거부돼 평가가 실패했다
+    (라이브 5회 반복 측정에서 IAC PASS Case 19건 전부). anchor는 허용된 파일/리소스 **안**을 더 좁게
+    가리키는 것이지 새 근거가 아니다. 정책 locator(`{source}@{version}#{locator}`)는 이미 `#`를
+    포함하므로 정확히 일치해야 하고, 여기서 다시 쪼개지 않는다.
+    """
+    if reference in allowed:
+        return True
+    base, separator, anchor = reference.partition("#")
+    if not separator or not anchor.strip():
+        return False
+    return base in allowed and base.startswith(("terraform:", "aws:", "s3://"))
 
 
 def _unique_non_empty_strings(values: tuple[object, ...], field_name: str) -> tuple[str, ...]:

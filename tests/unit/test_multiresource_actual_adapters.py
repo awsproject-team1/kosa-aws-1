@@ -358,9 +358,13 @@ class AlbAdapterTest(unittest.TestCase):
             [listener["Protocol"] for listener in view.attributes["listeners"]],
             ["HTTP", "HTTPS"],
         )
-        self.assertEqual(view.attributes["attributes"]["access_logs.s3.enabled"], "false")
+        self.assertEqual(
+            view.attributes["load_balancer_attributes"]["access_logs.s3.enabled"], "false"
+        )
         # Attribute keys outside the cited list are dropped.
-        self.assertNotIn("idle_timeout.timeout_seconds", view.attributes["attributes"])
+        self.assertNotIn(
+            "idle_timeout.timeout_seconds", view.attributes["load_balancer_attributes"]
+        )
 
     def test_rejects_reading_a_non_application_load_balancer(self):
         with self.assertRaisesRegex(AwsResourceToolError, "application load balancer"):

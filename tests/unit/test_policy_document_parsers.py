@@ -1,5 +1,6 @@
 """Tests for the customer policy document parsers and their locator schemes."""
 
+import json
 import unittest
 
 from ingestion_fixtures import (
@@ -55,6 +56,43 @@ class MarkdownParserTest(unittest.TestCase):
         self.assertEqual(kinds["heading/access-control"], DocumentUnitKind.SECTION)
         self.assertEqual(kinds["heading/access-control/item/1"], DocumentUnitKind.PARAGRAPH)
         self.assertEqual(kinds["heading/access-control/item/2"], DocumentUnitKind.LIST_ITEM)
+
+    def test_a_tight_list_yields_one_unit_per_top_level_item(self) -> None:
+        """Company standards are usually tight bullet lists; each bullet is one requirement.
+
+        1.0.1 flushed a block only on a blank line, so `- a / - b / - c` on consecutive
+        lines became a single unit and three requirements shared one locator and one
+        digest. Indented continuation lines and nested bullets stay with their parent item.
+        """
+        source = "\n".join(
+            (
+                "# Standard",
+                "",
+                "## Network",
+                "",
+                "- Servers use no public IP.",
+                "  Continuation of the first item.",
+                "  - nested check",
+                "- Databases are not publicly accessible.",
+                "- Only approved ports are open.",
+                "",
+            )
+        ).encode("utf-8")
+        document = parse_markdown(source)
+        network = [unit for unit in document.units if "/network/item/" in unit.locator]
+        self.assertEqual(
+            [unit.locator for unit in network],
+            [
+                "heading/standard/network/item/1",
+                "heading/standard/network/item/2",
+                "heading/standard/network/item/3",
+            ],
+        )
+        self.assertTrue(all(unit.kind is DocumentUnitKind.LIST_ITEM for unit in network))
+        units = json.loads(document.normalized_payload.decode("utf-8"))["units"]
+        first = next(u["text"] for u in units if u["locator"] == "heading/standard/network/item/1")
+        self.assertIn("Continuation of the first item.", first)
+        self.assertIn("nested check", first)
 
     def test_hashes_the_normalized_unit_text(self) -> None:
         units = {unit.locator: unit for unit in parse_markdown(MARKDOWN).units}

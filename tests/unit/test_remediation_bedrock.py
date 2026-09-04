@@ -3,6 +3,7 @@
 import json
 import unittest
 
+from agent.runtime import IaCDocument, MockGitHubTool
 from apps.backend.remediation.bedrock import BedrockPatchError, BedrockPatchGenerator
 from apps.backend.remediation.patch_content import InMemoryPatchContentStore
 from packages.contracts import (
@@ -94,7 +95,25 @@ class Client:
         return {"output": {"message": {"content": [{"text": json.dumps(self.body)}]}}}
 
 
-SECURE_MAIN_TF = (
+COMMIT = "b283b6b5a41945349f64c41036870a5507c264f7"
+INSECURE_MAIN_TF = (
+    'resource "aws_s3_bucket" "sandbox" {\n'
+    "  bucket = var.sandbox_bucket_name\n"
+    "}\n"
+    "\n"
+    'resource "aws_s3_bucket_public_access_block" "sandbox" {\n'
+    "  bucket = aws_s3_bucket.sandbox.id\n"
+    "\n"
+    "  block_public_acls       = false\n"
+    "  block_public_policy     = false\n"
+    "  ignore_public_acls      = false\n"
+    "  restrict_public_buckets = false\n"
+    "}\n"
+)
+#: 최소 변경: 네 플래그만 true로 바꾸고 나머지 바이트는 그대로다.
+SECURE_MAIN_TF = INSECURE_MAIN_TF.replace("= false", "= true")
+#: 리소스 블록 하나를 통째로 지운, 원본을 보지 않은 모델이 내는 형태의 응답.
+REWRITTEN_MAIN_TF = (
     'resource "aws_s3_bucket_public_access_block" "sandbox" {\n'
     "  block_public_acls       = true\n"
     "  block_public_policy     = true\n"
@@ -104,13 +123,32 @@ SECURE_MAIN_TF = (
 )
 
 
+def iac_documents(files: tuple[tuple[str, str], ...] = (("main.tf", INSECURE_MAIN_TF),)):
+    return MockGitHubTool(
+        customer_id="kosa-sandbox",
+        repository_id="test-s3-sandbox",
+        snapshots=(),
+        documents=(
+            IaCDocument(
+                customer_id="kosa-sandbox",
+                repository_id="test-s3-sandbox",
+                commit_sha=COMMIT,
+                files=files,
+            ),
+        ),
+    )
+
+
 class BedrockPatchGeneratorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.content_store = InMemoryPatchContentStore()
 
-    def generator(self, client: Client) -> BedrockPatchGenerator:
+    def generator(self, client: Client, documents=None) -> BedrockPatchGenerator:
         return BedrockPatchGenerator(
-            client=client, model_profile=REMEDIATION_PROFILE, content_store=self.content_store
+            client=client,
+            model_profile=REMEDIATION_PROFILE,
+            content_store=self.content_store,
+            iac_documents=iac_documents() if documents is None else documents,
         )
 
     def test_stores_the_patch_bytes_under_the_patch_digest(self) -> None:
@@ -125,8 +163,70 @@ class BedrockPatchGeneratorTest(unittest.TestCase):
     def test_requires_a_content_store(self) -> None:
         with self.assertRaises(TypeError):
             BedrockPatchGenerator(
-                client=Client({}), model_profile=REMEDIATION_PROFILE, content_store=None
+                client=Client({}),
+                model_profile=REMEDIATION_PROFILE,
+                content_store=None,
+                iac_documents=iac_documents(),
             )
+
+    def test_the_model_sees_the_terraform_body_of_the_assessed_commit(self) -> None:
+        """원본 없이 만든 patch는 검증할 수 없다. 모델 입력에 파일 본문이 있어야 한다."""
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        self.generator(client).generate(context=context(), decision=decision())
+        body = json.loads(client.calls[0]["messages"][0]["content"][0]["text"])
+        self.assertEqual(
+            body["terraform_files"], [{"path": "main.tf", "content": INSECURE_MAIN_TF}]
+        )
+        self.assertIn("terraform_files", client.calls[0]["system"][0]["text"])
+
+    def test_refuses_to_run_without_a_terraform_source_reader(self) -> None:
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        generator = BedrockPatchGenerator(
+            client=client,
+            model_profile=REMEDIATION_PROFILE,
+            content_store=self.content_store,
+            iac_documents=None,
+        )
+        with self.assertRaisesRegex(BedrockPatchError, "source reader is not configured"):
+            generator.generate(context=context(), decision=decision())
+        self.assertEqual(client.calls, [])
+
+    def test_rejects_a_file_the_snapshot_does_not_contain(self) -> None:
+        client = Client({"changes": {"new.tf": SECURE_MAIN_TF}})
+        with self.assertRaisesRegex(BedrockPatchError, "not a Terraform file"):
+            self.generator(client).generate(context=context(), decision=decision())
+
+    def test_rejects_a_change_that_does_not_alter_the_file(self) -> None:
+        client = Client({"changes": {"main.tf": INSECURE_MAIN_TF}})
+        with self.assertRaisesRegex(BedrockPatchError, "does not alter"):
+            self.generator(client).generate(context=context(), decision=decision())
+
+    def test_rejects_a_rewrite_that_drops_an_existing_resource_block(self) -> None:
+        """원본을 보지 않은 모델이 내던 형태 — 버킷 리소스가 사라진 파일 — 를 막는다."""
+        client = Client({"changes": {"main.tf": REWRITTEN_MAIN_TF}})
+        with self.assertRaisesRegex(BedrockPatchError, "removes or renames resource blocks"):
+            self.generator(client).generate(context=context(), decision=decision())
+
+    def test_rejects_a_document_from_another_commit(self) -> None:
+        other = MockGitHubTool(
+            customer_id="kosa-sandbox",
+            repository_id="test-s3-sandbox",
+            snapshots=(),
+            documents=(
+                IaCDocument(
+                    customer_id="kosa-sandbox",
+                    repository_id="test-s3-sandbox",
+                    commit_sha="c" * 40,
+                    files=(("main.tf", INSECURE_MAIN_TF),),
+                ),
+            ),
+        )
+        client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
+        from agent.runtime import GitHubSnapshotNotFoundError
+
+        with self.assertRaises(GitHubSnapshotNotFoundError):
+            self.generator(client, other).generate(context=context(), decision=decision())
+        self.assertEqual(client.calls, [])
 
     def test_binds_generated_patch_to_the_snapshot_and_finding(self) -> None:
         client = Client({"changes": {"main.tf": SECURE_MAIN_TF}})
@@ -153,6 +253,7 @@ class BedrockPatchGeneratorTest(unittest.TestCase):
                 client=Client({}),
                 model_profile=ASSESSMENT_PROFILE,
                 content_store=InMemoryPatchContentStore(),
+                iac_documents=iac_documents(),
             )
 
     def test_rejects_paths_outside_the_repository(self) -> None:

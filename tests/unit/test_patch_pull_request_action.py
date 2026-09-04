@@ -2,7 +2,7 @@
 
 import unittest
 
-from agent.runtime import MockGitHubWriteTool
+from agent.runtime import IaCDocument, MockGitHubTool, MockGitHubWriteTool
 from apps.backend.remediation.patch_content import (
     InMemoryPatchContentStore,
     PatchContentError,
@@ -25,7 +25,10 @@ CUSTOMER = "cust-001"
 REPOSITORY_ID = "repo-001"
 FINDING_ID = "finding-abc"
 COMMIT = "a" * 40
-CHANGES = {"main.tf": 'resource "aws_s3_bucket_public_access_block" "x" {}\n'}
+ORIGINAL = 'resource "aws_s3_bucket_public_access_block" "x" {\n  block_public_acls = false\n}\n'
+CHANGES = {
+    "main.tf": 'resource "aws_s3_bucket_public_access_block" "x" {\n  block_public_acls = true\n}\n'
+}
 CONTENT = encode_patch_content(finding_id=FINDING_ID, base_commit_sha=COMMIT, changes=CHANGES)
 
 
@@ -93,6 +96,38 @@ class PatchPullRequestActionTest(unittest.TestCase):
     def test_missing_content_is_an_error(self) -> None:
         with self.assertRaises(PatchContentError):
             self.action.open(context=_context(), patch=_patch(digest="e" * 64))
+
+    def test_without_a_source_reader_the_description_names_the_finding(self) -> None:
+        self.action.open(context=_context(), patch=_patch())
+        description = self.writer.descriptions[0]
+        self.assertIn(FINDING_ID, description)
+        self.assertIn("S3-PUBLIC-001@2026-08-31", description)
+        self.assertNotIn("```diff", description)
+
+    def test_with_a_source_reader_the_pull_request_carries_the_unified_diff(self) -> None:
+        """사람이 승인하는 표면은 PR이다. 무엇이 바뀌는지 그 PR에서 읽을 수 있어야 한다."""
+        reader = MockGitHubTool(
+            customer_id=CUSTOMER,
+            repository_id=REPOSITORY_ID,
+            snapshots=(),
+            documents=(
+                IaCDocument(
+                    customer_id=CUSTOMER,
+                    repository_id=REPOSITORY_ID,
+                    commit_sha=COMMIT,
+                    files=(("main.tf", ORIGINAL),),
+                ),
+            ),
+        )
+        action = PatchPullRequestAction(
+            writer=self.writer, content_store=self.store, iac_documents=reader
+        )
+        action.open(context=_context(), patch=_patch())
+        description = self.writer.descriptions[0]
+        self.assertIn("```diff", description)
+        self.assertIn("-  block_public_acls = false", description)
+        self.assertIn("+  block_public_acls = true", description)
+        self.assertIn("--- a/main.tf", description)
 
 
 if __name__ == "__main__":  # pragma: no cover

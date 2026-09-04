@@ -182,3 +182,12 @@ button.linklike { background: none; border: 0; padding: 0; color: var(--accent);
   .candidate-field { grid-column: 1; }
   .candidate-fields.compact, .candidate-details { margin-left: 0; }
 }
+
+/* ---------- Assessment report ---------- */
+.disclaimer { color: var(--muted); font-size: 12px; margin: 8px 0 12px; line-height: 1.5; }
+.finding-actions { margin-top: 10px; }
+.remediation-result { margin-top: 10px; padding: 10px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.badge.status-fail { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }
+.badge.status-pass { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.badge.status-manual_review, .badge.status-insufficient_evidence { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.badge.status-execution_error { color: var(--err); }

@@ -13,6 +13,12 @@ Boundary, mirroring the Assessment evaluator:
 - Paths are validated as repository-relative (the `RemediationPatch` contract rejects
   absolute paths and `..`), so the model cannot propose a write outside the repository.
 - The action gate (TERRAFORM_PATCH only) is enforced by the worker before this runs.
+- **The model sees the snapshot's Terraform body.** 원본 없이 "파일 전체의 새 내용"을
+  요구하면 모델은 보지 못한 파일을 지어낸다 — 기존 설정 보존도, 최소 변경도 검사할
+  근거가 없다. 그래서 평가가 읽은 것과 같은 read-only `IaCDocumentReader`로 같은 commit의
+  본문을 읽어 prompt에 넣고, 응답은 `terraform_change.validate_terraform_changes()`로 그
+  본문에 묶는다: snapshot에 있는 파일만, 실제로 달라진 파일만, 리소스 블록을 지우지 않는
+  변경만 통과한다.
 """
 
 from __future__ import annotations
@@ -21,11 +27,16 @@ import json
 from collections.abc import Mapping
 from typing import Protocol
 
+from agent.runtime.github_tool import IaCDocument, IaCDocumentReader, IaCSnapshotRequest
 from apps.backend.remediation.patch_content import (
     PatchContentError,
     PatchContentStore,
     encode_patch_content,
     patch_content_digest,
+)
+from apps.backend.remediation.terraform_change import (
+    TerraformChangeError,
+    validate_terraform_changes,
 )
 from packages.contracts import (
     ArtifactReference,
@@ -62,6 +73,7 @@ class BedrockPatchGenerator:
         client: BedrockConverseClient,
         model_profile: ModelProfile,
         content_store: PatchContentStore,
+        iac_documents: IaCDocumentReader | None,
     ) -> None:
         if client is None:
             raise TypeError("client is required")
@@ -73,9 +85,14 @@ class BedrockPatchGenerator:
             # digest만 남기고 내용을 버리면 PR write는 만들 것이 없고 digest는 아무것도 가리키지
             # 않는다. 저장소 없이 생성기를 만들 수 없게 한다.
             raise TypeError("content_store is required")
+        if iac_documents is not None and not isinstance(iac_documents, IaCDocumentReader):
+            raise TypeError("iac_documents must implement IaCDocumentReader")
         self._client = client
         self._model_profile = model_profile
         self._content_store = content_store
+        # `None`은 "원본을 읽을 통로가 없다"는 값이다. 그 상태에서는 generate()가 fail-closed
+        # 한다 — 원본 없이 만든 patch는 검증할 수 없고, 검증할 수 없는 patch를 PR로 올리지 않는다.
+        self._iac_documents = iac_documents
 
     def generate(
         self, *, context: RemediationContext, decision: RemediationDecision
@@ -86,14 +103,26 @@ class BedrockPatchGenerator:
             raise TypeError("decision must be a RemediationDecision")
         snapshot = context.snapshot
         finding = context.finding
+        document = self._read_document(context)
 
         response = self._client.converse(
             modelId=self._model_profile.model_id,
             system=[{"text": _SYSTEM_PROMPT}],
-            messages=[{"role": "user", "content": [{"text": self._request_body(context)}]}],
+            messages=[
+                {"role": "user", "content": [{"text": self._request_body(context, document)}]}
+            ],
             inferenceConfig={"temperature": 0, "maxTokens": 4096},
         )
         changes = _response_changes(_response_object(response))
+        # 경계 위반(절대 경로, `..`)은 snapshot 대조보다 먼저 그 이름으로 거부한다. 둘 다 거부지만
+        # 사유가 다르다 — 전자는 모델이 저장소 밖을 가리킨 것이고 후자는 저장소 안의 다른 파일이다.
+        for path in changes:
+            if path.startswith("/") or ".." in path.split("/"):
+                raise BedrockPatchError("model patch is outside the repository boundary")
+        try:
+            validate_terraform_changes(document, changes)
+        except TerraformChangeError as error:
+            raise BedrockPatchError(f"model patch is not bound to the snapshot: {error}") from error
 
         # Content-addressed digest over the canonical patch bytes bound to the base
         # commit. Same finding + commit + changes -> same bytes -> same artifact identity,
@@ -137,11 +166,37 @@ class BedrockPatchGenerator:
         self._content_store.put(patch=patch, content=content)
         return patch
 
-    def _request_body(self, context: RemediationContext) -> str:
+    def _read_document(self, context: RemediationContext) -> IaCDocument:
+        """Read the Terraform body of the exact commit the Finding was evaluated at."""
+        if self._iac_documents is None:
+            raise BedrockPatchError("Terraform source reader is not configured for this runtime")
+        snapshot = context.snapshot
+        document = self._iac_documents.read_iac_document(
+            IaCSnapshotRequest(
+                customer_id=snapshot.customer_id,
+                repository_id=snapshot.repository_id,
+                commit_sha=snapshot.commit_sha,
+            )
+        )
+        if not isinstance(document, IaCDocument):
+            raise BedrockPatchError("Terraform source reader returned an invalid document")
+        if (
+            document.customer_id != snapshot.customer_id
+            or document.repository_id != snapshot.repository_id
+            or document.commit_sha != snapshot.commit_sha
+        ):
+            # 다른 commit의 본문에 대해 만든 patch는 이 snapshot에 적용되지 않는다.
+            raise BedrockPatchError("Terraform source document is outside the snapshot")
+        return document
+
+    def _request_body(self, context: RemediationContext, document: IaCDocument) -> str:
         finding = context.finding
         snapshot = context.snapshot
         return json.dumps(
             {
+                "terraform_files": [
+                    {"path": path, "content": content} for path, content in document.files
+                ],
                 "finding": {
                     "finding_id": finding.finding_id,
                     "resource_id": finding.resource_id,
@@ -164,12 +219,18 @@ class BedrockPatchGenerator:
 
 _SYSTEM_PROMPT = (
     "Generate the smallest Terraform change that resolves the supplied Finding within "
-    "the repository. Return one JSON object only, with exactly changes: a non-empty "
-    "object mapping each repository-relative file path to its complete new file "
-    "contents. Change only what the Finding requires and touch as few files as possible. "
-    "Every path must be repository-relative (no leading slash and no '..' segment). Do "
-    "not create resources unrelated to the Finding, do not perform any AWS write or "
-    "apply, and do not wrap the JSON in code fences or add prose."
+    "the repository. terraform_files holds the complete current contents of every "
+    "Terraform file at the assessed commit; the Finding's resource_id names the AWS "
+    "resource that violates the rule, and rationale says what the evaluator observed. "
+    "Return one JSON object only, with exactly changes: a non-empty object mapping each "
+    "changed file path (which must be one of the supplied terraform_files paths) to its "
+    "complete new file contents. Copy the original file and edit only the attributes the "
+    "Finding requires: keep every other resource, block, attribute, comment, and ordering "
+    "exactly as supplied, do not add files, do not add resources unrelated to the "
+    "Finding, never delete or rename an existing resource block, and only use attributes "
+    "that exist for that Terraform resource type. Every path must be repository-relative "
+    "(no leading slash and no '..' segment). Do not perform any AWS write or apply, and do "
+    "not wrap the JSON in code fences or add prose."
 )
 
 

@@ -230,6 +230,15 @@ revision을 지정할 수 없다.
 - `MANUAL_REVIEW`/`SUPPRESSED`: `200`, `{decision, "job": null}`. decision/audit만 저장하고
   Job/Outbox는 만들지 않는다.
 
+`GET /remediations/{remediationId}`는 저장된 `REMEDIATION#{id}` item의 읽기 projection이다:
+`{remediation_id, finding_id, status, decision, job_id, decided_at, result, pull_request}`.
+`result`는 Worker가 채운 `{kind: TERRAFORM_PATCH, patch: {finding_id, base_commit_sha, artifact,
+changed_paths}}` 또는 `{kind: ACTUAL_SYNC, sync_target}`이며 아직 없으면 `null`이다.
+`pull_request`는 D가 연 PR 사실(`number`, `url`, `head_branch`, `head_commit_sha`, `base_branch`)이고
+PR이 열리기 전에는 `null`이다. patch 바이트와 PR 본문은 돌려주지 않는다 — 변경 내용의 unified diff는
+사람이 검토하는 표면인 PR 본문에 있다. 권한은 Job 조회와 같다(같은 customer, Admin 또는 Job 요청자).
+Job이 없는 `MANUAL_REVIEW`/`SUPPRESSED` record는 같은 customer의 인증 사용자가 읽을 수 있다.
+
 `POST /remediation-exceptions`는 Admin 전용이다. body allow-list는 `rule_id`, `rule_version`,
 선택적 `resource_id`, enum `reason`, 필수 `expires_at`, 선택적 `ticket_reference`다. Backend가
 `customer_id`, `exception_id`, `approved_by`, `approved_at`을 발급하고 immutable exception과 audit를

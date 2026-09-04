@@ -543,7 +543,7 @@ _ALB_ACCESS_LOGGING = GovernanceControl(
         _aws(
             "ALB.ACCESS_LOGS",
             ALB_RESOURCE_TYPE,
-            "attributes.attributes.{access_logs.s3.enabled}",
+            "attributes.load_balancer_attributes.{access_logs.s3.enabled}",
         ),
         _iac(
             "ALB.IAC_ACCESS_LOGS",

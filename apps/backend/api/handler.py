@@ -62,6 +62,7 @@ class JobHttpHandler:
         orchestrations: object | None = None,
         users: object | None = None,
         scope: object | None = None,
+        remediation_reads: object | None = None,
     ) -> None:
         if not isinstance(service, JobApiService):
             raise TypeError("service must be a JobApiService")
@@ -111,6 +112,8 @@ class JobHttpHandler:
         self._users = users
         # Duck-typed scope read service: get_scope(principal).
         self._scope = scope
+        # Duck-typed remediation read service: get_remediation(principal, remediation_id).
+        self._remediation_reads = remediation_reads
 
     def handle(self, event: Mapping[str, object]) -> dict[str, object]:
         """Return an API Gateway proxy response without leaking exception details."""
@@ -321,6 +324,16 @@ class JobHttpHandler:
                     raise RequestValidationError("remediation body is invalid")
                 remediation = self._remediations.create_remediation(principal, finding_id)
                 return _response(202 if remediation.accepted else 200, remediation.to_dict())
+            if (
+                method == "GET"
+                and path.startswith("/remediations/")
+                and self._remediation_reads is not None
+            ):
+                remediation_id = path.removeprefix("/remediations/")
+                if not remediation_id or "/" in remediation_id:
+                    raise JobNotFoundError("remediation not found")
+                view = self._remediation_reads.get_remediation(principal, remediation_id)
+                return _response(200, view.to_dict())
             if (
                 method == "POST"
                 and path.startswith("/remediations/")

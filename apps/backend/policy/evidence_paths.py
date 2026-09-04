@@ -9,7 +9,7 @@
 
     attributes.public_access_block.BlockPublicAcls
     attributes.volumes[].Encrypted
-    attributes.attributes.{access_logs.s3.enabled}
+    attributes.load_balancer_attributes.{access_logs.s3.enabled}
 
 - `name` — mapping key.
 - `name[]` — 비어 있지 않은 list여야 하고, 남은 경로가 **모든** 원소에서 풀려야 한다.
