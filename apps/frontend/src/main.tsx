@@ -62,6 +62,25 @@ async function startLogin() {
   const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, response_type: "code", scope: "openid email", redirect_uri: REDIRECT_URI, state, code_challenge_method: "S256", code_challenge: await sha256(verifier) });
   window.location.assign(`https://${COGNITO_DOMAIN}/oauth2/authorize?${q}`);
 }
+/* Hosted UI keeps its own session cookie. Without ending it, "log in as someone else" silently
+ * re-issues tokens for whoever signed in last — an admin who has just created a user cannot test
+ * that user's login from the same browser. logout_uri must be in the pool client's LogoutURLs. */
+function endCognitoSession() {
+  sessionStorage.removeItem(verifierKey); sessionStorage.removeItem(stateKey);
+  const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, logout_uri: REDIRECT_URI });
+  window.location.assign(`https://${COGNITO_DOMAIN}/logout?${q}`);
+}
+/* Mirrors the pool's password policy (Cognito default: 8+, upper, lower, number, symbol) so the
+ * form can say what is missing before the request leaves the browser. The backend re-checks. */
+function passwordProblems(pw: string): string[] {
+  const out: string[] = [];
+  if (pw.length < 8) out.push("8자 이상");
+  if (!/[A-Z]/.test(pw)) out.push("대문자");
+  if (!/[a-z]/.test(pw)) out.push("소문자");
+  if (!/[0-9]/.test(pw)) out.push("숫자");
+  if (!/[\^$*.\[\]{}()?"!@#%&/\\,><':;|_~`=+\-]/.test(pw)) out.push("기호");
+  return out;
+}
 type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null; profile: string | null };
 function decodeJwt(token: string): Record<string, unknown> {
   const json = atob(token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"));
@@ -171,6 +190,9 @@ function Login({ error }: { error: string | null }) {
       <button className="role-btn" onClick={() => void startLogin()}><span className="r-title">일반 사용자로 로그인</span><span className="r-desc">챗봇으로 평가 요청 · 지정된 Profile 확인 · Finding 검토</span></button>
     </div>
     {error && <p className="alert" style={{ marginTop: 16 }}>{error}</p>}
+    <p className="hint" style={{ marginTop: 14 }}>
+      방금 만든 사용자로 들어가려면 먼저 <button className="linklike" onClick={() => endCognitoSession()}>현재 Cognito 세션을 끝내세요</button>. 끝내지 않으면 직전 계정으로 다시 로그인됩니다.
+    </p>
   </div></div>;
 }
 
@@ -440,10 +462,13 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
 
   async function createUser() {
     setError(null); setNotice(null);
-    if (!email.trim() || pw.length < 8) { setError("이메일과 8자 이상 임시 비밀번호가 필요합니다."); return; }
+    const addr = email.trim().toLowerCase();
+    if (!addr.includes("@")) { setError("이메일을 입력하세요."); return; }
+    const problems = passwordProblems(pw);
+    if (problems.length) { setError(`임시 비밀번호에 필요: ${problems.join(", ")}`); return; }
     try {
-      await api("/admin/users", session.accessToken, { method: "POST", body: JSON.stringify({ email: email.trim(), role, temporary_password: pw }) });
-      setNotice(`사용자 생성: ${email.trim()} (${role})`); setEmail(""); setPw("");
+      await api("/admin/users", session.accessToken, { method: "POST", body: JSON.stringify({ email: addr, role, temporary_password: pw }) });
+      setNotice(`사용자 생성: ${addr} (${role}) — 이 비밀번호를 그대로 전달하세요. 다른 브라우저(또는 세션 종료 후)에서 로그인합니다.`); setEmail(""); setPw("");
       await refresh();
     } catch (e) { setError(`생성 실패: ${(e as Error).message}`); }
   }
@@ -460,7 +485,7 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
   return <div className="panel">
     <div className="card">
       <h2>사용자 등록</h2>
-      <p className="hint">고객(kosa-sandbox) 스코프의 사용자를 생성합니다. 임시 비밀번호는 대/소문자·숫자·기호 포함 8자 이상.</p>
+      <p className="hint">고객(kosa-sandbox) 스코프의 사용자를 생성합니다. 이메일은 소문자로 저장됩니다. 임시 비밀번호는 8자 이상 + 대문자·소문자·숫자·기호 각 1개 이상 — 이 값이 그대로 로그인 비밀번호가 됩니다.</p>
       <div className="row">
         <label style={{ flex: 2 }}>이메일<input value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" /></label>
         <label style={{ flex: 1 }}>역할<select value={role} onChange={e => setRole(e.target.value)}><option>User</option><option>Admin</option></select></label>
@@ -544,6 +569,7 @@ function App() {
         </nav>
         <span className="spacer" />
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
+        <button className="ghost" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}

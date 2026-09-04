@@ -490,6 +490,9 @@ Resources:
                     # 쓰기 전에 대상 사용자의 custom:customer_id를 읽어 호출자 customer 소속인지
                     # 확인한다. 이 권한이 없으면 그 확인이 통째로 실패한다.
                     "cognito-idp:AdminGetUser",
+                    # 생성 3단계(create → group → password) 중 뒤가 실패하면 앞에서 만든 사용자를
+                    # 되돌린다. 없으면 로그인 불가능한 반쪽 계정이 남고 재시도는 "이미 존재"가 된다.
+                    "cognito-idp:AdminDeleteUser",
                     "cognito-idp:ListUsers",
                   ]
                 Resource: !GetAtt UserPool.Arn
