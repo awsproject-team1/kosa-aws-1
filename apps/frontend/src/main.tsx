@@ -307,10 +307,33 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
     finally { setBusy(false); }
   }
   async function confirmAssessment(sel: Record<string, unknown> & { repository_id?: string }) {
+    // The Parent extracts repository_id from free text ("test 리포지토리"), so it is a guess that
+    // rarely equals the registered id (e.g. "test-s3-sandbox"). The connected repositories from
+    // /scope are the source of truth: use the model's value only if it exactly matches one, else
+    // fall back to the single connected repo. Sending the raw guess is what earns a 403.
+    const connected = obs.obs.repos.map(r => r.repository_id);
+    const proposed = sel.repository_id;
+    const repositoryId =
+      proposed && connected.includes(proposed) ? proposed
+      : connected.length === 1 ? connected[0]
+      : proposed;
+    if (!repositoryId) {
+      setTurns(t => [...t, { role: "bot", text: "평가할 리포지토리를 확인할 수 없습니다. 연결된 고객사 리소스가 없는지 확인하세요." }]);
+      return;
+    }
+    if (connected.length > 1 && !connected.includes(repositoryId)) {
+      setTurns(t => [...t, { role: "bot", text: `연결된 리포지토리(${connected.join(", ")}) 중 하나를 지정해 다시 요청해 주세요.` }]);
+      return;
+    }
+    const policyProfileId = profileId ?? (sel.policy_profile_id as string | undefined);
+    if (!policyProfileId) {
+      setTurns(t => [...t, { role: "bot", text: "지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요." }]);
+      return;
+    }
     obs.lightNode("assessment", "active");
     obs.upsertJob({ id: "assess-" + Date.now(), label: "Assessment 시작", queue: "assessment", state: "active" });
     try {
-      const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: sel.repository_id, policy_profile_id: profileId ?? sel.policy_profile_id }) });
+      const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: policyProfileId }) });
       if (!r.assessment_id) throw new Error("assessment_id 없음");
       obs.lightNode("assessment", "done");
       onAssessment(r.assessment_id);
@@ -323,10 +346,18 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
         <div className="bubble">
           {t.decision && <span className="intent-tag">{t.decision.intent}</span>}
           <div>{t.text}</div>
-          {t.decision?.intent === "ASSESSMENT" && t.decision.selector && <div className="confirm">
-            <div>제안 범위: repository <code>{t.decision.selector.repository_id ?? "?"}</code> · profile <code>{profileId ?? t.decision.selector.policy_profile_id ?? "미지정"}</code></div>
-            <button style={{ marginTop: 8 }} onClick={() => void confirmAssessment(t.decision!.selector!)}>이 Assessment 시작</button>
-          </div>}
+          {t.decision?.intent === "ASSESSMENT" && t.decision.selector && (() => {
+            const connected = obs.obs.repos.map(r => r.repository_id);
+            const proposed = t.decision.selector.repository_id;
+            const repoShown =
+              proposed && connected.includes(proposed) ? proposed
+              : connected.length === 1 ? connected[0]
+              : proposed ?? "?";
+            return <div className="confirm">
+              <div>제안 범위: repository <code>{repoShown}</code> · profile <code>{profileId ?? t.decision.selector.policy_profile_id ?? "미지정"}</code></div>
+              <button style={{ marginTop: 8 }} onClick={() => void confirmAssessment(t.decision!.selector!)}>이 Assessment 시작</button>
+            </div>;
+          })()}
           {t.decision?.requires_confirmation && t.decision.intent !== "ASSESSMENT" && <div className="confirm"><em>{t.decision.intent} 제안은 해당 화면에서 확인 후 실행합니다.</em></div>}
         </div>
       </div>)}
@@ -756,14 +787,18 @@ function App() {
   const isAdmin = !!session?.groups.includes("Admin");
   useEffect(() => {
     if (!session) return;
-    // A regular user cannot call the admin list; show only their own assignment, which they
-    // already carry in the token. An admin loads the full roster and connected scope.
+    // /scope is available to any authenticated caller and returns only their own customer's
+    // connected repositories — the chatbot needs it to resolve an assessment target, so load it
+    // for everyone. Only the admin roster (/admin/users) is admin-only.
+    void (async () => {
+      try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); observer.setRepos(r.repositories); } catch { /* keep panel */ }
+    })();
     if (!isAdmin) {
+      // A regular user cannot call the admin list; show only their own assignment from the token.
       observer.setUserProfiles([{ email: session.email, profile: session.profile }]);
       return;
     }
     void (async () => {
-      try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); observer.setRepos(r.repositories); } catch { /* keep panel */ }
       try { const r = await api<{ users: { email: string; profile: string | null }[] }>("/admin/users", session.accessToken); observer.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); } catch { /* keep panel */ }
     })();
     /* eslint-disable-next-line */
