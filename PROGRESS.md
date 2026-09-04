@@ -2,6 +2,33 @@
 
 ## Current
 
+- **`internal-cloud-security-standard.md` 기반 평가가 실제로 되는지 확인하다 런타임 결함 둘을 찾아
+  고쳤다 (2026-09-04).** `profile@v1`(자동 평가 Rule 9 + MANUAL 1)로 만든 Assessment가 결과 0건으로
+  QUEUED에 멈춰 있었다.
+  - **원인 1 — outbox 장부가 한 번도 닫히지 않았다.** `_update_outbox`의 조건식이 저장된
+    `status`("PENDING")를 GSI 파티션 값("OUTBOX#PENDING")과 비교해 **항상** 실패했고,
+    `dispatch_entry`가 그 실패를 삼켰다. 모든 entry가 dispatch_attempts=0인 채 영영 PENDING으로
+    남았고 sweeper가 1분마다 20개 전부를 다시 큐에 넣었다 — assessment DLQ 4,633건, 이미 끝난
+    Assessment의 `ImmutableEvaluationResultConflict` 폭주, 판본 pin이 없는 legacy Assessment 5건의
+    `policy_profile_version pin is missing` 반복이 전부 이것이었다. 조건을 `OutboxStatus.PENDING`과
+    비교하도록 고치고, 조건을 실제로 평가하는 fake로 회귀 테스트를 붙였다.
+  - **원인 2 — 한국어 정책 locator가 근거 검사에서 거부됐다.** 평가 prompt의 `json.dumps`가
+    기본 `ensure_ascii`로 locator를 backslash-u escape로 바꿔 보내고, 모델이 그대로 되돌려주면
+    허용 목록의 실제 문자열과 일치하지 않아 **옳은** 인용이 "승인 밖 근거"로 거부됐다. 한국어
+    소제목을 인용하는 모든 고객 Rule의 IAC/AWS 평가가 그 이유로 실패한다. `ensure_ascii=False`로
+    보내고, 되돌아온 escape는 같은 근거로 읽는다(허용 목록은 그대로).
+  - **로컬 재현 결과.** worker의 `_m1_handler`를 production 코드 그대로 따라 `profile@v1`
+    Assessment를 돌리자(GitHub는 로컬 token, AWS read는 현재 세션 자격, 결과는 메모리) 계획된
+    4 좌표가 모두 결과를 냈다: S3_BLOCK_PUBLIC_ACCESS(AWS) FAIL·S3_BUCKET_ACL_DISABLED(IAC) FAIL·
+    S3_SERVER_ACCESS_LOGGING(IAC) FAIL·ORGANIZATIONAL_CONTROL(MANUAL) MANUAL_REVIEW, 근거는 문서의
+    해당 item locator와 `terraform:main.tf` anchor다. 문서 기반 평가는 동작한다.
+  - **남은 운영 작업.** `kosa-governance-sandbox/m1/github-token`의 GitHub App installation
+    token(1시간 만료)이 01:20 KST에 쓰인 뒤 만료돼 401이다. worker는 `LOAD_IAC`에서 죽는다.
+    재발급(private key 필요, `docs/SESSION-HANDOFF-2026-09-03.md` §2)이 없으면 라이브 평가는 여전히
+    실패한다. DLQ(assessment 4,633·remediation 824·authoring 13)는 sweeper 반복이 만든 쓰레기라
+    비우는 것이 맞다. 판본 pin이 없는 legacy Assessment 5건(`profile-mvp-baseline@None`)은 backfill
+    대상이다.
+
 - **정책 추출이 긴 문서에서 거의 항상 실패하던 원인을 찾아 두 가지를 고쳤다 (2026-09-04).**
   사용자가 본 "평가가 안 된다"의 뿌리다. 라이브에서 청크 단위로 계측해 원인을 갈랐다.
   - **원인 1 — Catalog 경계를 두 곳에서 다른 무게로 판정했다.** `build_candidate`는 위반마다

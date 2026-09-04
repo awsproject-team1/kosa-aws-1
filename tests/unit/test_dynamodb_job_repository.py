@@ -46,6 +46,55 @@ class InMemoryTable:
         item = self.items.get((key_value["PK"], key_value["SK"]))
         return {} if item is None else {"Item": item}
 
+    def query(self, **kwargs: object) -> dict[str, object]:
+        """GSI2 (`OUTBOX#PENDING`) 조회. sweeper가 무엇을 다시 보낼지 정하는 그 query다."""
+        values = kwargs["ExpressionAttributeValues"]
+        assert isinstance(values, dict)
+        wanted = values[":pending"]
+        matched = [
+            _plain(item)
+            for item in self.items.values()
+            if "GSI2PK" in item and _attr(item, "GSI2PK") == wanted
+        ]
+        return {"Items": matched}
+
+    def update_item(self, **kwargs: object) -> object:
+        """Evaluate the outbox bookkeeping update, condition included.
+
+        조건을 무시하는 fake는 이 회귀를 잡지 못한다 — 조건이 항상 실패해도 테스트는 통과했고,
+        라이브에서는 모든 entry가 영영 PENDING으로 남아 1분마다 다시 큐에 들어갔다.
+        """
+        key_value = kwargs["Key"]
+        assert isinstance(key_value, dict)
+        item = self.items.get((key_value["PK"], key_value["SK"]))
+        if item is None:
+            raise _conditional_failure()
+        names = kwargs.get("ExpressionAttributeNames") or {}
+        values = kwargs.get("ExpressionAttributeValues") or {}
+        assert isinstance(names, dict) and isinstance(values, dict)
+        condition = str(kwargs["ConditionExpression"])
+        field, _, placeholder = (part.strip() for part in condition.partition("="))
+        if _attr(item, names.get(field, field)) != values[placeholder]:
+            raise _conditional_failure()
+        expression = str(kwargs["UpdateExpression"])
+        plain = _plain(item)
+        for clause in (
+            expression.replace(" REMOVE ", "\nREMOVE ").replace(" ADD ", "\nADD ").splitlines()
+        ):
+            verb, _, rest = clause.strip().partition(" ")
+            if verb == "SET":
+                for assignment in rest.split(","):
+                    target, _, value_key = (x.strip() for x in assignment.partition("="))
+                    plain[names.get(target, target)] = values[value_key]
+            elif verb == "REMOVE":
+                for name in rest.split(","):
+                    plain.pop(name.strip(), None)
+            elif verb == "ADD":
+                target, value_key = rest.split()
+                plain[target] = int(plain.get(target, 0)) + int(values[value_key])
+        self.items[(key_value["PK"], key_value["SK"])] = plain
+        return {}
+
     def transact_write_items(self, **kwargs: object) -> object:
         # The production transaction client is a low-level DynamoDB client, so items
         # arrive marshaled as AttributeValues ({"S": ...}); mirror that contract here.
@@ -60,6 +109,23 @@ class InMemoryTable:
         for key, item in zip(keys, candidates, strict=True):
             self.items[key] = item
         return {}
+
+
+def _plain(item: dict[str, object]) -> dict[str, object]:
+    """Unwrap AttributeValues the transaction path stored; numbers come back as numbers."""
+    plain: dict[str, object] = {}
+    for name, value in item.items():
+        if isinstance(value, dict) and len(value) == 1 and "N" in value:
+            plain[name] = int(value["N"])
+        else:
+            plain[name] = _attr(item, name)
+    return plain
+
+
+def _conditional_failure() -> Exception:
+    error = Exception()
+    error.response = {"Error": {"Code": "ConditionalCheckFailedException"}}  # type: ignore[attr-defined]
+    return error
 
 
 class DynamoDbJobRepositoryTest(unittest.TestCase):
@@ -177,6 +243,83 @@ class DynamoDbJobRepositoryTest(unittest.TestCase):
         self.assertEqual(_attr(item, "model_profile_id"), "assessment-nova-lite-m1-v2")
         self.assertEqual(_attr(item, "rubric_version"), "m1-v2")
         self.assertEqual(_attr(item, "policy_profile_version"), "v2")
+
+
+class OutboxBookkeepingTest(unittest.TestCase):
+    """The sweeper only stops re-sending an entry once its status update actually lands.
+
+    라이브 sandbox에서 20개 entry가 dispatch_attempts=0인 채 영영 PENDING이었고 sweeper가 1분마다
+    전부 다시 보냈다. 원인은 조건식이 저장된 `status`("PENDING")를 GSI 파티션 값
+    ("OUTBOX#PENDING")과 비교해 항상 실패한 것이다.
+    """
+
+    def _entry(
+        self, table: InMemoryTable
+    ) -> tuple[DynamoDbAssessmentWorkflowRepository, WorkflowOutboxEntry]:
+        repository = DynamoDbAssessmentWorkflowRepository(
+            table, table_name="metadata", transaction_client=table
+        )
+        entry = WorkflowOutboxEntry(
+            customer_id="cust-001",
+            job_id="job-001",
+            task=WorkflowTask(
+                job_id="job-001", expected_revision=0, command=WorkflowCommand.ASSESS_RESOURCE
+            ),
+        )
+        repository.create_assessment_workflow(
+            Assessment(
+                assessment_id="asm-001",
+                customer_id="cust-001",
+                job_id="job-001",
+                repository_id="repo-001",
+                policy_profile_id="profile-001",
+                policy_profile_version="v1",
+            ),
+            create_job(
+                job_id="job-001",
+                customer_id="cust-001",
+                job_type="ASSESSMENT",
+                initial_step=JobCurrentStep.LOAD_IAC,
+                requested_by="subject-001",
+                assessment_id="asm-001",
+            ),
+            entry,
+        )
+        return repository, entry
+
+    def test_a_dispatched_entry_leaves_the_pending_index(self) -> None:
+        table = InMemoryTable()
+        repository, entry = self._entry(table)
+        self.assertEqual(len(repository.list_pending_outbox(limit=10)), 1)
+
+        repository.mark_outbox_dispatched(entry)
+
+        stored = table.items[("CUSTOMER#cust-001", "OUTBOX#JOB#job-001")]
+        self.assertEqual(_attr(stored, "status"), "DISPATCHED")
+        self.assertNotIn("GSI2PK", stored)
+        self.assertEqual(repository.list_pending_outbox(limit=10), ())
+
+    def test_a_failed_dispatch_counts_an_attempt_and_stays_pending(self) -> None:
+        table = InMemoryTable()
+        repository, entry = self._entry(table)
+
+        repository.record_outbox_dispatch_failure(entry)
+
+        stored = table.items[("CUSTOMER#cust-001", "OUTBOX#JOB#job-001")]
+        self.assertEqual(_attr(stored, "status"), "PENDING")
+        self.assertEqual(int(_attr(stored, "dispatch_attempts")), 1)
+        self.assertEqual(len(repository.list_pending_outbox(limit=10)), 1)
+
+    def test_marking_twice_is_refused_by_the_condition(self) -> None:
+        """이미 DISPATCHED인 entry를 다시 표시하는 것은 재시도가 아니라 상태 오류다."""
+        table = InMemoryTable()
+        repository, entry = self._entry(table)
+        repository.mark_outbox_dispatched(entry)
+
+        from apps.backend.repositories.errors import RepositoryError
+
+        with self.assertRaises(RepositoryError):
+            repository.mark_outbox_dispatched(entry)
 
 
 if __name__ == "__main__":

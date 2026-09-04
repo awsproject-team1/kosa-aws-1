@@ -459,3 +459,81 @@ class ModelStatusBoundaryTest(unittest.TestCase):
             resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
         )
         self.assertIs(result.status, EvaluationStatus.INSUFFICIENT_EVIDENCE)
+
+
+class KoreanLocatorEvidenceTest(unittest.TestCase):
+    """A policy locator written in Korean must survive the round trip through the prompt.
+
+    `json.dumps`의 기본 `ensure_ascii`는 한국어 locator를 backslash-u escape로 바꿔 보내고, 모델은
+    본 그대로 되돌려준다. 그러면 허용 목록의 실제 문자열과 일치하지 않아 **옳은** 인용이 "승인 밖
+    근거"로 거부됐다 — 라이브에서 한국어 소제목을 인용하는 모든 고객 Rule의 IAC/AWS 평가가 이
+    이유로 실패했다.
+    """
+
+    LOCATOR = "heading/사내-클라우드-인프라-보안-표준/item/5"
+
+    def _rule(self) -> PolicyRule:
+        return PolicyRule(
+            rule_id="CUST-S3_BUCKET_ACL_DISABLED-b574b8202c0a",
+            version="ver-1",
+            title="S3 bucket ACLs must be disabled",
+            severity=RuleSeverity.MEDIUM,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=("AWS::S3::Bucket",),
+            source_references=(
+                SourceReference(
+                    source_id="src-e1ca1051",
+                    source_version="ver-1",
+                    locator=self.LOCATOR,
+                    content_sha256="abc",
+                ),
+            ),
+        )
+
+    def _evaluate(self, cited: str):
+        rule = self._rule()
+        context = PolicyContext(
+            policy_profile_id="profile",
+            policy_profile_version="v1",
+            phase=AssessmentPhase.INITIAL,
+            resource_type="AWS::S3::Bucket",
+            rules=(rule,),
+        )
+        client = Client(
+            response(
+                {
+                    "status": "FAIL",
+                    "score": 0,
+                    "rationale": "ACLs are enabled.",
+                    "evidence_references": [cited],
+                }
+            )
+        )
+        evaluator = BedrockStructuredEvaluator(
+            client=client,
+            perspective=EvaluationPerspective.IAC,
+            resource_document={"acl": "public-read"},
+            evidence_references=("terraform:main.tf",),
+        )
+        result = evaluator.evaluate(
+            resource_id="bucket-001", rule=rule, context=context, model_profile=PROFILE
+        )
+        return result, client
+
+    def test_the_prompt_carries_the_locator_as_written_not_escaped(self) -> None:
+        _result, client = self._evaluate(f"src-e1ca1051@ver-1#{self.LOCATOR}")
+        body = client.calls[0]["messages"][0]["content"][0]["text"]  # type: ignore[index]
+        self.assertIn(self.LOCATOR, body)
+        self.assertNotIn(chr(92) + "uc0ac", body)
+
+    def test_a_locator_the_model_echoed_back_escaped_is_still_the_same_evidence(self) -> None:
+        escaped = "src-e1ca1051@ver-1#" + self.LOCATOR.encode("ascii", "backslashreplace").decode()
+        self.assertIn(chr(92) + "u", escaped)
+
+        result, _client = self._evaluate(escaped)
+
+        self.assertEqual(result.evidence_references, (f"src-e1ca1051@ver-1#{self.LOCATOR}",))
+
+    def test_a_locator_outside_the_rule_is_still_refused(self) -> None:
+        with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
+            self._evaluate("src-e1ca1051@ver-1#heading/사내-클라우드-인프라-보안-표준/item/9")

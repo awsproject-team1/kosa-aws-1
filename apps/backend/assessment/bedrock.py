@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -139,6 +140,11 @@ class BedrockStructuredEvaluator:
                 "rule": _rule_prompt_view(rule),
                 "allowed_evidence_references": list(allowed_evidence),
             },
+            # 정책 locator는 문서의 소제목에서 오므로 한국어일 수 있다. `ensure_ascii` 기본값은
+            # 그것을 `사...`로 바꿔 보내고, 모델은 본 그대로 되돌려준다 — 그러면 허용 목록의
+            # 실제 문자열과 일치하지 않아 옳은 인용이 "승인 밖 근거"로 거부된다. 라이브에서
+            # 한국어 소제목을 인용하는 모든 고객 Rule의 IAC/AWS 평가가 그 이유로 실패했다.
+            ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -311,13 +317,29 @@ def _normalized_score(status: EvaluationStatus, score: float) -> float:
 def _response_evidence(value: object, allowed: tuple[str, ...]) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise BedrockEvaluationError("evidence_references must be a list")
-    evidence = _unique_non_empty_strings(tuple(value), "evidence_references")
+    evidence = _unique_non_empty_strings(
+        tuple(_unescaped(entry) for entry in value), "evidence_references"
+    )
     outside = [reference for reference in evidence if not _is_allowed(reference, allowed)]
     if outside:
         raise BedrockEvaluationError(
             "evidence reference is outside approved evidence: " + ", ".join(outside)
         )
     return evidence
+
+
+def _unescaped(value: object) -> object:
+    """Decode literal backslash-u sequences a model copied from a JSON-escaped prompt.
+
+    같은 locator를 표기만 다르게 적은 것이지 다른 근거가 아니다. 문자열이 아니거나 그런 escape가
+    없으면 그대로 둔다 — 여기서 넓히는 것은 표기뿐이고 허용 목록 자체는 그대로다.
+    """
+    if not isinstance(value, str) or (chr(92) + "u") not in value:
+        return value
+    return _UNICODE_ESCAPE.sub(lambda match: chr(int(match.group(1), 16)), value)
+
+
+_UNICODE_ESCAPE = re.compile(chr(92) * 2 + "u([0-9a-fA-F]{4})")
 
 
 def _is_allowed(reference: str, allowed: tuple[str, ...]) -> bool:

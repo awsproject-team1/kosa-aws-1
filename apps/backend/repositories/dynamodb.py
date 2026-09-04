@@ -323,7 +323,15 @@ class DynamoDbAssessmentWorkflowRepository(DynamoDbJobRepository):
         if not isinstance(entry, WorkflowOutboxEntry):
             raise TypeError("entry must be a WorkflowOutboxEntry")
         expression = "SET #status = :status"
-        values: dict[str, object] = {":status": status.value, ":pending": "OUTBOX#PENDING"}
+        # 조건은 item의 `status` 속성과 비교한다. 예전에는 GSI 파티션 값("OUTBOX#PENDING")과
+        # 비교했는데 저장된 status는 "PENDING"이라 조건이 **항상** 실패했다. 그 실패를
+        # `dispatch_entry`가 삼키므로 entry는 영영 PENDING으로 남았고, sweeper가 1분마다 모든
+        # entry를 다시 큐에 넣었다 — 라이브 sandbox의 assessment DLQ 4,633건과 이미 끝난
+        # Assessment의 `ImmutableEvaluationResultConflict` 폭주가 그 결과였다.
+        values: dict[str, object] = {
+            ":status": status.value,
+            ":pending": OutboxStatus.PENDING.value,
+        }
         if status is OutboxStatus.DISPATCHED:
             expression += " REMOVE GSI2PK, GSI2SK"
         if increment_attempts:
