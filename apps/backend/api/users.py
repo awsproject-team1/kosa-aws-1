@@ -211,6 +211,23 @@ class UserManagementService:
         )
         return {"email": email, "profile": policy_profile_id}
 
+    def delete_user(self, principal: Principal, *, email: str) -> dict[str, object]:
+        """Permanently delete a user in the caller's own customer partition.
+
+        The pool is shared across customers, so the target's `custom:customer_id` is read and
+        matched before the delete (same boundary as `assign_profile`): a user that does not exist
+        and a user owned by someone else raise the identical denial, so this never becomes a
+        cross-tenant existence oracle. The delete removes the Cognito user and its group
+        memberships; it does not touch that user's past audit events.
+        """
+        _require(principal)
+        authorize(principal, Action.MANAGE_USERS)
+        if not isinstance(email, str) or "@" not in email:
+            raise UserManagementError("email is invalid")
+        self._require_same_customer(principal, email)
+        self._client.admin_delete_user(UserPoolId=self._pool, Username=email)
+        return {"email": email, "deleted": True}
+
     def _require_same_customer(self, principal: Principal, email: str) -> None:
         """Refuse a write aimed at a user outside the caller's own customer partition.
 

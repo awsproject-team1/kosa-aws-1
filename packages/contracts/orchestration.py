@@ -46,15 +46,26 @@ _WORKFLOW_INTENTS = frozenset(
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OrchestrationRequest:
-    """One natural-language turn addressed to the Parent Orchestrator."""
+    """One natural-language turn addressed to the Parent Orchestrator.
+
+    ``policy_profile_id`` is the Policy Profile the caller is working under (the user's assigned
+    Profile, or one they name). It is a *hint* the Backend uses to ground a Policy Q&A answer in
+    that Profile's actually-published rules; the Backend still resolves it inside the caller's own
+    customer partition, so it cannot widen scope.
+    """
 
     message: str
+    policy_profile_id: str | None = None
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.message, "message")
+        require_optional_non_empty_string(self.policy_profile_id, "policy_profile_id")
 
     def to_dict(self) -> dict[str, object]:
-        return {"message": self.message}
+        payload: dict[str, object] = {"message": self.message}
+        if self.policy_profile_id is not None:
+            payload["policy_profile_id"] = self.policy_profile_id
+        return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -187,6 +187,19 @@ class JobHttpHandler:
                 return _response(
                     200, self._users.assign_profile(principal, email=email, policy_profile_id=pid)
                 )
+            if method == "DELETE" and path == "/admin/users":
+                if self._users is None:
+                    raise JobNotFoundError("user management route not found")
+                try:
+                    body = _mapping(
+                        json.loads(
+                            event.get("body") if isinstance(event.get("body"), str) else "{}"
+                        )
+                    )
+                    email = _non_empty_string(body.get("email"), "email")
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("user delete body is invalid") from error
+                return _response(200, self._users.delete_user(principal, email=email))
             policy_path = _policy_source_path(path)
             if policy_path is not None and self._policy_sources is not None:
                 source_id, source_version, action = policy_path
@@ -490,9 +503,16 @@ def _orchestration_request(raw_body: object) -> OrchestrationRequest:
     if not isinstance(raw_body, str):
         raise ValueError("body must be a JSON string")
     body = _mapping(json.loads(raw_body))
-    if set(body) != {"message"}:
+    allowed = {"message", "policy_profile_id"}
+    if set(body) - allowed or "message" not in body:
         raise ValueError("orchestrate body fields are invalid")
-    return OrchestrationRequest(message=_non_empty_string(body["message"], "message"))
+    profile_id = body.get("policy_profile_id")
+    return OrchestrationRequest(
+        message=_non_empty_string(body["message"], "message"),
+        policy_profile_id=(
+            _non_empty_string(profile_id, "policy_profile_id") if profile_id is not None else None
+        ),
+    )
 
 
 def _remediation_exception_request(raw_body: object) -> RemediationExceptionRequest:

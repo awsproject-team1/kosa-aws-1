@@ -42,7 +42,11 @@ route 없이 남아 있었다).
 Parent Orchestrator가 메시지를 분류해 다음 중 하나를 돌려준다. **Parent는 워크플로를 시작하지
 않는다** — Job 생성·scope 검증·승인은 각 endpoint가 JWT로 다시 검증한다.
 
-- 요청: `{"message": "<자연어>"}`
+- 요청: `{"message": "<자연어>", "policy_profile_id?": "<Profile ID>"}`
+  - `policy_profile_id`는 선택이다. 주면 Backend가 **호출자 customer partition 안에서** 그 Profile의
+    게시된 Rule을 조회해 Parent에 읽기 전용 grounding으로 넘긴다 — POLICY_QA 답변이 일반 개념이 아니라
+    그 Profile의 실제 Rule(rule_id·title·requirement·rubric)에 근거하게 된다. 다른 customer의 Profile을
+    지정해도 자기 partition에서만 조회하므로 scope가 넓어지지 않고, 미해결 Profile은 grounding 없이 라우팅만 한다.
 - 응답 `200`: `{intent, rationale, answer?, selector?, requires_confirmation}`
   - `intent` ∈ `POLICY_QA` | `ASSESSMENT` | `REMEDIATION` | `DEPLOYMENT` | `UNSUPPORTED`
   - `POLICY_QA`면 `answer`에 직접 답변, 워크플로 intent면 `selector`에 후보
@@ -84,6 +88,7 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 | `POST` | `/admin/users` | 배선됨 | Admin이 customer scope의 사용자 생성(`{email, role, temporary_password}` → `201 {email, role, customer_id}`). role은 `Admin`/`User`, 새 사용자는 호출자의 `custom:customer_id`로 고정. `temporary_password`는 영구 비밀번호로 설정된다(콘솔에 첫 로그인 변경 flow가 없다). pool 전역에서 이미 쓰이는 email이면 `400`. email은 소문자로 정규화해 저장한다(pool username이 대소문자 구분). `temporary_password`는 pool 정책(8자 이상 + 대·소문자·숫자·기호)을 요청 단계에서 검증해 미달이면 `400`. 그룹 추가·비밀번호 설정이 실패하면 방금 만든 사용자를 삭제해 로그인 불가능한 반쪽 계정을 남기지 않는다 |
 | `GET` | `/admin/users` | 배선됨 | Admin이 자기 customer의 사용자 목록 조회(`{users:[{username, email, customer_id, profile, status, enabled}]}`). 비밀번호는 반환하지 않는다 |
 | `POST` | `/admin/users/profile` | 배선됨 | Admin이 사용자에게 기본 Policy Profile 지정(`{email, policy_profile_id}`). Cognito 표준 `profile` 속성에 저장되어 사용자가 로그인 시 자기 token에서 읽는다. 대상 사용자가 호출자 customer 소속이 아니거나 존재하지 않으면 동일하게 `403` — 존재 여부를 customer 경계 너머로 알리지 않는다 |
+| `DELETE` | `/admin/users` | 배선됨 | Admin이 자기 customer scope의 사용자 삭제(`{email}` → `200 {email, deleted:true}`). 삭제 전에 대상의 `custom:customer_id`를 읽어 호출자 customer 소속임을 확인한다. 대상이 호출자 customer 소속이 아니거나 존재하지 않으면 동일하게 `403` — 존재 여부를 customer 경계 너머로 알리지 않는다. 과거 audit event는 지우지 않는다 |
 
 ### 후보 조회 응답
 

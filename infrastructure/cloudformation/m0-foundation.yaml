@@ -490,8 +490,10 @@ Resources:
                     # 쓰기 전에 대상 사용자의 custom:customer_id를 읽어 호출자 customer 소속인지
                     # 확인한다. 이 권한이 없으면 그 확인이 통째로 실패한다.
                     "cognito-idp:AdminGetUser",
-                    # 생성 3단계(create → group → password) 중 뒤가 실패하면 앞에서 만든 사용자를
-                    # 되돌린다. 없으면 로그인 불가능한 반쪽 계정이 남고 재시도는 "이미 존재"가 된다.
+                    # AdminGetUser로 대상이 호출자 customer 소속임을 확인한 뒤에만 삭제한다(사용자
+                    # 삭제 endpoint). 또한 생성 3단계(create → group → password) 중 뒤가 실패하면
+                    # 앞에서 만든 사용자를 되돌린다 — 없으면 로그인 불가능한 반쪽 계정이 남고 재시도는
+                    # "이미 존재"가 된다.
                     "cognito-idp:AdminDeleteUser",
                     "cognito-idp:ListUsers",
                   ]
@@ -672,7 +674,11 @@ Resources:
       PreventUserExistenceErrors: ENABLED
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, email]
+      # `profile` is required so Cognito places the user's standard `profile` attribute — where an
+      # admin stores the per-user Policy Profile via POST /admin/users/profile — into the ID token
+      # as a claim. Without this scope the SPA never sees the assignment and shows "profile 미지정"
+      # even after the user signs in again. `openid`/`email` alone do not carry `profile`.
+      AllowedOAuthScopes: [openid, email, profile]
       # The Hosted UI only redirects to a listed URL, so the callback list must agree with the
       # API's CORS origins: a sandbox that serves the SPA from CloudFront still signs in from
       # the Vite dev server. Both lists are built from the one parameter plus the local origin,
@@ -1066,6 +1072,14 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /admin/users/profile"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  DeleteAdminUsersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "DELETE /admin/users"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
