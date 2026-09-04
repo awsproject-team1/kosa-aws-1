@@ -152,11 +152,17 @@ list and stores one complete immutable evaluation plan. An internal or legacy In
 record may narrow evaluation by naming one approved `resource_type`/`resource_id`; a
 resource outside the list is refused at read time. The cross-account read Role therefore
 needs read permission for every configured type (for example
-`ec2:DescribeInstances`/`DescribeVolumes`/`DescribeSecurityGroups`,
+`s3:ListAllMyBuckets`/`GetBucketPublicAccessBlock`/`GetEncryptionConfiguration`/
+`GetBucketPolicyStatus`/`GetBucketPolicy`/`GetBucketOwnershipControls`/`GetBucketLogging`,
+`ec2:DescribeInstances`/`DescribeVolumes`/`DescribeSecurityGroups`/`DescribeSubnets`,
 `rds:DescribeDBInstances` plus `ec2:DescribeSecurityGroups` for the ingress rules of
 attached RDS VPC security groups, and
 `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeLoadBalancerAttributes`)
-and nothing more.
+and nothing more. The three S3 sub-reads and `ec2:DescribeSubnets` were added on 2026-09-05
+(ADR-0024): without them the ACL, bucket-policy, TLS and logging Rules had no AWS evidence at
+all, and the EC2 public-IP Rule could not tell which tier an instance sits in. A Role that
+lacks one of them makes the affected coordinates `INSUFFICIENT_EVIDENCE` — a denied sub-read
+is a read failure, never "not configured".
 
 `github_repository` is a canonical GitHub path identity, not a URL. The owner is
 1–39 ASCII alphanumeric characters with optional single internal hyphens. The

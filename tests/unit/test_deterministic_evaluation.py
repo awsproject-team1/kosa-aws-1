@@ -220,8 +220,12 @@ class PartialComplianceTest(unittest.TestCase):
 
 class BoundaryTest(unittest.TestCase):
     def test_a_rule_whose_capability_has_no_predicate_is_left_to_the_model(self) -> None:
-        """해석이 필요한 통제까지 코드가 답하면 근거 없는 확신이 된다."""
-        rule = _rule("EC2_SG_INGRESS_RESTRICTED", "EC2.SECURITY_GROUP_INGRESS", EC2)
+        """해석이 필요한 통제까지 코드가 답하면 근거 없는 확신이 된다.
+
+        "private tier인가"는 서브넷 사실을 알아도 여전히 해석이다 — 공인 IP를 배정하는 서브넷의
+        인스턴스에 이 Rule이 적용되는지는 문언을 상황에 대응시켜야 답할 수 있다.
+        """
+        rule = _rule("EC2_NO_PUBLIC_IP", "EC2.PUBLIC_ADDRESS", EC2)
 
         self.assertEqual(decidable_bindings(CATALOG, rule, resource_type=EC2), ())
 
@@ -312,6 +316,109 @@ class ResultShapeTest(unittest.TestCase):
         # 근거는 실제 read 하나와 Rule이 인용한 정책 판본이다.
         self.assertIn("aws:s3:bucket/bucket-1#read-resource", result.evidence_references)
         self.assertIn("src-1@ver-1#item/1", result.evidence_references)
+
+
+class ExtendedVocabularyTest(unittest.TestCase):
+    """Two predicates added on 2026-09-05 bring measured facts out of the model path."""
+
+    def test_encryption_accepts_only_the_algorithms_s3_actually_offers(self) -> None:
+        """`NON_EMPTY`는 어떤 알고리즘이든 통과시켰다. 규정이 KMS를 요구하면 그건 오답이다."""
+        for algorithm, expected in (("AES256", True), ("aws:kms", True), ("rot13", False)):
+            with self.subTest(algorithm=algorithm):
+                verdict = _verdict(
+                    "S3_ENCRYPTION_AT_REST",
+                    "S3.ENCRYPTION",
+                    S3,
+                    {
+                        "attributes": {
+                            "encryption": {
+                                "Rules": [
+                                    {
+                                        "ApplyServerSideEncryptionByDefault": {
+                                            "SSEAlgorithm": algorithm
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                )
+                self.assertEqual(verdict.is_pass, expected)
+
+    def _rds(self, permissions: list[dict[str, object]]):
+        return _verdict(
+            "RDS_ACCESS_RESTRICTED",
+            "RDS.SECURITY_GROUP_INGRESS",
+            "AWS::RDS::DBInstance",
+            {
+                "attributes": {
+                    "vpc_security_groups": [
+                        {"VpcSecurityGroupId": "sg-rds", "IpPermissions": permissions}
+                    ]
+                }
+            },
+        )
+
+    def test_a_port_open_to_the_internet_is_a_violation_the_model_evaded(self) -> None:
+        """라이브 측정에서 이 입력에 모델은 `OUT_OF_SCOPE`를 냈다. 코드는 FAIL이다."""
+        verdict = self._rds(
+            [
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": 3306,
+                    "ToPort": 3306,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            ]
+        )
+        self.assertIs(verdict.status, EvaluationStatus.FAIL)
+
+    def test_ipv6_wide_open_counts_too(self) -> None:
+        verdict = self._rds([{"IpProtocol": "-1", "Ipv6Ranges": [{"CidrIpv6": "::/0"}]}])
+        self.assertIs(verdict.status, EvaluationStatus.FAIL)
+
+    def test_private_sources_and_group_references_pass(self) -> None:
+        verdict = self._rds(
+            [
+                {"IpProtocol": "tcp", "FromPort": 3306, "IpRanges": [{"CidrIp": "10.0.0.0/16"}]},
+                {"IpProtocol": "tcp", "UserIdGroupPairs": [{"GroupId": "sg-app"}]},
+            ]
+        )
+        self.assertIs(verdict.status, EvaluationStatus.PASS)
+
+    def test_a_group_with_no_ingress_at_all_passes(self) -> None:
+        """규칙이 없는 그룹은 아무것도 열지 않는다 — 근거 부족이 아니라 충족이다."""
+        self.assertIs(self._rds([]).status, EvaluationStatus.PASS)
+
+    def test_a_malformed_security_group_fails_closed(self) -> None:
+        binding = EvidenceCapabilityBinding(
+            capability_key="TEST.SG",
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            resource_type=S3,
+            document_paths=("attributes.groups[]",),
+            expectation=EvidenceExpectation.NO_PUBLIC_INGRESS,
+        )
+        with self.assertRaisesRegex(DeterministicEvaluationError, "security group"):
+            decide((binding,), {"attributes": {"groups": ["sg-1"]}})
+
+    def test_all_in_requires_its_allowed_set_and_nothing_else_carries_one(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires non-empty expected_values"):
+            EvidenceCapabilityBinding(
+                capability_key="TEST.IN",
+                perspective=EvaluationPerspective.AWS_ACTUAL,
+                resource_type=S3,
+                document_paths=("attributes.value",),
+                expectation=EvidenceExpectation.ALL_IN,
+            )
+        with self.assertRaisesRegex(ValueError, "must not carry expected_values"):
+            EvidenceCapabilityBinding(
+                capability_key="TEST.IN",
+                perspective=EvaluationPerspective.AWS_ACTUAL,
+                resource_type=S3,
+                document_paths=("attributes.value",),
+                expectation=EvidenceExpectation.ALL_TRUE,
+                expected_values=("x",),
+            )
 
 
 if __name__ == "__main__":

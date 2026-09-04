@@ -106,6 +106,19 @@ class Ec2:
         self.volume_ids = kwargs.get("VolumeIds")
         return {"Volumes": [{"VolumeId": "vol-1", "Encrypted": False, "Size": 8}]}
 
+    def describe_subnets(self, **kwargs):
+        return {
+            "Subnets": [
+                {
+                    "SubnetId": "subnet-1",
+                    "VpcId": "vpc-1",
+                    "MapPublicIpOnLaunch": False,
+                    # Not evidence for any Rule; must not be projected.
+                    "Tags": [{"Key": "Name", "Value": "private-a"}],
+                }
+            ]
+        }
+
     def describe_security_groups(self, **kwargs):
         self.group_ids = kwargs.get("GroupIds")
         return {
@@ -576,6 +589,15 @@ class PaginatedListTest(unittest.TestCase):
 
             def get_bucket_policy_status(self, **kwargs):
                 return {"PolicyStatus": {}}
+
+            def get_bucket_policy(self, **kwargs):
+                return {"Policy": "{}"}
+
+            def get_bucket_ownership_controls(self, **kwargs):
+                return {"OwnershipControls": {"Rules": [{"ObjectOwnership": "ObjectWriter"}]}}
+
+            def get_bucket_logging(self, **kwargs):
+                return {}
 
         client = PagedS3()
         views = self._tool(AssumeRoleS3ResourceTool, "s3_client_factory", client).list_resources(

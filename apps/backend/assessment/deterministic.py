@@ -192,7 +192,42 @@ def _satisfies(binding: EvidenceCapabilityBinding, value: object) -> bool:
             isinstance(value, str) and value.casefold() == (binding.expected_value or "").casefold()
         )
         return matches if expectation is EvidenceExpectation.ALL_EQUAL else not matches
+    if expectation is EvidenceExpectation.ALL_IN:
+        allowed = {entry.casefold() for entry in binding.expected_values}
+        return isinstance(value, str) and value.casefold() in allowed
+    if expectation is EvidenceExpectation.NO_PUBLIC_INGRESS:
+        return _no_public_ingress(value)
     raise DeterministicEvaluationError(f"unsupported expectation {expectation!r}")
+
+
+#: 인터넷 전체를 뜻하는 CIDR. 이보다 좁은 범위("/8이 넓은가")는 판단이며 여기서 정하지 않는다.
+_UNRESTRICTED_CIDRS = frozenset({"0.0.0.0/0", "::/0"})
+
+
+def _no_public_ingress(group: object) -> bool:
+    """Whether one security-group object opens nothing to the whole internet.
+
+    ingress 규칙이 하나도 없는 그룹은 충족이다. 규칙이 있되 CIDR 대신 다른 그룹을 출처로 삼는
+    것도 충족이다 — 공개 여부를 묻는 술어이지 출처의 적절성을 묻는 것이 아니다. 문서 모양이
+    security group이 아니면 조용히 통과시키지 않는다.
+    """
+    if not isinstance(group, Mapping):
+        raise DeterministicEvaluationError("NO_PUBLIC_INGRESS expects a security group object")
+    permissions = group.get("IpPermissions", [])
+    if not isinstance(permissions, list):
+        raise DeterministicEvaluationError("security group IpPermissions must be a list")
+    for permission in permissions:
+        if not isinstance(permission, Mapping):
+            raise DeterministicEvaluationError("security group permission must be an object")
+        for ranges_key, cidr_key in (("IpRanges", "CidrIp"), ("Ipv6Ranges", "CidrIpv6")):
+            ranges = permission.get(ranges_key, [])
+            if not isinstance(ranges, list):
+                raise DeterministicEvaluationError(f"security group {ranges_key} must be a list")
+            for entry in ranges:
+                cidr = entry.get(cidr_key) if isinstance(entry, Mapping) else None
+                if isinstance(cidr, str) and cidr.strip() in _UNRESTRICTED_CIDRS:
+                    return False
+    return True
 
 
 def result_from_verdict(

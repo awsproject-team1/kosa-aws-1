@@ -19,22 +19,27 @@ dry-run은 가짜 모델이므로 모델 정확도의 근거가 아니다 — �
 
 ## 2. dry-run 분포 (24 Case × 2회)
 
-| 판정 주체 | Case | 실행 | 비고 |
+두 번 쟀다. 경계 재설정 직후(a)와, 빈 곳을 메운 뒤(b: S3 sub-read 셋·EC2 서브넷·술어 어휘
+`ALL_IN`/`NO_PUBLIC_INGRESS`).
+
+| 판정 주체 | (a) Case | (b) Case | 비고 |
 | --- | --- | --- | --- |
-| CODE | **13** | 26 | Bedrock 호출 0회. 측정된 false negative 세 건 중 둘(`s3-three-of-four-actual`, `alb-https-plus-http-actual`)이 여기 있고 둘 다 FAIL |
-| MODEL | 11 | 22 | IAC 8건 전부 + EC2 공인 IP 2건 + `rds-private-open-sg-actual` |
+| CODE | 13 | **14** | Bedrock 호출 0회. 측정된 false negative 세 건 중 둘(`s3-three-of-four-actual`, `alb-https-plus-http-actual`)이 (a)부터 여기 있고, `rds-private-open-sg-actual`이 (b)에서 넘어왔다 — 라이브에서 모델이 `OUT_OF_SCOPE`로 회피한 그 Case가 코드 FAIL이다 |
+| MODEL | 11 | 10 | IAC 8건 전부 + EC2 공인 IP 2건 |
 
-Bedrock 호출은 48회 실행 중 **22회**다. 같은 Case 집합을 예전 harness로 돌리면 48회였다.
+Bedrock 호출은 48회 실행 중 (a) 22회 → (b) **20회**다. 같은 Case 집합을 예전 harness로 돌리면
+48회였다.
 
-모델 경로에 남은 AWS_ACTUAL 세 건은 각각 이유가 다르다.
+모델 경로에 남은 AWS_ACTUAL 두 건(`ec2-public-ip-actual` / `ec2-private-actual`)은 의도된
+것이다. "private tier에 있는가"는 서브넷 사실(`MapPublicIpOnLaunch`)을 알아도 문언을 상황에
+대응시켜야 답할 수 있는 해석이다. (b)에서 달라진 것은 그 해석에 필요한 사실이 이제 문서에
+있다는 점이다 — 라이브에서 모델은 그 field 없이 5/5 `OUT_OF_SCOPE`로 회피했고, 있을 때 어떻게
+답하는지는 라이브 회귀 측정이 보여 줄 것이다.
 
-- `ec2-public-ip-actual` / `ec2-private-actual` — Rule의 전제("private tier")를 문서가 말하지
-  못한다. adapter가 서브넷 속성을 읽지 않는다(기존 문서화된 gap).
-- `rds-private-open-sg-actual` — "0.0.0.0/0이 3306을 여는가"는 사실인데 술어 어휘에 CIDR이 없다.
-  dry-run에서는 가짜 모델이 `INSUFFICIENT_EVIDENCE`를 냈고, 라이브 측정에서는 실제 모델이
-  `OUT_OF_SCOPE`로 회피한 그 Case다.
-
-세 건 모두 다음 작업(adapter 투영·술어 어휘)의 대상이며, 그 뒤에는 코드 경로로 넘어온다.
+(b)에서 코드로 넘어온 것의 목록: S3 ACL(`ObjectOwnership == BucketOwnerEnforced`), S3 logging
+(`enabled`), S3 암호화 알고리즘(`ALL_IN {AES256, aws:kms, aws:kms:dsse}` — `NON_EMPTY`는 어떤
+알고리즘이든 통과시켰다), EC2/RDS security group ingress(`NO_PUBLIC_INGRESS`). S3 bucket policy의
+principal 범위와 TLS deny 문은 해석이므로 모델에 남되, 이제 정책 본문이 근거로 실린다.
 
 ## 3. 라이브 회귀 측정 — 아직 실행되지 않음
 

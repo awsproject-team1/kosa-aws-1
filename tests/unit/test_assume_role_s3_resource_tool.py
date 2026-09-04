@@ -36,6 +36,21 @@ class S3:
     def get_bucket_policy_status(self, **kwargs):
         return {"PolicyStatus": {"IsPublic": False}}
 
+    def get_bucket_policy(self, **kwargs):
+        raise NoSuch("NoSuchBucketPolicy")
+
+    def get_bucket_ownership_controls(self, **kwargs):
+        raise NoSuch("OwnershipControlsNotFoundError")
+
+    def get_bucket_logging(self, **kwargs):
+        return {}
+
+
+class NoSuch(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
 
 def query(operation, resource_id=None):
     return AwsResourceQuery(
@@ -64,6 +79,83 @@ class AssumeRoleS3ResourceToolTest(unittest.TestCase):
         self.assertEqual([item.resource_id for item in views], ["logs-bucket"])
         self.assertEqual(len(sts.calls), 1)
         self.assertEqual(sts.calls[0]["ExternalId"], "random-customer-bound-external-id")
+
+    def test_an_unconfigured_setting_is_projected_as_a_value_not_an_absence(self):
+        """ "설정 없음"은 사실이고 "읽지 못함"은 근거 부족이다. 둘을 같은 모양으로 두지 않는다."""
+        tool = AssumeRoleS3ResourceTool(
+            customer_id="cust-001",
+            aws_account_id="123456789012",
+            role_arn="arn:aws:iam::123456789012:role/read",
+            external_id="random-customer-bound-external-id",
+            sts=Sts(),
+            s3_client_factory=lambda credentials: S3(),
+        )
+        view = tool.read_resource(query(AwsResourceOperation.READ_RESOURCE, "logs-bucket"))
+        self.assertEqual(
+            view.to_dict()["attributes"]["bucket_policy"], {"present": False, "document": None}
+        )
+        self.assertEqual(
+            view.to_dict()["attributes"]["ownership_controls"],
+            {"ObjectOwnership": "ObjectWriter", "configured": False},
+        )
+        self.assertEqual(
+            view.to_dict()["attributes"]["logging"],
+            {"enabled": False, "target_bucket": None, "target_prefix": None},
+        )
+
+    def test_a_configured_bucket_projects_the_parsed_policy_ownership_and_logging(self):
+        class Configured(S3):
+            def get_bucket_policy(self, **kwargs):
+                return {"Policy": '{"Version":"2012-10-17","Statement":[]}'}
+
+            def get_bucket_ownership_controls(self, **kwargs):
+                return {
+                    "OwnershipControls": {"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}
+                }
+
+            def get_bucket_logging(self, **kwargs):
+                return {"LoggingEnabled": {"TargetBucket": "logs", "TargetPrefix": "p/"}}
+
+        tool = AssumeRoleS3ResourceTool(
+            customer_id="cust-001",
+            aws_account_id="123456789012",
+            role_arn="arn:aws:iam::123456789012:role/read",
+            external_id="random-customer-bound-external-id",
+            sts=Sts(),
+            s3_client_factory=lambda credentials: Configured(),
+        )
+        view = tool.read_resource(query(AwsResourceOperation.READ_RESOURCE, "logs-bucket"))
+        self.assertEqual(
+            view.to_dict()["attributes"]["bucket_policy"],
+            {"present": True, "document": {"Version": "2012-10-17", "Statement": []}},
+        )
+        self.assertEqual(
+            view.to_dict()["attributes"]["ownership_controls"],
+            {"ObjectOwnership": "BucketOwnerEnforced", "configured": True},
+        )
+        self.assertEqual(
+            view.to_dict()["attributes"]["logging"],
+            {"enabled": True, "target_bucket": "logs", "target_prefix": "p/"},
+        )
+
+    def test_a_denied_sub_read_is_a_failure_not_an_absence(self):
+        """권한 하나 빠진 계정이 전부 위반 또는 전부 준수로 보이면 안 된다."""
+        from agent.runtime import AwsResourceToolError
+
+        class Denied(S3):
+            def get_bucket_logging(self, **kwargs):
+                raise NoSuch("AccessDenied")
+
+        tool = AssumeRoleS3ResourceTool(
+            customer_id="cust-001",
+            aws_account_id="123456789012",
+            role_arn="arn:aws:iam::123456789012:role/read",
+            external_id="random-customer-bound-external-id",
+            sts=Sts(),
+            s3_client_factory=lambda credentials: Denied(),
+        )
+        with self.assertRaises(AwsResourceToolError):
+            tool.read_resource(query(AwsResourceOperation.READ_RESOURCE, "logs-bucket"))
 
     def test_refreshes_expired_credentials(self):
         now = [1000.0]

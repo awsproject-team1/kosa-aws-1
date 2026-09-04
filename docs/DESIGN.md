@@ -170,7 +170,12 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   목록은 Rule이 인용하는 필드와 정확히 같으며, 어떤 Rule도 묻지 않는 상태(MultiAZ, 백업 보존, idle
   timeout)도 넣지 않는다. 배포는 설정에 선언된 유형의 adapter만 만들고, 고객 read Role에는 그 유형의
   read action만 필요하다. RDS의 접근 범위 Rule은 연결된 VPC 보안 그룹의 실제 ingress가 근거이므로
-  RDS adapter가 `rds:DescribeDBInstances`와 `ec2:DescribeSecurityGroups`를 함께 사용한다.
+  RDS adapter가 `rds:DescribeDBInstances`와 `ec2:DescribeSecurityGroups`를 함께 사용한다. S3
+  adapter는 public-access-block·암호화 외에 bucket policy 본문·ownership controls·logging을
+  읽고(`GetBucketPolicy`/`GetBucketOwnershipControls`/`GetBucketLogging`), EC2 adapter는 인스턴스
+  서브넷의 `MapPublicIpOnLaunch`를 읽는다(`DescribeSubnets`) — 그 값이 없던 좌표에서 모델은
+  다른 field를 근거로 삼거나 `OUT_OF_SCOPE`로 회피했다(ADR-0024). "설정 없음"은 field 부재가
+  아니라 명시된 값(`present=false`, `enabled=false`, S3 기본 `ObjectWriter`)으로 투영한다.
 - 목록 조회는 continuation token을 끝까지 따라가며, 페이지 상한을 넘으면 부분 목록을 돌려주지 않고
   실패한다. 한 리소스의 부분 응답(인스턴스가 붙인 볼륨 중 일부만 돌아온 경우)도 거부한다. 잘린
   근거는 준수 근거와 구별되지 않는다.

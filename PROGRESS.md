@@ -31,9 +31,18 @@
     모델 판정은 정확도+일치). dry-run 24 Case: **13 CODE / 11 MODEL, Bedrock 호출 48→22회**.
     라이브 회귀 측정은 자격 증명이 있는 환경에서 실행해야 한다 —
     `docs/evaluations/data/score-boundary-20260905.md`.
-  - **다음.** (1) 이제 미판정으로 **보이게 된** 빈 곳(S3 ownership/logging/policy 본문, EC2
-    서브넷, SG ingress CIDR 술어)을 adapter·read role·술어 어휘로 메운다. (2) plan `after` 값으로
-    IaC 관점도 코드가 판정한다. (3) 조치 prompt에 Rule 문언과 Terraform 매핑을 넘긴다.
+  - **미판정으로 보이게 된 빈 곳을 메웠다.** S3 adapter가 bucket policy 본문·ownership controls·
+    logging을 읽고(`GetBucketPolicy`/`GetBucketOwnershipControls`/`GetBucketLogging`), EC2 adapter가
+    서브넷 `MapPublicIpOnLaunch`를 읽는다(`DescribeSubnets`). "설정 없음"은 field 부재가 아니라
+    값(`present=false`, `enabled=false`, S3 기본 `ObjectWriter`)으로 투영한다 — 부재는 읽지 못함이고
+    없음은 사실이다. 술어 어휘에 `ALL_IN`(S3 암호화 알고리즘 — `NON_EMPTY`는 어떤 알고리즘이든
+    통과시켰다)과 `NO_PUBLIC_INGRESS`(SG ingress의 `0.0.0.0/0`·`::/0`)를 더했다. 네 S3 Control이
+    AWS/HYBRID를 지원하고, Catalog 테스트가 "AWS를 지원한다고 선언한 Control은 AWS 근거를 갖는다"를
+    고정한다. dry-run: **14 CODE / 10 MODEL, Bedrock 호출 20회**(원래 48). 모델에 남은 AWS 좌표는
+    EC2 공인 IP 둘뿐이며 의도된 것이다("private tier인가"는 해석) — 이제 그 해석에 필요한 서브넷
+    사실이 문서에 있다. 고객 read Role에 새 action 넷이 필요하다(`docs/M1-SANDBOX-INTEGRATION.md`).
+  - **다음.** (1) plan `after` 값으로 IaC 관점도 코드가 판정한다. (2) 조치 prompt에 Rule 문언과
+    Terraform 매핑을 넘긴다.
 
 - **사실은 코드가 판정하고, 판단만 모델에 맡긴다 (2026-09-05).** ISMS-P 준비도 평가의 비용과
   시간을 줄이는 것이 이 서비스의 목적이므로, 측정으로 드러난 세 가지 손실을 한 곳에서 없앤다.

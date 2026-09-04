@@ -353,6 +353,13 @@ def _ec2_actual(*, public: bool) -> dict[str, object]:
             "network_interfaces": [interface],
             "volumes": [{"VolumeId": "vol-1", "Encrypted": True}],
             "security_groups": [],
+            # The private tier the rule presupposes, stated as the subnet fact the adapter now
+            # reads. Without it the model answered OUT_OF_SCOPE on both fixtures.
+            "subnet": {
+                "SubnetId": "subnet-private-1",
+                "VpcId": "vpc-1",
+                "MapPublicIpOnLaunch": False,
+            },
         },
     }
 

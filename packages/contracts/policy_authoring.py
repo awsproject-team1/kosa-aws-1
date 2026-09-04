@@ -158,11 +158,19 @@ class EvidenceExpectation(StrEnum):
     ALL_EQUAL = "ALL_EQUAL"
     #: 선언된 어느 경로에도 `expected_value`가 나타나면 안 된다 (ALB 리스너의 HTTP).
     NONE_EQUAL = "NONE_EQUAL"
+    #: 선언된 모든 경로의 값이 `expected_values` 중 하나여야 한다 (S3 기본 암호화 알고리즘).
+    #: `NON_EMPTY`는 "규칙이 있다"만 답한다 — 어떤 알고리즘이든 통과시킨다.
+    ALL_IN = "ALL_IN"
+    #: 선언된 모든 경로의 값은 security group 객체이며, 그 `IpPermissions` 어디에도 인터넷 전체
+    #: (`0.0.0.0/0`, `::/0`)를 허용하는 ingress가 없어야 한다. "0.0.0.0/0이 3306을 여는가"는 판단이
+    #: 아니라 사실이다 — 라이브 측정에서 모델이 `OUT_OF_SCOPE`로 회피한 그 물음이다.
+    NO_PUBLIC_INGRESS = "NO_PUBLIC_INGRESS"
 
 
 _VALUE_BEARING_EXPECTATIONS = frozenset(
     {EvidenceExpectation.ALL_EQUAL, EvidenceExpectation.NONE_EQUAL}
 )
+_VALUES_BEARING_EXPECTATIONS = frozenset({EvidenceExpectation.ALL_IN})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -187,6 +195,8 @@ class EvidenceCapabilityBinding:
     # AWS_ACTUAL 전용. 선언되면 Runtime이 모델 없이 이 capability를 판정한다.
     expectation: EvidenceExpectation | None = None
     expected_value: str | None = None
+    #: `ALL_IN`의 허용 집합. 대소문자를 무시하고 비교한다.
+    expected_values: tuple[str, ...] = ()
     #: 술어가 판정하는 경로. 비어 있으면 `document_paths` 전체다. capability는 식별자 경로
     #: (`volumes[].VolumeId`)를 함께 선언하는데 그것은 근거의 좌표이지 기준이 아니므로,
     #: 기준을 담은 경로만 골라야 한다.
@@ -221,10 +231,18 @@ class EvidenceCapabilityBinding:
         raise ValueError("an evidence capability must bind to IAC or AWS_ACTUAL")
 
     def _require_expectation(self) -> None:
-        """`ALL_EQUAL`/`NONE_EQUAL`만 비교값을 갖는다. 나머지가 값을 들면 무시될 뿐이므로 거부한다."""
+        """`ALL_EQUAL`/`NONE_EQUAL`만 비교값을, `ALL_IN`만 허용 집합을 갖는다.
+
+        나머지가 값을 들면 무시될 뿐이므로 거부한다.
+        """
+        _require_unique_strings(
+            self.expected_values, "expected_values", limit=MAX_EVIDENCE_CAPABILITIES
+        )
         if self.expectation is None:
             if self.expected_value is not None:
                 raise ValueError("expected_value requires an expectation")
+            if self.expected_values:
+                raise ValueError("expected_values requires an expectation")
             if self.expectation_paths:
                 raise ValueError("expectation_paths requires an expectation")
             return
@@ -241,6 +259,11 @@ class EvidenceCapabilityBinding:
             raise ValueError(f"{self.expectation.value} requires a non-empty expected_value")
         if not needs_value and self.expected_value is not None:
             raise ValueError(f"{self.expectation.value} must not carry an expected_value")
+        needs_values = self.expectation in _VALUES_BEARING_EXPECTATIONS
+        if needs_values and not self.expected_values:
+            raise ValueError(f"{self.expectation.value} requires non-empty expected_values")
+        if not needs_values and self.expected_values:
+            raise ValueError(f"{self.expectation.value} must not carry expected_values")
 
     @property
     def is_decidable(self) -> bool:
@@ -267,6 +290,7 @@ class EvidenceCapabilityBinding:
             "terraform_attribute_names": list(self.terraform_attribute_names),
             "expectation": None if self.expectation is None else self.expectation.value,
             "expected_value": self.expected_value,
+            "expected_values": list(self.expected_values),
             "expectation_paths": list(self.expectation_paths),
         }
 

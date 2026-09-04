@@ -164,6 +164,14 @@ EC2 adapter는 인스턴스에 연결된 EBS 볼륨과 보안 그룹을 인스�
 Rule(`EC2-EBS-ENCRYPT-001`, `EC2-SG-INGRESS-001`)의 근거가 그 상태에 있고, 볼륨/보안 그룹을 독립
 평가 대상으로 열면 같은 위반이 두 좌표에서 두 번 세어진다.
 
+**"설정 없음"은 값이고 "읽지 못함"은 근거 부족이다 (2026-09-05, ADR-0024).** S3 adapter는
+`bucket_policy = {present, document}`, `ownership_controls = {ObjectOwnership, configured}`,
+`logging = {enabled, target_bucket, target_prefix}`를 항상 투영한다. 정책이 없으면 `present=false`,
+ownership이 설정되지 않았으면 S3의 문서화된 기본값 `ObjectWriter`에 `configured=false`, logging이
+꺼져 있으면 `enabled=false`다. EC2 adapter는 `subnet = {SubnetId, VpcId, MapPublicIpOnLaunch}`를
+투영한다. 이 값들이 field 부재로 표현되면 근거 게이트가 위반을 근거 부족으로 읽는다. 반대로
+sub-read가 거부되면(권한 없음) 그것은 값이 아니라 read 실패이며 adapter는 전체 read를 거부한다.
+
 여러 유형을 평가하는 배포는 `ResourceTypeRoutingAwsResourceTool`로 `resource_type`을 담당 adapter에
 분배한다. 등록되지 않은 유형은 빈 결과가 아니라 실패다 — 배선되지 않은 유형이 조용히 통과하면 "위반
 없음"과 구별할 수 없다. **Assessment Worker와 Deployment Worker는 같은 factory로 이 도구를 만든다.**

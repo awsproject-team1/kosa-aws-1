@@ -249,13 +249,40 @@ class RejectionTest(unittest.TestCase):
         self.assertIn(CandidateRejectionCode.UNSUPPORTED_RESOURCE_TYPE, outcome.rejection_codes)
 
     def test_an_evaluation_type_the_control_does_not_support_is_refused(self) -> None:
-        """`S3_TLS_ONLY`는 IaC 전용이다. AWS로 요청하면 실행 경로가 없다."""
-        outcome = _build(
-            automatable(
+        """A Control that only supports IaC has no execution path for an AWS Rule.
+
+        MVP Catalog의 모든 AVAILABLE Control은 이제 세 실행 유형을 지원하므로(2026-09-05, S3 네
+        Control이 AWS 근거를 얻었다), IaC 전용 Control은 이 테스트가 직접 만든다.
+        """
+        from dataclasses import replace
+
+        from packages.contracts import EvaluationPerspective, GovernanceControlCatalog
+
+        tls = MVP_CONTROL_CATALOG.control("S3_TLS_ONLY")
+        assert tls is not None
+        iac_only = replace(
+            tls,
+            supported_evaluation_types=(RuleEvaluationType.IAC,),
+            available_evidence_capabilities=tuple(
+                binding
+                for binding in tls.available_evidence_capabilities
+                if binding.perspective is EvaluationPerspective.IAC
+            ),
+            allowed_tool_bindings=(),
+            baseline_required_evidence=("S3.IAC_TLS_ONLY_POLICY",),
+            baseline_optional_evidence=(),
+        )
+        catalog = GovernanceControlCatalog(
+            version=MVP_CONTROL_CATALOG.version, controls=(iac_only,)
+        )
+        outcome = build_candidate(
+            requirement=automatable(
                 mapped_control_key="S3_TLS_ONLY",
                 evaluation_type=RuleEvaluationType.AWS,
                 required_evidence=("S3.IAC_TLS_ONLY_POLICY",),
-            )
+            ),
+            document=DOCUMENT,
+            catalog=catalog,
         )
 
         assert isinstance(outcome, RejectedRequirement)

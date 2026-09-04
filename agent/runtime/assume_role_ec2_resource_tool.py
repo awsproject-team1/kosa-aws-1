@@ -52,6 +52,10 @@ _NETWORK_INTERFACE_FIELDS = ("NetworkInterfaceId", "SubnetId", "Association")
 _VOLUME_FIELDS = ("VolumeId", "Encrypted", "KmsKeyId")
 #: `EC2-SG-INGRESS-001` is about inbound access, so egress rules are not projected.
 _SECURITY_GROUP_FIELDS = ("GroupId", "GroupName", "VpcId", "IpPermissions")
+#: `EC2-PUBLIC-IP-001` governs instances in a private tier. Whether the subnet hands out
+#: public addresses is the one fact that says which tier the instance is in; without it the
+#: model answered OUT_OF_SCOPE 5/5 on both the public and the private fixture.
+_SUBNET_FIELDS = ("SubnetId", "VpcId", "MapPublicIpOnLaunch")
 
 
 class Ec2Client(Protocol):
@@ -60,6 +64,8 @@ class Ec2Client(Protocol):
     def describe_volumes(self, **kwargs: object) -> Mapping[str, object]: ...
 
     def describe_security_groups(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def describe_subnets(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
 class AssumeRoleEc2ResourceTool(AwsResourceTool):
@@ -106,6 +112,7 @@ class AssumeRoleEc2ResourceTool(AwsResourceTool):
                 ],
                 "volumes": self._describe_volumes(ec2, instance),
                 "security_groups": self._describe_security_groups(ec2, instance),
+                "subnet": self._describe_subnet(ec2, instance),
             },
         )
 
@@ -197,6 +204,32 @@ class AssumeRoleEc2ResourceTool(AwsResourceTool):
             message="EC2 security group read returned fewer groups than the instance uses",
         )
         return [projected(group, _SECURITY_GROUP_FIELDS) for group in described]
+
+    def _describe_subnet(self, ec2: Ec2Client, instance: Mapping[str, object]) -> dict[str, object]:
+        """The instance's subnet, projected to the fields that say whether it is a public tier.
+
+        서브넷이 없는 인스턴스(EC2-Classic)는 빈 dict다 — 그러면 `MapPublicIpOnLaunch` 경로가 없어
+        게이트가 `INSUFFICIENT_EVIDENCE`를 낸다. 서브넷을 요청했는데 응답에 없으면 부분 응답이므로
+        볼륨·보안 그룹과 같은 이유로 거부한다.
+        """
+        subnet_id = instance.get("SubnetId")
+        if not isinstance(subnet_id, str) or not subnet_id:
+            return {}
+        try:
+            subnets = ec2.describe_subnets(SubnetIds=[subnet_id]).get("Subnets", [])
+        except Exception:
+            raise AwsResourceToolError("EC2 subnet read failed") from None
+        described = [
+            subnet
+            for subnet in _sequence(subnets)
+            if isinstance(subnet, Mapping) and subnet.get("SubnetId") == subnet_id
+        ]
+        _require_complete(
+            requested=[subnet_id],
+            returned=[subnet.get("SubnetId") for subnet in described],
+            message="EC2 subnet read returned no subnet for the instance",
+        )
+        return projected(described[0], _SUBNET_FIELDS)
 
     def _ec2(self) -> Ec2Client:
         return self._ec2_client_factory(self._session.credentials())

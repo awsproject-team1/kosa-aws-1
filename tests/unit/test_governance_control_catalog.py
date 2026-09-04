@@ -37,6 +37,7 @@ from apps.backend.policy.registry import load_rule_registry
 from packages.contracts import (
     ControlAutomationSupport,
     EvaluationPerspective,
+    EvidenceExpectation,
     RuleEvaluationType,
 )
 
@@ -89,8 +90,28 @@ class FakeS3:
     def get_bucket_policy_status(self, **_kwargs: object) -> dict[str, object]:
         return {"PolicyStatus": {"IsPublic": False}}
 
+    def get_bucket_policy(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "Policy": (
+                '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":"*",'
+                '"Action":"s3:*","Resource":"arn:aws:s3:::demo-bucket/*",'
+                '"Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}'
+            )
+        }
+
+    def get_bucket_ownership_controls(self, **_kwargs: object) -> dict[str, object]:
+        return {"OwnershipControls": {"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}}
+
+    def get_bucket_logging(self, **_kwargs: object) -> dict[str, object]:
+        return {"LoggingEnabled": {"TargetBucket": "demo-logs", "TargetPrefix": "s3/"}}
+
 
 class FakeEc2:
+    def describe_subnets(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "Subnets": [{"SubnetId": "subnet-01", "VpcId": "vpc-01", "MapPublicIpOnLaunch": False}]
+        }
+
     def describe_instances(self, **_kwargs: object) -> dict[str, object]:
         return {
             "Reservations": [
@@ -325,27 +346,64 @@ class CatalogScopeTest(unittest.TestCase):
                 self.assertIsNotNone(MVP_CONTROL_CATALOG.control(control_key))
         self.assertEqual(len(set(LEGACY_RULE_CONTROL_KEYS.values())), len(LEGACY_RULE_CONTROL_KEYS))
 
-    def test_s3_policy_acl_tls_and_logging_do_not_claim_aws_support(self) -> None:
-        """`PolicyStatus.IsPublic`만으로는 임의 Principal 제한을 판정할 수 없다.
+    def test_every_available_control_declares_aws_evidence_for_every_aws_type_it_supports(
+        self,
+    ) -> None:
+        """A Control that says it supports AWS evaluation must have AWS evidence to judge on.
 
-        AWS 지원을 선언하면 "누구에게나 공개는 아님"이 "필요한 주체로 제한됨"으로 통과한다.
+        네 S3 Control은 처음에 IaC 전용이었지만 배포된 legacy Rule은 그 AWS 좌표를 계획했고,
+        AWS binding이 없는 좌표에서 모델은 다른 field를 근거로 PASS를 냈다. 선언과 계획이 어긋난
+        Control이 다시 생기지 않게 여기서 막는다.
         """
-        for control_key in (
-            "S3_BUCKET_POLICY_RESTRICTED",
-            "S3_BUCKET_ACL_DISABLED",
-            "S3_TLS_ONLY",
-            "S3_SERVER_ACCESS_LOGGING",
+        aws_types = {RuleEvaluationType.AWS, RuleEvaluationType.HYBRID}
+        for control in MVP_CONTROL_CATALOG.controls:
+            if control.automation_support is not ControlAutomationSupport.AVAILABLE:
+                continue
+            with self.subTest(control=control.control_key):
+                has_aws_binding = any(
+                    binding.perspective is EvaluationPerspective.AWS_ACTUAL
+                    for binding in control.available_evidence_capabilities
+                )
+                supports_aws = bool(aws_types & set(control.supported_evaluation_types))
+                self.assertEqual(has_aws_binding, supports_aws)
+                if supports_aws:
+                    required_aws = [
+                        key
+                        for key in control.baseline_required_evidence
+                        if control.capability(key) is not None
+                        and control.capability(key).perspective  # type: ignore[union-attr]
+                        is EvaluationPerspective.AWS_ACTUAL
+                    ]
+                    self.assertTrue(required_aws, "baseline required evidence must include AWS")
+
+    def test_s3_facts_are_decidable_and_s3_interpretations_are_not(self) -> None:
+        """ACL과 logging은 값 하나로 정해지는 사실이다. policy 본문의 범위와 TLS deny 문은 해석이다."""
+        expectations = {
+            "S3_BUCKET_ACL_DISABLED": ("S3.OWNERSHIP_CONTROLS", True),
+            "S3_SERVER_ACCESS_LOGGING": ("S3.SERVER_ACCESS_LOGGING", True),
+            "S3_BUCKET_POLICY_RESTRICTED": ("S3.BUCKET_POLICY_PRINCIPALS", False),
+            "S3_TLS_ONLY": ("S3.BUCKET_POLICY_TLS", False),
+        }
+        for control_key, (capability_key, decidable) in expectations.items():
+            with self.subTest(control=control_key):
+                control = MVP_CONTROL_CATALOG.control(control_key)
+                assert control is not None
+                binding = control.capability(capability_key)
+                assert binding is not None
+                self.assertIs(binding.perspective, EvaluationPerspective.AWS_ACTUAL)
+                self.assertEqual(binding.is_decidable, decidable)
+
+    def test_security_group_ingress_is_decided_by_the_cidr_not_the_model(self) -> None:
+        for control_key, capability_key in (
+            ("EC2_SG_INGRESS_RESTRICTED", "EC2.SECURITY_GROUP_INGRESS"),
+            ("RDS_ACCESS_RESTRICTED", "RDS.SECURITY_GROUP_INGRESS"),
         ):
             with self.subTest(control=control_key):
                 control = MVP_CONTROL_CATALOG.control(control_key)
                 assert control is not None
-                self.assertEqual(control.supported_evaluation_types, (RuleEvaluationType.IAC,))
-                self.assertFalse(
-                    any(
-                        binding.perspective is EvaluationPerspective.AWS_ACTUAL
-                        for binding in control.available_evidence_capabilities
-                    )
-                )
+                binding = control.capability(capability_key)
+                assert binding is not None
+                self.assertIs(binding.expectation, EvidenceExpectation.NO_PUBLIC_INGRESS)
 
     def test_ec2_snapshot_is_known_but_not_exposed_as_automatable(self) -> None:
         control = MVP_CONTROL_CATALOG.control("EC2_SNAPSHOT_NOT_PUBLIC")

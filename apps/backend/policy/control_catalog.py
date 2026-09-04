@@ -37,7 +37,10 @@ from packages.contracts import (
     RuleSeverity,
 )
 
-CONTROL_CATALOG_VERSION = "governance-control-catalog/2026-09-03"
+#: 2026-09-05: S3 네 Control에 AWS 근거, EC2 서브넷 capability, `ALL_IN`·`NO_PUBLIC_INGRESS` 술어.
+#: 이전 판본으로 승인된 Rule은 그 판본을 `control_catalog_version`에 그대로 갖는다 — 여기 값은
+#: 앞으로 만들어질 Rule이 어느 Catalog로 검증됐는지 말한다.
+CONTROL_CATALOG_VERSION = "governance-control-catalog/2026-09-05"
 
 #: MANUAL Rule이 평가되는 안정된 좌표. Assessment ID를 쓰지 않는다 — Initial과 Post-Deploy
 #: Verification이 같은 Repository에 대해 같은 좌표를 가져야 비교가 성립한다.
@@ -56,6 +59,7 @@ def _aws(
     *document_paths: str,
     expectation: EvidenceExpectation | None = None,
     expected_value: str | None = None,
+    expected_values: tuple[str, ...] = (),
     expectation_paths: tuple[str, ...] = (),
 ) -> EvidenceCapabilityBinding:
     """Declare one AWS_ACTUAL capability, and — when its evidence decides the control — how.
@@ -72,6 +76,7 @@ def _aws(
         document_paths=document_paths,
         expectation=expectation,
         expected_value=expected_value,
+        expected_values=expected_values,
         expectation_paths=expectation_paths,
     )
 
@@ -154,8 +159,11 @@ _S3_ENCRYPTION_AT_REST = GovernanceControl(
         _aws(
             "S3.ENCRYPTION",
             S3_RESOURCE_TYPE,
-            "attributes.encryption.Rules[]",
-            expectation=EvidenceExpectation.NON_EMPTY,
+            "attributes.encryption.Rules[].ApplyServerSideEncryptionByDefault.SSEAlgorithm",
+            # `NON_EMPTY`는 "규칙이 있다"만 답해 어떤 알고리즘이든 통과시켰다. S3가 실제로
+            # 받아들이는 세 알고리즘만 허용한다 — AES256이 통과하는 것은 라이브에서 확인된 정답이다.
+            expectation=EvidenceExpectation.ALL_IN,
+            expected_values=("AES256", "aws:kms", "aws:kms:dsse"),
         ),
         _iac(
             "S3.IAC_ENCRYPTION",
@@ -171,9 +179,14 @@ _S3_ENCRYPTION_AT_REST = GovernanceControl(
     default_severity=RuleSeverity.HIGH,
 )
 
-# `PolicyStatus.IsPublic`은 "누구에게나 공개인가"만 답한다. "필요한 주체로 제한됐는가"는 그 값으로
-# 판정할 수 없으므로 이 Control은 AWS/HYBRID를 지원하지 않는다. 지원한다고 선언하면 임의 Principal
-# 허용 정책이 `IsPublic=false`라는 이유로 통과한다.
+_S3_ALL_TYPES = (RuleEvaluationType.IAC, RuleEvaluationType.AWS, RuleEvaluationType.HYBRID)
+
+# 이 네 Control은 처음에 IaC 전용이었다 — S3 adapter가 `PolicyStatus.IsPublic`만 읽었고 그 값으로는
+# "필요한 주체로 제한됐는가"를 판정할 수 없었기 때문이다. 그런데 배포된 baseline Profile의 legacy
+# Rule은 이 Control들의 AWS_ACTUAL 좌표를 계획했고, AWS binding이 없어 게이트를 건너뛴 그 좌표에서
+# 모델은 public-access-block 플래그를 근거로 PASS를 냈다. adapter가 이제 bucket policy 본문·
+# ownership controls·logging을 읽으므로(2026-09-05), 답이 사실인 것(ACL·logging)은 코드가 판정하고
+# 해석이 필요한 것(policy 본문의 principal 범위, TLS deny 문)은 실재하는 근거 위에서 모델이 판단한다.
 _S3_BUCKET_POLICY_RESTRICTED = GovernanceControl(
     control_key="S3_BUCKET_POLICY_RESTRICTED",
     title="Bucket policy restricts principals and networks",
@@ -183,8 +196,14 @@ _S3_BUCKET_POLICY_RESTRICTED = GovernanceControl(
     ),
     automation_support=ControlAutomationSupport.AVAILABLE,
     supported_resource_types=(S3_RESOURCE_TYPE,),
-    supported_evaluation_types=(RuleEvaluationType.IAC,),
+    supported_evaluation_types=_S3_ALL_TYPES,
     available_evidence_capabilities=(
+        # 술어 없음: "필요한 주체로 제한됐는가"는 정책 문서의 해석이다. 근거는 본문 그 자체다.
+        _aws(
+            "S3.BUCKET_POLICY_PRINCIPALS",
+            S3_RESOURCE_TYPE,
+            "attributes.bucket_policy.present",
+        ),
         _iac(
             "S3.IAC_BUCKET_POLICY",
             S3_RESOURCE_TYPE,
@@ -192,7 +211,9 @@ _S3_BUCKET_POLICY_RESTRICTED = GovernanceControl(
             terraform_attribute_names=("principals", "condition", "actions", "resources"),
         ),
     ),
-    baseline_required_evidence=("S3.IAC_BUCKET_POLICY",),
+    allowed_tool_bindings=("aws:s3:GetBucketPolicy",),
+    baseline_required_evidence=("S3.BUCKET_POLICY_PRINCIPALS",),
+    baseline_optional_evidence=("S3.IAC_BUCKET_POLICY",),
     severity_guidance="An over-broad bucket policy grants access no reviewer approved.",
     default_severity=RuleSeverity.HIGH,
 )
@@ -203,8 +224,17 @@ _S3_BUCKET_ACL_DISABLED = GovernanceControl(
     description="Object ownership must be enforced so ACLs cannot grant access.",
     automation_support=ControlAutomationSupport.AVAILABLE,
     supported_resource_types=(S3_RESOURCE_TYPE,),
-    supported_evaluation_types=(RuleEvaluationType.IAC,),
+    supported_evaluation_types=_S3_ALL_TYPES,
     available_evidence_capabilities=(
+        _aws(
+            "S3.OWNERSHIP_CONTROLS",
+            S3_RESOURCE_TYPE,
+            "attributes.ownership_controls.ObjectOwnership",
+            # `BucketOwnerEnforced`만 ACL을 비활성화한다. `BucketOwnerPreferred`는 ACL이 여전히
+            # 작동하는 상태다.
+            expectation=EvidenceExpectation.ALL_EQUAL,
+            expected_value="BucketOwnerEnforced",
+        ),
         _iac(
             "S3.IAC_OBJECT_OWNERSHIP",
             S3_RESOURCE_TYPE,
@@ -212,7 +242,9 @@ _S3_BUCKET_ACL_DISABLED = GovernanceControl(
             terraform_attribute_names=("object_ownership", "acl"),
         ),
     ),
-    baseline_required_evidence=("S3.IAC_OBJECT_OWNERSHIP",),
+    allowed_tool_bindings=("aws:s3:GetBucketOwnershipControls",),
+    baseline_required_evidence=("S3.OWNERSHIP_CONTROLS",),
+    baseline_optional_evidence=("S3.IAC_OBJECT_OWNERSHIP",),
     severity_guidance="ACL-based grants bypass the bucket policy review path.",
     default_severity=RuleSeverity.MEDIUM,
 )
@@ -223,8 +255,15 @@ _S3_TLS_ONLY = GovernanceControl(
     description="A bucket policy must deny requests that do not use TLS.",
     automation_support=ControlAutomationSupport.AVAILABLE,
     supported_resource_types=(S3_RESOURCE_TYPE,),
-    supported_evaluation_types=(RuleEvaluationType.IAC,),
+    supported_evaluation_types=_S3_ALL_TYPES,
     available_evidence_capabilities=(
+        # 술어 없음: `aws:SecureTransport=false`에 대한 Deny 문이 실제로 모든 요청을 덮는지는
+        # Resource·Principal·Condition을 함께 읽어야 한다. 정책이 없으면 `present=false`가 근거다.
+        _aws(
+            "S3.BUCKET_POLICY_TLS",
+            S3_RESOURCE_TYPE,
+            "attributes.bucket_policy.present",
+        ),
         _iac(
             "S3.IAC_TLS_ONLY_POLICY",
             S3_RESOURCE_TYPE,
@@ -232,7 +271,9 @@ _S3_TLS_ONLY = GovernanceControl(
             terraform_attribute_names=("aws:SecureTransport", "condition", "effect"),
         ),
     ),
-    baseline_required_evidence=("S3.IAC_TLS_ONLY_POLICY",),
+    allowed_tool_bindings=("aws:s3:GetBucketPolicy",),
+    baseline_required_evidence=("S3.BUCKET_POLICY_TLS",),
+    baseline_optional_evidence=("S3.IAC_TLS_ONLY_POLICY",),
     severity_guidance="Plaintext transfer exposes objects and credentials on the wire.",
     default_severity=RuleSeverity.MEDIUM,
 )
@@ -243,8 +284,16 @@ _S3_SERVER_ACCESS_LOGGING = GovernanceControl(
     description="Buckets must deliver server access logs to a logging destination.",
     automation_support=ControlAutomationSupport.AVAILABLE,
     supported_resource_types=(S3_RESOURCE_TYPE,),
-    supported_evaluation_types=(RuleEvaluationType.IAC,),
+    supported_evaluation_types=_S3_ALL_TYPES,
     available_evidence_capabilities=(
+        _aws(
+            "S3.SERVER_ACCESS_LOGGING",
+            S3_RESOURCE_TYPE,
+            # adapter는 "꺼져 있음"을 field 부재가 아니라 `enabled=false`로 투영한다. 부재는
+            # "읽지 못함"이고, 꺼짐은 사실이다 — 둘을 같은 모양으로 두면 위반이 근거 부족이 된다.
+            "attributes.logging.enabled",
+            expectation=EvidenceExpectation.ALL_TRUE,
+        ),
         _iac(
             "S3.IAC_SERVER_ACCESS_LOGGING",
             S3_RESOURCE_TYPE,
@@ -252,7 +301,9 @@ _S3_SERVER_ACCESS_LOGGING = GovernanceControl(
             terraform_attribute_names=("target_bucket", "target_prefix"),
         ),
     ),
-    baseline_required_evidence=("S3.IAC_SERVER_ACCESS_LOGGING",),
+    allowed_tool_bindings=("aws:s3:GetBucketLogging",),
+    baseline_required_evidence=("S3.SERVER_ACCESS_LOGGING",),
+    baseline_optional_evidence=("S3.IAC_SERVER_ACCESS_LOGGING",),
     severity_guidance="Without access logs an incident cannot be reconstructed afterwards.",
     default_severity=RuleSeverity.MEDIUM,
 )
@@ -283,6 +334,14 @@ _EC2_NO_PUBLIC_IP = GovernanceControl(
             EC2_INSTANCE_RESOURCE_TYPE,
             "attributes.network_interfaces[].NetworkInterfaceId",
         ),
+        # 술어 없음: Rule의 전제("private tier")를 판정하는 것은 해석이다. 그러나 그 해석에
+        # 필요한 사실 — 서브넷이 공인 IP를 배정하는가 — 는 문서에 있어야 한다. 이 field가 없을 때
+        # 모델은 5/5 `OUT_OF_SCOPE`로 회피했다(측정된 gap).
+        _aws(
+            "EC2.SUBNET_PUBLIC_IP_ASSIGNMENT",
+            EC2_INSTANCE_RESOURCE_TYPE,
+            "attributes.subnet.MapPublicIpOnLaunch",
+        ),
         _iac(
             "EC2.IAC_PUBLIC_ADDRESS",
             EC2_INSTANCE_RESOURCE_TYPE,
@@ -293,8 +352,8 @@ _EC2_NO_PUBLIC_IP = GovernanceControl(
             ),
         ),
     ),
-    allowed_tool_bindings=("aws:ec2:DescribeInstances",),
-    baseline_required_evidence=("EC2.PUBLIC_ADDRESS",),
+    allowed_tool_bindings=("aws:ec2:DescribeInstances", "aws:ec2:DescribeSubnets"),
+    baseline_required_evidence=("EC2.PUBLIC_ADDRESS", "EC2.SUBNET_PUBLIC_IP_ASSIGNMENT"),
     baseline_optional_evidence=("EC2.NETWORK_INTERFACE_ASSOCIATION", "EC2.IAC_PUBLIC_ADDRESS"),
     severity_guidance="A public address puts a private-tier host directly on the internet.",
     default_severity=RuleSeverity.HIGH,
@@ -350,8 +409,13 @@ _EC2_SG_INGRESS_RESTRICTED = GovernanceControl(
         _aws(
             "EC2.SECURITY_GROUP_INGRESS",
             EC2_INSTANCE_RESOURCE_TYPE,
+            "attributes.security_groups[]",
             "attributes.security_groups[].GroupId",
             "attributes.security_groups[].IpPermissions",
+            # "인터넷 전체에 열려 있는가"는 사실이다. 술어는 그룹 객체 하나를 통째로 보고
+            # `IpPermissions`의 CIDR을 읽는다 — ingress가 없는 그룹은 충족이다.
+            expectation=EvidenceExpectation.NO_PUBLIC_INGRESS,
+            expectation_paths=("attributes.security_groups[]",),
         ),
         _iac(
             "EC2.IAC_SECURITY_GROUP_INGRESS",
@@ -433,8 +497,13 @@ _RDS_ACCESS_RESTRICTED = GovernanceControl(
         _aws(
             "RDS.SECURITY_GROUP_INGRESS",
             RDS_INSTANCE_RESOURCE_TYPE,
+            "attributes.vpc_security_groups[]",
             "attributes.vpc_security_groups[].VpcSecurityGroupId",
             "attributes.vpc_security_groups[].IpPermissions",
+            # 라이브 측정에서 "퍼블릭 아님 + 3306을 0.0.0.0/0에 개방"을 모델은 `OUT_OF_SCOPE`로
+            # 회피했다. 인터넷 전체에 열렸는가는 사실이고, 그 사실은 코드가 읽는다.
+            expectation=EvidenceExpectation.NO_PUBLIC_INGRESS,
+            expectation_paths=("attributes.vpc_security_groups[]",),
         ),
         _aws(
             "RDS.SUBNET_GROUP",
