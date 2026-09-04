@@ -24,6 +24,7 @@ from apps.backend.policy.authoring.serialization import (
     rejected_from_dict,
     requirement_from_dict,
 )
+from packages.common.errors import AuthoringRunNotFound, PolicySourceNotFound
 from packages.contracts import (
     AuthoringManifest,
     AuthoringRunStatus,
@@ -52,6 +53,10 @@ class PolicyAuthoringRepository(Protocol):
     def load_authoring_manifest(
         self, *, customer_id: str, source_id: str, source_version: str
     ) -> AuthoringManifest: ...
+
+    def has_authoring_request(
+        self, *, customer_id: str, source_id: str, source_version: str
+    ) -> bool: ...
 
     def load_authoring_results(
         self, *, customer_id: str, source_id: str, source_version: str
@@ -156,11 +161,23 @@ class PolicyCandidateApiService:
         authorize(principal, Action.MANAGE_POLICY_SOURCES)
         page_size = _page_size(limit)
 
-        manifest = self._repository.load_authoring_manifest(
-            customer_id=principal.customer_id,
-            source_id=source_id,
-            source_version=source_version,
-        )
+        try:
+            manifest = self._repository.load_authoring_manifest(
+                customer_id=principal.customer_id,
+                source_id=source_id,
+                source_version=source_version,
+            )
+        except AuthoringRunNotFound:
+            # 요청은 있고 결과가 아직 없는 구간이다. 이것을 오류로 돌려주면 콘솔이 업로드
+            # 직후부터 worker가 끝날 때까지 계속 실패를 표시한다. 요청 자체가 없으면 이
+            # 판본에 대한 실행이 없다는 뜻이므로 404다.
+            if self._repository.has_authoring_request(
+                customer_id=principal.customer_id,
+                source_id=source_id,
+                source_version=source_version,
+            ):
+                return PolicyCandidatePage(status=AuthoringRunStatus.QUEUED)
+            raise PolicySourceNotFound("no authoring run for this policy source version") from None
         if not manifest.is_reviewable:
             # 아직 완결되지 않은 실행은 상태만 돌려준다. 부분 결과를 보여주면 리뷰어가 그것을
             # 전체로 착각하고 승인한다.

@@ -1231,6 +1231,15 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 게시된 Profile 목록. 게시 화면이 기준선(ISMS-P 등)을 고르려면 무엇이 있는지 보여줘야 한다.
+  GetPolicyProfilesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /policy-profiles"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   PostPolicyProfilesRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:

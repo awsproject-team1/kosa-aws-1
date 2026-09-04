@@ -315,11 +315,24 @@ class ScoreContractGuardTest(unittest.TestCase):
                         model_profile=PROFILE,
                     )
 
-    def test_system_prompt_pins_non_judgment_scores_to_zero(self) -> None:
+    def test_the_prompt_asks_for_gradation_without_advertising_the_evasive_statuses(
+        self,
+    ) -> None:
+        """Score pinning belongs to `_normalized_score`, not to prose.
+
+        An earlier revision of this prompt re-listed MANUAL_REVIEW, INSUFFICIENT_EVIDENCE and
+        OUT_OF_SCOPE with their fixed score. Live A/B on RDS-ACCESS-001 (private instance,
+        3306 open to 0.0.0.0/0, n=8 per arm) showed that wording cost accuracy: 5/8 correct
+        FAIL without it, 0/8 with it — every run evaded to OUT_OF_SCOPE. The runtime pins the
+        score either way, so the enumeration bought nothing and is gone.
+        """
         from apps.backend.assessment.bedrock import _SYSTEM_PROMPT
 
-        self.assertIn("return score 0 because no judgment was made", _SYSTEM_PROMPT)
-        self.assertIn("must agree with the status", _SYSTEM_PROMPT)
+        self.assertIn("place a partially satisfied resource between the extremes", _SYSTEM_PROMPT)
+        # The one applicability sentence the dev prompt already had may name OUT_OF_SCOPE;
+        # a second, score-shaped mention is what moved the model.
+        self.assertEqual(_SYSTEM_PROMPT.count("OUT_OF_SCOPE"), 2)
+        self.assertNotIn("no judgment was made", _SYSTEM_PROMPT)
 
 
 AUTHORED_RULE = PolicyRule(

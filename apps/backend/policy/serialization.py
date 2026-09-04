@@ -12,6 +12,7 @@ from packages.contracts import (
     AssessmentPhase,
     PolicyControl,
     PolicyProfile,
+    PolicyProfileSegment,
     PolicyRule,
     PolicyRuleReference,
     PolicySource,
@@ -106,14 +107,36 @@ def _optional_str_tuple(fields: Mapping[str, object], name: str) -> tuple[str, .
     return tuple(entries)  # type: ignore[arg-type]
 
 
+def profile_segment_from_dict(data: object) -> PolicyProfileSegment:
+    fields = _require_mapping(data, "policy profile segment")
+    return PolicyProfileSegment(
+        kind=PolicySourceKind(fields["kind"]),
+        source_id=fields["source_id"],
+        source_version=fields["source_version"],
+        rule_references=tuple(
+            rule_reference_from_dict(reference)
+            for reference in _require_sequence(fields["rule_references"])
+        ),
+    )
+
+
 def profile_from_dict(data: object) -> PolicyProfile:
+    """Restore a Profile, tolerating the shape published before Profiles carried segments."""
     fields = _require_mapping(data, "policy profile")
+    segments = fields.get("segments")
     return PolicyProfile(
         policy_profile_id=fields["policy_profile_id"],
         version=fields["version"],
         rule_references=tuple(
             rule_reference_from_dict(reference)
             for reference in _require_sequence(fields["rule_references"])
+        ),
+        segments=(
+            ()
+            if segments is None
+            else tuple(
+                profile_segment_from_dict(segment) for segment in _require_sequence(segments)
+            )
         ),
     )
 

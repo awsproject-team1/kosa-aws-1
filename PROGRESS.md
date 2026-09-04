@@ -2,6 +2,76 @@
 
 ## Current
 
+- **한 Profile에 사내 문서와 ISMS-P를 함께 담을 수 있게 했다 (2026-09-04).** PRD가 요구하는
+  "사내 정책 및 ISMS-P 요구사항을 함께 평가"인데, 게시 API가 문서 하나만 받아 콘솔이 문서가
+  섞인 장바구니를 거부하고 있었다.
+  - **제한은 API 경계에만 있었다.** `publish_profile()`은 Rule마다 그 Rule이 인용한 Source의
+    승인 record로 판정하므로 여러 문서를 섞는 데 원래 장애가 없었다. 게시 요청이 `sources`
+    목록을 받도록 열고, 예전 단일 형태도 계속 받는다(둘을 섞으면 거부).
+  - **기준선은 승인 record 없이 합류한다.** ISMS-P Rule은 고객이 올린 문서가 아니라 저장소에
+    커밋되어 운영자 배포가 게시한 Registry다. 고객 승인 record를 만들어 내는 대신, **이미 같은
+    고객 파티션에 게시된 Profile**에서만 가져오고 Catalog와 같은 검사(`POLICY_RULE`,
+    `APPROVED`)를 건다. 고를 대상은 새 `GET /policy-profiles`가 돌려준다.
+  - **점수는 합치지 않는다.** 게시된 Profile이 `segments`에 원본 구분을 기록하고, 보고서가
+    Assessment가 고정한 Profile 판본을 읽어 준비도를 원본별로 낸다(`segment_readiness`).
+    한 Rule이 두 기준을 함께 인용하면 양쪽 점수에 들어간다 — 기준선 Rule 16개 중 15개가 실제로
+    그렇다. 콘솔은 원본이 여러 개인 Profile에서 전체 숫자를 표시하지 않는다.
+    `AssessmentReport.readiness_score`는 배포 전후 비교(ADR-0020)가 쓰는 값으로 남는다.
+  - **저장 item의 판본 필드가 두 이름이었다.** 승인 경로는 `policy_source_version`, 운영자
+    bootstrap은 `version`을 쓴다. 라이브 sandbox에서 기준선 읽기가 그 때문에 실패했고,
+    `_source_from_item`이 두 모양을 모두 읽도록 고쳤다.
+  - **운영 작업이 하나 남았다.** `kosa-sandbox` 파티션에 Registry가 게시되어 있지 않아
+    (`POLICY_PROFILE#profile-multiresource-baseline` 없음) 콘솔의 기준선 목록에 ISMS-P가
+    나오지 않는다. `python scripts/publish_policy_catalog.py --customer-id kosa-sandbox
+    --table-name kosa-governance-sandbox-metadata --region us-east-1`이 20개 item(Source 2,
+    Rule 16, Profile 2)을 조건부 write로 게시한다. 라이브 write이므로 실행하지 않았다.
+
+- **업로드한 문서의 후보 조회와 삭제를 고쳤다 (2026-09-04).** 콘솔에서 조회는 실패로 보이고
+  삭제는 절반만 되던 문제다. 라이브 sandbox 테이블을 읽어 두 결함을 각각 재현했다.
+  - **조회 — 없음을 장애로 답하고 있었다.** manifest가 없으면 `RepositoryError`가 올라갔고 공개
+    매핑이 그것을 `503`으로 옮겼다. manifest는 업로드 직후부터 worker가 결과를 쓸 때까지 존재하지
+    않으므로, 그 구간 내내 콘솔이 "요청 실패 (503)"을 표시했다 — 추출이 계속 실패하는 문서에서는
+    끝나지 않는 표시다. `AuthoringRunNotFound`(`LookupError`)를 새로 두어 저장소 오류와 분리했고,
+    이제 요청이 있으면 `200 QUEUED`, 요청도 결과도 없으면 `404`다. 라이브 재확인: 이전에
+    `RepositoryError`를 내던 판본 6건이 모두 `QUEUED`로 읽히고, READY 3건은 그대로 후보를 돌려준다
+    (46·49·40개, cursor 끝까지).
+  - **삭제 — 판본의 일부만 지우고 있었다.** `POLICY_INGESTION#` item 하나만 지웠고
+    `POLICY_SOURCE#{sid}#VERSION#{ver}` 아래의 `#REQUEST`·`#AUTHORING`·`#CANDIDATE#*`·
+    `#UNSUPPORTED#*`와 판본 record는 남았다(라이브에서 `src-4f3fcf7d`에 고아 95개). 이제 그 key
+    공간을 판본 경계(`v1`은 `v10`의 접두사다)로 잘라 전부 지운다. 승인된 판본 거부는 그대로다.
+  - **남은 `#REQUEST`가 큐를 오염시키던 경로도 막았다.** 삭제는 이미 발행된 SQS 메시지를 되돌리지
+    못한다. worker가 사라진 문서에 예외를 올리면 3회 재시도 후 DLQ로 가고, 그것이 authoring DLQ를
+    채웠다. 이제 worker는 `LookupError`를 잡아 그 요청만 기록과 함께 건너뛰고 배치의 나머지는
+    처리한다.
+  - **콘솔.** 삭제 후 그 문서의 후보·장바구니 항목을 화면에서 함께 비운다. 조회 `404`는 "아직
+    추출 실행이 없습니다"로 바꾸고 문서 행에 '추출 요청' 버튼을 붙였다 — 예전에는 업로드 화면을
+    다시 거치지 않으면 추출을 다시 걸 수 없었다.
+  - **정리하지 않은 것.** 이미 생긴 고아는 남아 있다(ingestion record가 없어 삭제 API가 `404`).
+    라이브 sandbox에 `#REQUEST`만 남은 판본 4건, 후보까지 남은 판본 1건이 있다. 지우는 것은 운영
+    작업이라 이번 변경에 넣지 않았다.
+
+- **업로드한 사내 정책이 자동 평가 Rule을 만들지 못하던 원인을 찾아 고쳤다 (2026-09-04).**
+  라이브 sandbox에서 저장된 추출 실행 세 건이 모두 `accepted: 0`이었고, 그 Profile로 만든
+  Assessment는 MANUAL 좌표만 평가했다(PR #89가 대응한 그 사고의 뿌리).
+  - **원인 1 — prompt와 Contract 불일치.** `ExtractedRequirement`는 AUTOMATABLE에
+    `required_evidence`와 `evaluation_rubric`을 요구하는데 prompt는 규칙에도 예시에도 그 둘을
+    쓰지 않았다. 모델이 낸 AUTOMATABLE은 전부 `an AUTOMATABLE requirement must declare required
+    evidence`로 폐기됐고, #88 이전 fail-soft에서는 조용히 버려져 `accepted: 0`이 됐다. prompt가
+    다섯 필드를 모두 요구하도록 고치고 `PROMPT_VERSION`을 `policy-authoring/2026-09-04.2`로 올렸다.
+    **배포 변수 `POLICY_AUTHORING_MODEL_PROFILE_JSON`의 `prompt_version`을 함께 바꿔야 한다.**
+  - **원인 2 — 문서 구조.** 완결성 게이트에서 모델이 빠뜨리는 unit은 전부 요구사항이 아닌
+    unit이었다(`##` 소제목 4건, 서두 적용범위 문단 1건 — 라이브 측정으로 특정). 소제목을 없애고
+    적용범위를 항목으로 바꾸자 커버리지 누락이 사라졌다.
+  - **결과.** 새 참고 문서 `policies-local/internal-cloud-security-standard.md`(20 unit, 4 청크,
+    Git 제외)로 추출이 성공하면 자동 평가 Rule 17~18개가 나오고 Catalog 자동 통제 15개를 모두
+    덮는다(S3 6·EC2 3·RDS 4·ALB 2 + governance MANUAL 1). 이전에는 0개였다.
+  - **남은 문제.** 실행 성공률이 2/8이다. 남은 실패는 전부 `did not classify every policy unit`
+    이며 확률적이다 — 청크 하나가 실패하면 문서 전체를 버리는 #88 설계 때문이고, 문서 쪽으로는
+    더 줄일 수 없다(체계적 원인은 제거됨). 청크 단위 재시도와 부분 커버리지 기록이 다음 후보인데,
+    "부분 결과를 완전한 것으로 저장하지 않는다"는 #88의 계약을 어떻게 유지할지가 결정 사항이라
+    이번 변경에는 넣지 않았다.
+  - 삭제 경로 결함(자식 item·요청 미정리로 DLQ 오염)은 별도로 남아 있다. 진단만 했고 수정 안 함.
+
 - **서비스 전체 정상화·E2E·평가 일관성 측정 (2026-09-04, branch
   `fix/e2e-normalization-and-score-consistency`, base `dev` 578d20e).** 라이브 AWS 자격 증명이 만료돼
   Bedrock 반복 평가는 실행하지 못했고, 오프라인에서 재현·수정·측정 도구까지 완료했다.
@@ -21,18 +91,28 @@
     실제 파서 → 후보 → 승인 → 게시 → Assessment 판본 고정 → 4 리소스 유형 + governance 평가 →
     Finding → 조치 판정; fixture Profile 경로에서 RDS-PUBLIC-001 → snapshot-bound patch → PR diff.
     patch를 적용한 고객 fixture는 `terraform fmt -check`/`validate` 통과.
-  - **라이브 반복 측정 (kosa28 MFA 세션, Nova Lite, 20 Case × 5회, 2회 실행):**
-    `docs/evaluations/data/score-consistency-20260904.md`. 1차: IAC PASS Case 19/25 run이
-    `evidence reference is outside approved evidence`로 계약 오류 — 모델이 `terraform:{path}#{anchor}`
-    형태(Golden fixture가 기대하는 형태)로 인용하는데 허용 목록은 파일 단위라 통째로 거부됐고, 라이브
-    Worker에서는 이것이 평가 실패→재시도→DLQ다. 허용 파일/리소스 안의 anchor는 수용하도록 고쳤다.
-    HTTPS ALB Actual이 5/5 FAIL — 문서의 중첩 key `attributes.attributes`(LB attribute)가 모델을
-    오도함을 A/B(3회씩)로 확인해 `load_balancer_attributes`로 개명(catalog 경로 동기화). 2차: 계약
-    오류 0, 20 Case 모두 status 일치율 1.0·range 0·표준편차 0, 전이 9/9 방향 정상, 표현 불변 Δ0.
-    **점수는 전부 0 또는 100** — 연속 점수를 요구해도 이 모델·prompt는 이진으로 답한다. 안정성은
-    완벽하지만 등급 정보가 없다는 뜻이며 Anchor 전환 판단의 핵심 입력이다. EC2 Actual 2 Case는
-    5/5 OUT_OF_SCOPE: adapter가 subnet의 public 여부(`MapPublicIpOnLaunch`)를 읽지 않아 "프라이빗
-    서브넷" 조건을 판단할 근거가 없다(`ec2:DescribeSubnets` read 추가 필요, 고객 read role 변경).
+  - **라이브 반복 측정 (kosa28 MFA 세션, Nova Lite, 최종 24 Case × 5회, 총 4회 실행):**
+    `docs/evaluations/data/score-consistency-20260904.md`. **결론: 현재 모델에서 0–100 연속 점수는
+    등급을 담지 못한다.** 120 run에서 나온 값은 0과 100 두 가지뿐이며, 부분 준수 문서(S3 4개 중 2·3개
+    차단, HTTPS와 평문 HTTP를 함께 가진 ALB, 퍼블릭은 아니지만 3306 전개방 RDS)에서도, prompt에
+    "부분 충족은 양 극단 사이"를 명시해도, `dev` prompt로 되돌려도 동일했다. 반복 안정성은 모든
+    Case에서 status 일치율 1.0·range 0·표준편차 0 — 완벽하지만 그래서 무의미하다. Anchor 전환
+    판단의 입력은 이 사실이다.
+  - **측정 과정에서 드러난 결함 3건(모두 수정):** (1) 모델이 Golden fixture가 기대하는
+    `terraform:{path}#{resource}` 형태로 인용하면 허용 목록(파일 단위)이 통째로 거부해 IAC 평가
+    19/25 run이 실패했다 — 라이브 Worker에서는 재시도→DLQ 경로다. 승인된 locator **안쪽** anchor만
+    수용하도록 고쳤다. (2) ALB Actual 문서의 중첩 key `attributes.attributes`가 모델을 오도해 준수
+    ALB를 5/5 FAIL로 판정했다 — key만 바꾼 A/B에서 3/3 FAIL → 3/3 PASS. `load_balancer_attributes`로
+    개명(Catalog 경로 동기화). (3) **내가 넣은 prompt 문구가 정확도를 떨어뜨렸다**: 판정 아닌 status
+    셋을 점수와 함께 열거하자 RDS-ACCESS-001(퍼블릭 아님 + 3306 전개방)에서 dev prompt 5/8 FAIL →
+    0/8 FAIL(전부 OUT_OF_SCOPE 회피). 열거를 지우고 정규화는 Code에만 남겨 5/5 FAIL로 회복했다.
+  - **남은 False Negative 2건(수정하지 않음, 판단 필요):** HTTPS+평문 HTTP를 함께 노출한 ALB를
+    ALB-HTTPS-001이 5/5 PASS로 통과시킨다(Rule 문언은 HTTPS "만"). S3 네 플래그 중 셋만 켠 버킷은
+    2/5 PASS로 불안정하다. 둘 다 전부/전무 Case만으로는 드러나지 않던 것이며, Rule rubric 보강이나
+    Code 쪽 mandatory check 도입은 Contract 결정이라 임의로 하지 않았다.
+  - **EC2 Actual 근거 공백:** EC2-PUBLIC-IP-001은 "프라이빗 서브넷" 인스턴스를 대상으로 하는데
+    adapter가 subnet의 `MapPublicIpOnLaunch`를 투영하지 않아 두 Case 모두 5/5 OUT_OF_SCOPE다.
+    `ec2:DescribeSubnets`(고객 read role 변경)가 선행이라 열어 두었다.
   - **라이브 sandbox 현황(읽기 전용 조회):** assessment 큐 in-flight 373/DLQ 108, remediation
     in-flight 96/DLQ 48. 원인 두 가지 — (1) GitHub App installation token 만료(01:20 KST 갱신, 1h
     유효)로 모든 IaC read·PR write 실패, private key가 로컬에 없어 갱신 불가; (2) pin 없는 legacy

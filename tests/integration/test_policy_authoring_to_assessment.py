@@ -579,9 +579,10 @@ class TenantAndTextBoundaryTest(unittest.TestCase):
                 self.assertNotIn(text, rendered)
 
     def test_another_customer_reads_none_of_this(self) -> None:
-        from apps.backend.repositories.errors import RepositoryError
+        """다른 고객의 파티션에서는 이 실행이 존재하지 않는다 — 404이지 503이 아니다."""
+        from packages.common.errors import PolicySourceNotFound
 
-        with self.assertRaises(RepositoryError):
+        with self.assertRaises(PolicySourceNotFound):
             self.candidates.list_candidates(
                 _principal("cust-002"),
                 source_id=DOCUMENT.source_id,

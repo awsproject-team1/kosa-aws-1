@@ -293,14 +293,24 @@ class JobHttpHandler:
                         ) from error
                     return _response(200, response.to_dict())
             if (
+                method == "GET"
+                and path == "/policy-profiles"
+                and self._policy_approvals is not None
+            ):
+                profiles = self._policy_approvals.list_profiles(principal)
+                return _response(200, {"profiles": list(profiles)})
+            if (
                 method == "POST"
                 and path == "/policy-profiles"
                 and self._policy_approvals is not None
             ):
-                request = _policy_profile_request(event.get("body"))
+                try:
+                    request = _policy_profile_request(event.get("body"))
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise RequestValidationError("policy profile body is invalid") from error
                 try:
                     response = self._policy_approvals.publish(principal, **request)
-                except ValueError as error:
+                except (TypeError, ValueError) as error:
                     raise RequestValidationError("policy profile request is invalid") from error
                 return _response(201, response.to_dict())
             if method == "POST" and path == "/remediation-exceptions":
@@ -640,16 +650,79 @@ def _policy_approval_request(raw_body: object) -> tuple[PolicyRuleReference, ...
     return tuple(references)
 
 
-def _policy_profile_request(raw_body: object) -> dict[str, str]:
+def _policy_profile_request(raw_body: object) -> dict[str, object]:
+    """Parse a publication request that may span several sources and a baseline.
+
+    `sources`가 목록으로 오는 것이 정식 형태다. `source_id`/`source_version` 한 쌍만 보내는
+    예전 형태도 그대로 받는다 — 이미 게시 스크립트와 콘솔이 그 형태를 쓰고 있고, 문서 하나짜리
+    게시는 새 형태에서도 의미가 같기 때문이다. 둘을 함께 보내면 어느 쪽이 의도인지 알 수 없으므로
+    거부한다.
+
+    선택 자체(어느 문서를 넣을지, 기준선을 넣을지)의 판정은 서비스가 한다. 여기서는 wire shape만
+    확인한다 — 두 곳에 두면 하나만 바뀐다.
+    """
     if not isinstance(raw_body, str):
         raise ValueError("body must be a JSON string")
     body = _mapping(json.loads(raw_body))
-    expected = {"source_id", "source_version", "policy_profile_id", "version"}
-    if set(body) != expected or not all(
-        isinstance(body[name], str) and body[name] for name in expected
-    ):
+    allowed = {
+        "policy_profile_id",
+        "version",
+        "sources",
+        "source_id",
+        "source_version",
+        "baseline",
+        "expected_current_version",
+    }
+    if set(body) - allowed:
         raise ValueError("policy profile body fields are invalid")
-    return {name: body[name] for name in expected}
+    for name in ("policy_profile_id", "version"):
+        if not isinstance(body.get(name), str) or not body[name]:
+            raise ValueError("policy profile body fields are invalid")
+    legacy = {"source_id", "source_version"} & set(body)
+    if legacy and "sources" in body:
+        raise ValueError("policy profile body must not mix sources with a single source_id")
+    if legacy:
+        if legacy != {"source_id", "source_version"}:
+            raise ValueError("policy profile body fields are invalid")
+        sources = ((_body_string(body, "source_id"), _body_string(body, "source_version")),)
+    else:
+        raw_sources = body.get("sources", [])
+        if not isinstance(raw_sources, list):
+            raise ValueError("sources must be a list")
+        sources = tuple(
+            (
+                _body_string(_mapping(entry), "source_id"),
+                _body_string(_mapping(entry), "source_version"),
+            )
+            for entry in raw_sources
+        )
+    raw_baseline = body.get("baseline")
+    baseline = None
+    if raw_baseline is not None:
+        entry = _mapping(raw_baseline)
+        baseline = (
+            _body_string(entry, "policy_profile_id"),
+            _body_string(entry, "version"),
+        )
+    expected_current_version = body.get("expected_current_version")
+    if expected_current_version is not None and (
+        not isinstance(expected_current_version, str) or not expected_current_version
+    ):
+        raise ValueError("expected_current_version must be a non-empty string when present")
+    return {
+        "policy_profile_id": body["policy_profile_id"],
+        "version": body["version"],
+        "sources": sources,
+        "baseline": baseline,
+        "expected_current_version": expected_current_version,
+    }
+
+
+def _body_string(body: Mapping[str, object], name: str) -> str:
+    value = body.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
 
 
 def _report_page_request(raw_query: object) -> tuple[int, str | None, str | None]:

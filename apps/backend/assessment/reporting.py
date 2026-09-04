@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Protocol
 
 from apps.backend.assessment.coverage import calculate_coverage
-from apps.backend.assessment.readiness import calculate_readiness_score
+from apps.backend.assessment.readiness import (
+    calculate_readiness_score,
+    calculate_segment_readiness,
+)
 
 # Import the display-only suppression note directly from its module rather than the
 # policy package root: policy.remediation depends only on packages.contracts, so this
@@ -23,7 +26,9 @@ from packages.contracts import (
     EvaluationStatus,
     Finding,
     PlannedEvaluation,
+    PolicyProfile,
     ReadinessScore,
+    SegmentReadinessScore,
 )
 
 
@@ -73,6 +78,10 @@ class AssessmentReport:
     findings: tuple[Finding, ...]
     coverage: AssessmentCoverage
     readiness_score: ReadinessScore | None
+    #: 이 Assessment의 Profile이 여러 원본에 걸칠 때, 원본별 준비도. 사내 정책과 ISMS-P를 한
+    #: Profile로 평가해도 두 점수는 합치지 않는다 — 합친 숫자는 어느 기준에 대한 답도 아니다.
+    #: 원본을 구분하지 않고 게시된 Profile은 빈 값이며, 그 경우 `readiness_score` 하나만 쓴다.
+    segment_readiness: tuple[SegmentReadinessScore, ...] = ()
     next_cursor: str | None = None
     findings_next_cursor: str | None = None
     # Read-time suppression notes for the findings on this page (ADR-0020 §6).
@@ -97,6 +106,10 @@ class AssessmentReport:
             self.readiness_score, ReadinessScore
         ):
             raise TypeError("readiness_score must be a ReadinessScore or None")
+        if not isinstance(self.segment_readiness, tuple) or not all(
+            isinstance(entry, SegmentReadinessScore) for entry in self.segment_readiness
+        ):
+            raise TypeError("segment_readiness must be a tuple of SegmentReadinessScore values")
         if self.next_cursor is not None and (
             not isinstance(self.next_cursor, str) or not self.next_cursor
         ):
@@ -128,6 +141,7 @@ class AssessmentReport:
             "readiness_score": (
                 self.readiness_score.to_dict() if self.readiness_score is not None else None
             ),
+            "segment_readiness": [entry.to_dict() for entry in self.segment_readiness],
             "next_cursor": self.next_cursor,
             "findings_next_cursor": self.findings_next_cursor,
             "suppressions": [note.to_dict() for note in self.suppressions],
@@ -142,13 +156,74 @@ class DynamoTable(Protocol):
     def query(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
-class DynamoDbAssessmentReportStore:
-    """Persist a plan once and query only its customer-scoped Assessment prefix."""
+class PolicyProfileReader(Protocol):
+    """The one Catalog read the report needs: which Rules came from which policy source."""
 
-    def __init__(self, table: DynamoTable) -> None:
+    def get_profile(
+        self, policy_profile_id: str, version: str | None = None
+    ) -> PolicyProfile | None: ...
+
+
+class DynamoDbAssessmentReportStore:
+    """Persist a plan once and query only its customer-scoped Assessment prefix.
+
+    `policy_catalog_factory`가 주어지면 보고서에 원본별 준비도를 함께 담는다. Assessment item이
+    이미 자기 Profile 판본을 고정해 두었으므로(`policy_profile_id`/`policy_profile_version`),
+    그 판본을 읽어 Rule이 어느 원본에서 왔는지 알아낸다 — 평가 계획이나 결과 item의 형태는
+    건드리지 않는다. 주어지지 않으면 지금까지처럼 전체 점수 하나만 낸다.
+
+    Catalog는 호출자의 `customer_id`로 만든다. Store 하나가 여러 고객의 보고서를 읽으므로,
+    생성 시점에 한 고객으로 묶인 Catalog를 그대로 들고 있으면 다른 고객의 Profile을 읽는다.
+    """
+
+    def __init__(
+        self,
+        table: DynamoTable,
+        *,
+        policy_catalog_factory: Callable[[str], PolicyProfileReader] | None = None,
+    ) -> None:
         if table is None:
             raise TypeError("table is required")
         self._table = table
+        self._policy_catalog_factory = policy_catalog_factory
+
+    def _rule_kinds(self, customer_id: str, assessment_id: str) -> dict[str, tuple[str, ...]]:
+        """Read this Assessment's pinned Profile and map each Rule to its policy origins.
+
+        분류에 실패하면 빈 map을 돌려준다. 원본별 점수는 보고의 정밀도이지 접근 통제가 아니므로,
+        Profile을 읽지 못했다고 보고서 자체를 못 읽게 만들지 않는다. 빈 map은 "구분되지 않음"이며
+        원본 구분 없이 게시된 Profile과 같은 답이다.
+        """
+        if self._policy_catalog_factory is None:
+            return {}
+        try:
+            item = self._table.get_item(
+                Key={"PK": _customer_pk(customer_id), "SK": f"ASSESSMENT#{assessment_id}"},
+                ConsistentRead=True,
+            ).get("Item")
+        except Exception:
+            return {}
+        if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
+            return {}
+        policy_profile_id = item.get("policy_profile_id")
+        policy_profile_version = item.get("policy_profile_version")
+        if not isinstance(policy_profile_id, str) or not policy_profile_id:
+            return {}
+        if not isinstance(policy_profile_version, str) or not policy_profile_version:
+            # 판본을 고정하지 않은 legacy Assessment다. current pointer를 따라가면 그 사이에
+            # 교체된 Profile로 점수를 나누게 되므로, 나누지 않는다.
+            return {}
+        try:
+            catalog = self._policy_catalog_factory(customer_id)
+            profile = catalog.get_profile(policy_profile_id, policy_profile_version)
+        except Exception:
+            return {}
+        if profile is None:
+            return {}
+        return {
+            rule_id: tuple(kind.value for kind in kinds)
+            for rule_id, kinds in profile.rule_kinds().items()
+        }
 
     def put_plan_if_absent(self, plan: AssessmentEvaluationPlan) -> None:
         if not isinstance(plan, AssessmentEvaluationPlan):
@@ -211,15 +286,25 @@ class DynamoDbAssessmentReportStore:
             coverage = AssessmentCoverage(
                 planned_evaluations=expected, completed_evaluations=completed
             )
+        readiness_score = (
+            None
+            if planned is None
+            else calculate_readiness_score(results=results, planned_evaluations=planned)
+        )
         return AssessmentReport(
             assessment_id=assessment_id,
             results=results,
             findings=findings,
             coverage=coverage,
-            readiness_score=(
-                None
+            readiness_score=readiness_score,
+            segment_readiness=(
+                ()
                 if planned is None
-                else calculate_readiness_score(results=results, planned_evaluations=planned)
+                else calculate_segment_readiness(
+                    results=results,
+                    planned_evaluations=planned,
+                    rule_kinds=self._rule_kinds(customer_id, assessment_id),
+                )
             ),
         )
 
@@ -277,11 +362,13 @@ class DynamoDbAssessmentReportStore:
             raise ValueError("limit must be an integer from 1 through 100")
         plan = self._get_plan(customer_id=customer_id, assessment_id=assessment_id)
         expected, completed, planned = _plan_from_item(plan, customer_id, assessment_id)
+        segment_readiness: tuple[SegmentReadinessScore, ...] = ()
         if completed is None:
             # Plans written before the transactional counter need a temporary
             # compatibility scan to keep their Coverage semantics unchanged.
             report = self.get_report(customer_id=customer_id, assessment_id=assessment_id)
             coverage, readiness_score = report.coverage, report.readiness_score
+            segment_readiness = report.segment_readiness
         else:
             coverage = AssessmentCoverage(
                 planned_evaluations=expected, completed_evaluations=completed
@@ -312,6 +399,13 @@ class DynamoDbAssessmentReportStore:
                 )
                 readiness_score = calculate_readiness_score(
                     results=completed_results, planned_evaluations=planned
+                )
+                # 원본별 점수도 같은 전체 결과에서 낸다. 페이지 조각으로 계산하면 그 페이지에
+                # 무엇이 실렸는지에 따라 점수가 달라진다.
+                segment_readiness = calculate_segment_readiness(
+                    results=completed_results,
+                    planned_evaluations=planned,
+                    rule_kinds=self._rule_kinds(customer_id, assessment_id),
                 )
         start_key = _decode_cursor(cursor, customer_id, assessment_id)
         arguments: dict[str, object] = {
@@ -348,6 +442,7 @@ class DynamoDbAssessmentReportStore:
             ),
             coverage=coverage,
             readiness_score=readiness_score,
+            segment_readiness=segment_readiness,
             next_cursor=next_cursor,
             findings_next_cursor=findings_next_cursor,
         )

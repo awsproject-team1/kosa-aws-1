@@ -20,6 +20,7 @@ from packages.contracts.assessments import (
     PlannedEvaluation,
     ReadinessScore,
     ScoringMode,
+    SegmentReadinessScore,
 )
 from packages.contracts.audit import (
     AuditEvent,
@@ -81,6 +82,7 @@ from packages.contracts.policy import (
     GoldenDatasetCase,
     PolicyControl,
     PolicyProfile,
+    PolicyProfileSegment,
     PolicyRule,
     PolicyRuleReference,
     PolicySource,
@@ -240,6 +242,7 @@ __all__ = [
     "PolicySource",
     "PolicySourceApproval",
     "PolicySourceFormat",
+    "PolicyProfileSegment",
     "PolicySourceKind",
     "PolicySourceUploadRequest",
     "PlanExecutionResult",
@@ -267,6 +270,7 @@ __all__ = [
     "RuleSeverity",
     "SCORE_ANCHORS",
     "ScoringMode",
+    "SegmentReadinessScore",
     "SourceReference",
     "SUPPORTED_MEDIA_TYPES",
     "TERMINAL_STATUSES",

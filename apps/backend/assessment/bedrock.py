@@ -162,15 +162,20 @@ _SYSTEM_PROMPT = (
     "rationale must state why the rule does not apply. When the rule applies, use PASS "
     "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
     "a human must decide and INSUFFICIENT_EVIDENCE when the supplied evidence cannot "
-    "support a judgment. score is a compliance judgment and exists only for PASS and FAIL: "
-    "for MANUAL_REVIEW, INSUFFICIENT_EVIDENCE, and OUT_OF_SCOPE return score 0 because no "
-    "judgment was made. For PASS and FAIL, score must be 0 through 100 and must agree "
-    "with the status: FAIL means the resource does not satisfy the rule, so its score "
-    "must stay low, and PASS means it does, so its score must stay high; grade within "
-    "those bands by how completely the evidence satisfies or violates the rubric. "
-    "Every evidence reference must come from allowed_evidence_references. Do not wrap "
-    "the JSON in code fences or add prose."
+    "support a judgment. score must be 0 through 100 and grades how completely the "
+    "resource satisfies the rule's criterion: reserve 0 and 100 for a resource that "
+    "wholly violates or wholly satisfies it, and place a partially satisfied resource "
+    "between the extremes. Every evidence reference must come from "
+    "allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
 )
+
+#: **이 문단은 측정으로 정해졌다.** 처음에는 판정 아닌 status 셋(MANUAL_REVIEW,
+#: INSUFFICIENT_EVIDENCE, OUT_OF_SCOPE)을 prompt에서 다시 열거하고 각각 score 0을 지시했다.
+#: 라이브 A/B(RDS-ACCESS-001, 퍼블릭 아님 + 3306을 0.0.0.0/0에 개방, n=8)에서 그 문구는 정확도를
+#: 떨어뜨렸다 — 기존 문구 5/8 FAIL, 새 문구 0/8 FAIL(전부 OUT_OF_SCOPE 회피). status를 점수와
+#: 함께 나열하자 모델이 "판정하지 않음" 선택지를 더 자주 골랐다. 점수 고정은 prose가 아니라
+#: `_normalized_score()`가 하므로 prompt에서 그 열거를 지웠고, 같은 Case가 5/5 FAIL로 돌아왔다.
+#: 남긴 것은 등급화 지시 한 문장뿐이다(그 문장은 정확도를 바꾸지 않았다).
 
 #: 판정이 아닌 status의 점수. 모델이 이 status와 함께 어떤 숫자를 내더라도 Runtime이 이 값으로
 #: 고정한다. 근거가 없거나 사람이 정해야 하는 좌표에 모델의 숫자를 남기면 (1) 같은 입력이

@@ -69,7 +69,9 @@ type CandidatePage = {
 type ResultRow = { resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; model_profile_id: string; rubric_version: string };
 type FindingRow = ResultRow & { finding_id: string };
 type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string };
-type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: { score: number; evaluated_evaluations: number } | null; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
+type PublishedProfile = { policy_profile_id: string; version: string; rule_count: number; source_kinds: string[]; published_at?: string | null };
+type SegmentReadiness = { kind: string; score: { score: number; evaluated_evaluations: number } | null };
+type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: { score: number; evaluated_evaluations: number } | null; segment_readiness?: SegmentReadiness[]; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
 type RemediationDecision = { action: string; manual_review_code: string | null; exception_id: string | null };
 type RemediationStart = { decision: RemediationDecision; job: { job_id: string; remediation_id: string | null } | null };
 type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null };
@@ -178,6 +180,9 @@ async function putPresigned(url: string, file: File, contentType: string) {
 }
 
 const AUTHORING_PENDING = new Set(["QUEUED", "PROCESSING"]);
+
+/** `PolicySourceKind` 값의 한국어 표시. 모르는 값은 그대로 보여준다. */
+const SEGMENT_LABELS: Record<string, string> = { INTERNAL_POLICY: "사내 정책", ISMS_P: "ISMS-P" };
 
 async function fetchCandidatePage(token: string, sourceId: string, sourceVersion: string, cursor?: string): Promise<CandidatePage> {
   const query = new URLSearchParams({ limit: "50" });
@@ -474,6 +479,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   const [candidates, setCandidates] = useState<Record<string, CandidatePage>>({});
   const [cart, setCart] = useState<CartItem[]>([]);
   const [profileId, setProfileId] = useState("");
+  const [published, setPublished] = useState<PublishedProfile[]>([]);
+  const [baselineId, setBaselineId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [repos, setRepos] = useState<RepoScope[]>([]);
@@ -486,7 +493,13 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     try { const r = await api<{ repositories: RepoScope[] }>("/scope", session.accessToken); setRepos(r.repositories); obs.setRepos(r.repositories); }
     catch { /* scope는 부가정보이므로 실패해도 문서 화면은 유지 */ }
   };
-  useEffect(() => { void refresh(); void refreshScope(); /* eslint-disable-next-line */ }, []);
+  const refreshProfiles = async () => {
+    // 기준선을 고르려면 무엇이 게시돼 있는지 보여줘야 한다. 이름을 손으로 적게 하면 오타
+    // 하나가 "기준선 없음"으로 조용히 게시된다.
+    try { const r = await api<{ profiles: PublishedProfile[] }>("/policy-profiles", session.accessToken); setPublished(r.profiles); }
+    catch { /* 기준선은 선택 사항이므로 목록을 못 읽어도 문서 화면은 유지 */ }
+  };
+  useEffect(() => { void refresh(); void refreshScope(); void refreshProfiles(); /* eslint-disable-next-line */ }, []);
 
   async function deleteDoc(d: Doc) {
     setError(null); setNotice(null);
@@ -496,7 +509,11 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     try {
       await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}`, session.accessToken, { method: "DELETE" });
       obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "done", meta: "완료" });
-      setNotice(`삭제됨: ${d.filename}`);
+      setNotice(`삭제됨: ${d.filename} (원본·정규화 아티팩트, 추출 요청, 후보 항목까지 함께 삭제)`);
+      // 지운 문서의 후보를 화면에 남겨두면 이미 없는 Rule을 장바구니에 담을 수 있다.
+      setCandidates(c => { const next = { ...c }; delete next[d.source_id]; return next; });
+      setCart(prev => prev.filter(i => i.source_id !== d.source_id));
+      setOpenDoc(o => (o === d.source_id ? null : o));
       await refresh();
     } catch (e) {
       const msg = (e as Error).message;
@@ -562,7 +579,30 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     try {
       const p = await fetchAllCandidateResults(session.accessToken, d.source_id, d.source_version);
       setCandidates(c => ({ ...c, [d.source_id]: p }));
-    } catch (e) { setError(`후보 조회 실패: ${(e as Error).message}`); }
+    } catch (e) {
+      const msg = (e as Error).message;
+      // 404는 "이 판본에 대한 추출 실행이 아직 없다"는 뜻이다. 장애가 아니므로 다시 눌러도
+      // 달라지지 않는다 — 눌러야 할 버튼은 '추출 요청'이다.
+      setError(msg.startsWith("404")
+        ? "이 문서에는 아직 후보 추출 실행이 없습니다. '추출 요청'을 먼저 누르세요."
+        : `후보 조회 실패: ${msg}`);
+      setCandidates(c => { const next = { ...c }; delete next[d.source_id]; return next; });
+    }
+  }
+
+  async function requestExtraction(d: Doc) {
+    setError(null); setNotice(null);
+    const jobId = "auth-" + d.source_id;
+    obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "active" });
+    try {
+      await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
+      setNotice(`추출을 요청했습니다: ${d.filename}. 완료되면 '후보 조회'에 결과가 나옵니다.`);
+      await loadCandidates(d);
+    } catch (e) {
+      const msg = (e as Error).message;
+      obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "failed", meta: "실패" });
+      setError(`추출 요청 실패: ${msg}`);
+    }
   }
 
   const inCart = (rid: string, rv: string) => cart.some(i => i.rule_id === rid && i.rule_version === rv);
@@ -573,8 +613,10 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   }
 
   async function publishCart() {
-    if (cart.length === 0) { setError("장바구니에 후보를 담으세요."); return; }
+    const baseline = published.find(p => p.policy_profile_id === baselineId);
+    if (cart.length === 0 && !baseline) { setError("장바구니에 후보를 담거나 기준선을 고르세요."); return; }
     if (!profileId.trim()) { setError("Profile ID를 입력하세요."); return; }
+    if (baseline && baseline.policy_profile_id === profileId.trim()) { setError("기준선과 새 Profile ID가 같습니다. 다른 ID를 쓰세요."); return; }
     setError(null); setNotice(null);
     try {
       const bySource = new Map<string, { source_version: string; rules: { rule_id: string; version: string }[] }>();
@@ -586,16 +628,23 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       for (const [sid, e] of bySource) {
         await api(`/policy-sources/${enc(sid)}/versions/${enc(e.source_version)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ approved_rules: e.rules }) });
       }
-      if (bySource.size > 1) {
-        // POST /policy-profiles publishes the approved rules of ONE source version. Publishing only
-        // the first source while telling the admin "N documents" would silently drop the rest.
-        throw new Error(`Profile 하나는 문서 하나의 승인 Rule로 게시됩니다. 장바구니에 문서 ${bySource.size}개가 섞여 있습니다 — 문서별로 나누어 게시하세요.`);
-      }
-      const [firstSid, firstE] = [...bySource.entries()][0];
-      await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify({ source_id: firstSid, source_version: firstE.source_version, policy_profile_id: profileId.trim(), version: "v1" }) });
+      // 한 Profile은 여러 사내 문서의 승인 Rule과 ISMS-P 같은 운영자 기준선을 함께 담는다.
+      // 승인된 Rule 전체가 문서별로 들어가며, 기준선은 이미 게시된 Profile에서 가져온다.
+      const body: Record<string, unknown> = {
+        policy_profile_id: profileId.trim(),
+        version: "v1",
+        sources: [...bySource.entries()].map(([source_id, e]) => ({ source_id, source_version: e.source_version })),
+      };
+      if (baseline) body.baseline = { policy_profile_id: baseline.policy_profile_id, version: baseline.version };
+      await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify(body) });
       addProfile(profileId.trim());
-      setNotice(`Profile '${profileId.trim()}' 게시 완료 (${cart.length}개 rule 승인, 문서 ${firstSid.slice(0, 12)}의 승인된 Rule 전체가 v1으로 게시됨). '사용자 관리'에서 지정하세요.`);
+      const parts = [
+        bySource.size > 0 ? `사내 문서 ${bySource.size}건의 승인 Rule` : null,
+        baseline ? `기준선 ${baseline.policy_profile_id}@${baseline.version} (Rule ${baseline.rule_count}개)` : null,
+      ].filter(Boolean);
+      setNotice(`Profile '${profileId.trim()}' 게시 완료 — ${parts.join(" + ")}. 준비도는 정책 원본별로 따로 표시됩니다. '사용자 관리'에서 지정하세요.`);
       setCart([]);
+      await refreshProfiles();
     } catch (e) { setError(`게시 실패: ${(e as Error).message}`); }
   }
 
@@ -617,6 +666,7 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
           <td>{d.filename}</td><td>{d.status}</td><td>{d.source_format ?? "-"}</td><td>{d.unit_count}</td>
           <td style={{ display: "flex", gap: 6 }}>
             <button className="ghost" onClick={() => void loadCandidates(d)}>후보 조회</button>
+            <button className="ghost" onClick={() => void requestExtraction(d)}>추출 요청</button>
             <button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} onClick={() => void deleteDoc(d)}>삭제</button>
           </td>
         </tr>)}
@@ -626,6 +676,10 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     {openDoc && candidates[openDoc] && <div className="card candidate-results">
       <h2>정책 Rule 후보 조회 결과</h2>
       <p className="hint">백엔드의 CandidateReviewEntry 형식을 그대로 표시합니다. 심각도는 Catalog가 정한 읽기 전용 값이며, 승인 가능한 후보만 장바구니에 담을 수 있습니다.</p>
+      {AUTHORING_PENDING.has(candidates[openDoc].status) && <p className="hint">
+        추출이 아직 끝나지 않았습니다 (상태 {candidates[openDoc].status}). 완결되지 않은 실행의 부분 결과는
+        보여주지 않습니다 — 잠시 후 '후보 조회'를 다시 누르세요.
+      </p>}
       <div className="candidate-summary" aria-label="후보 추출 집계">
         <span><strong>{candidates[openDoc].status}</strong><small>상태</small></span>
         <span><strong>{candidates[openDoc].counts?.accepted ?? candidates[openDoc].candidates.filter(c => c.classification === "AUTOMATABLE").length}</strong><small>자동 평가</small></span>
@@ -669,13 +723,24 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
 
     <div className="card">
       <h2>Profile 장바구니 ({cart.length})</h2>
-      {cart.length === 0 ? <p className="obs-empty">담긴 후보가 없습니다. 문서에서 후보를 조회해 담으세요.</p>
+      <p className="hint">한 Profile에 여러 사내 문서의 승인 Rule과 ISMS-P 기준선을 함께 담을 수 있습니다. 담긴 원본은 Profile에 기록되며, 평가 준비도는 원본별로 따로 계산됩니다 — 사내 기준 미달과 인증 기준 미달은 서로 다른 조치를 부르므로 하나의 점수로 합치지 않습니다.</p>
+      {cart.length === 0 ? <p className="obs-empty">담긴 후보가 없습니다. 문서에서 후보를 조회해 담거나, 기준선만으로 게시할 수 있습니다.</p>
         : <table><thead><tr><th>Rule</th><th>Severity</th><th>Control</th><th>문서</th></tr></thead>
           <tbody>{cart.map(i => <tr key={`${i.rule_id}@${i.rule_version}`}><td>{i.rule_id}@{i.rule_version}</td><td>{i.severity}</td><td>{i.control_key}</td><td>{i.source_id.slice(0, 12)}</td></tr>)}</tbody></table>}
       <div className="row" style={{ marginTop: 12 }}>
         <label style={{ flex: 1 }}>Policy Profile ID<input value={profileId} onChange={e => setProfileId(e.target.value)} placeholder="profile-internal-baseline" /></label>
-        <button disabled={cart.length === 0} onClick={() => void publishCart()}>장바구니로 Profile 게시</button>
+        <label style={{ flex: 1 }}>기준선 (ISMS-P 등, 선택)
+          <select value={baselineId} onChange={e => setBaselineId(e.target.value)}>
+            <option value="">포함하지 않음</option>
+            {published.filter(p => p.policy_profile_id !== profileId.trim()).map(p =>
+              <option key={p.policy_profile_id} value={p.policy_profile_id}>
+                {p.policy_profile_id}@{p.version} · Rule {p.rule_count}개{p.source_kinds.length ? ` · ${p.source_kinds.join("+")}` : ""}
+              </option>)}
+          </select>
+        </label>
+        <button disabled={cart.length === 0 && !baselineId} onClick={() => void publishCart()}>Profile 게시</button>
       </div>
+      {published.length === 0 && <p className="hint">게시된 기준선 Profile이 없습니다. 운영자 bootstrap이 Registry를 이 고객 파티션에 게시하면 여기에 나타납니다.</p>}
     </div>
     {notice && <p className="status">{notice}</p>}
     {error && <p className="alert">{error}</p>}
@@ -840,14 +905,23 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
   const modelProfiles = new Set(rep.results.map(r => `${r.model_profile_id} · rubric ${r.rubric_version}`));
   const suppressed = new Map((rep.suppressions ?? []).map(s => [s.finding_id, s]));
   const sorted = [...rep.results].sort((a, b) => a.resource_id.localeCompare(b.resource_id) || a.rule_id.localeCompare(b.rule_id) || a.perspective.localeCompare(b.perspective));
+  const segments = rep.segment_readiness ?? [];
 
   return <div className="panel">
     <div className="card"><h2>Assessment 결과 <code>{rep.assessment_id}</code></h2>
       <div className="row">
         <span>실행률 <strong>{rep.coverage.percentage}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
-        <span>Readiness Score <strong>{rep.readiness_score ? rep.readiness_score.score : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>
+        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rep.readiness_score.score : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>}
       </div>
-      <p className="disclaimer">Readiness Score는 0–100 연속 점수의 severity 가중 평균으로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아니며, Customer Policy와 ISMS-P는 각각의 Profile로 따로 평가합니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
+      {/* Profile이 여러 원본에 걸치면 점수를 원본별로만 보여준다. 두 준비도를 합친 하나의
+          숫자는 어느 기준에 대한 답도 아니며, 한쪽의 미달을 다른 쪽이 가린다. */}
+      {segments.length > 0 && <div className="candidate-summary" aria-label="정책 원본별 준비도">
+        {segments.map(s => <span key={s.kind}>
+          <strong>{s.score ? s.score.score : (complete ? "계산 불가" : "계산 대기")}</strong>
+          <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · 평가 ${s.score.evaluated_evaluations}건` : ""}</small>
+        </span>)}
+      </div>}
+      <p className="disclaimer">Readiness Score는 0–100 연속 점수의 severity 가중 평균으로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 한 Profile이 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다 — 한 Rule이 두 기준을 함께 뒷받침하면 그 Rule은 양쪽 점수에 들어갑니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
       <div className="candidate-summary" aria-label="평가 집계">
         <span><strong>{resources.size}</strong><small>평가 리소스</small></span>
         <span><strong>{rules.size}</strong><small>평가 Rule</small></span>

@@ -6,6 +6,7 @@ import unittest
 from apps.backend.policy import InMemoryPolicyCatalog, PolicyContextResolver, PolicyNotFoundError
 from apps.backend.policy.ingestion import (
     ApprovalRejectedError,
+    ProfileBaseline,
     UploadedPolicyOriginal,
     approve_source,
     normalize_upload,
@@ -402,6 +403,208 @@ class PublishProfileTest(unittest.TestCase):
         self.assertEqual(
             raised.exception.rejection_code, ApprovalRejectionCode.ORIGINAL_BINDING_MISMATCH
         )
+
+
+class CombinedProfileTest(unittest.TestCase):
+    """한 Profile이 사내 문서 여러 건과 ISMS-P 기준선을 함께 담는 경로.
+
+    PRD가 요구하는 것은 "사내 정책 및 ISMS-P 요구사항을 함께 평가"다. 이 테스트가 고정하는 것은
+    두 가지다 — 합칠 수 있다는 것, 그리고 합쳐도 원본 구분이 Profile에 남는다는 것. 후자가 없으면
+    보고 단계가 준비도를 나눌 근거를 잃고, 두 기준의 미달이 하나의 숫자 뒤로 사라진다.
+    """
+
+    def setUp(self) -> None:
+        self.document = _document()
+        self.approval, self.approved = approve_source(
+            self.document,
+            [_candidate(self.document, PUBLIC_LOCATOR, rule_id="CUST-PUBLIC-1")],
+            approved_by="policy-owner",
+            approved_at="2026-09-01T00:00:00Z",
+        )
+        self.internal_source = PolicySource(
+            source_id=SOURCE_ID,
+            kind=PolicySourceKind.INTERNAL_POLICY,
+            title="Cloud security checklist",
+            version=SOURCE_VERSION,
+            artifact_id=self.approval.artifact_id,
+            content_sha256=self.approval.content_sha256,
+        )
+        self.isms_source = PolicySource(
+            source_id="isms-p-2023",
+            kind=PolicySourceKind.ISMS_P,
+            title="ISMS-P",
+            version="2023-10-31",
+            artifact_id="art-isms",
+            content_sha256="isms-sha",
+        )
+
+    def _baseline_rule(self, *, rule_id: str, also_internal: bool = False) -> PolicyRule:
+        references = [
+            SourceReference(
+                source_id="isms-p-2023",
+                source_version="2023-10-31",
+                locator="control/2.6.2",
+                content_sha256="locator-sha",
+            )
+        ]
+        if also_internal:
+            references.append(source_reference_for(self.document, ENCRYPT_LOCATOR))
+        return PolicyRule(
+            rule_id=rule_id,
+            version="2026-08-31",
+            title="Baseline rule",
+            severity=RuleSeverity.HIGH,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=(S3,),
+            source_references=tuple(references),
+        )
+
+    def _baseline(self, *rules: PolicyRule) -> ProfileBaseline:
+        return ProfileBaseline(
+            policy_profile_id="profile-multiresource-baseline",
+            version="v1",
+            rules=rules,
+            sources=(self.isms_source, self.internal_source),
+        )
+
+    def test_a_baseline_joins_without_a_customer_approval_record(self) -> None:
+        """기준선 Rule에는 고객 승인 record가 없다 — 고객이 올린 문서가 아니기 때문이다."""
+        profile = publish_profile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            candidates=self.approved,
+            approvals=[self.approval],
+            sources=[self.internal_source],
+            baseline=self._baseline(self._baseline_rule(rule_id="S3-ACL-001")),
+        )
+
+        self.assertEqual(
+            [reference.rule_id for reference in profile.rule_references],
+            ["CUST-PUBLIC-1", "S3-ACL-001"],
+        )
+
+    def test_the_profile_records_which_source_each_rule_came_from(self) -> None:
+        profile = publish_profile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            candidates=self.approved,
+            approvals=[self.approval],
+            sources=[self.internal_source],
+            baseline=self._baseline(self._baseline_rule(rule_id="S3-ACL-001")),
+        )
+
+        self.assertEqual(
+            profile.source_kinds,
+            (PolicySourceKind.INTERNAL_POLICY, PolicySourceKind.ISMS_P),
+        )
+        self.assertEqual(
+            profile.rule_kinds(),
+            {
+                "CUST-PUBLIC-1": (PolicySourceKind.INTERNAL_POLICY,),
+                "S3-ACL-001": (PolicySourceKind.ISMS_P,),
+            },
+        )
+
+    def test_a_rule_citing_both_sources_belongs_to_both_segments(self) -> None:
+        """기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을 함께 인용한다.
+
+        그런 Rule은 두 준비도 모두를 뒷받침하며, 어느 한쪽으로 몰아넣으면 다른 쪽 점수가 그
+        Rule을 잃는다.
+        """
+        profile = publish_profile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            candidates=self.approved,
+            approvals=[self.approval],
+            sources=[self.internal_source],
+            baseline=self._baseline(self._baseline_rule(rule_id="S3-ACL-001", also_internal=True)),
+        )
+
+        # 순서는 Segment 순서(첫 등장 순)를 따른다. 사내 문서 Rule이 먼저 나왔으므로 그쪽이 앞이다.
+        self.assertEqual(
+            profile.rule_kinds()["S3-ACL-001"],
+            (PolicySourceKind.INTERNAL_POLICY, PolicySourceKind.ISMS_P),
+        )
+
+    def test_a_baseline_rule_citing_an_unpublished_source_is_refused(self) -> None:
+        """원본을 이름 붙일 수 없는 Rule은 어느 준비도에도 넣을 수 없다."""
+        with self.assertRaises(ApprovalRejectedError) as raised:
+            publish_profile(
+                policy_profile_id="profile-combined",
+                version="v1",
+                candidates=self.approved,
+                approvals=[self.approval],
+                sources=[self.internal_source],
+                baseline=ProfileBaseline(
+                    policy_profile_id="profile-multiresource-baseline",
+                    version="v1",
+                    rules=(self._baseline_rule(rule_id="S3-ACL-001"),),
+                    sources=(),
+                ),
+            )
+        self.assertEqual(raised.exception.rejection_code, ApprovalRejectionCode.SOURCE_NOT_APPROVED)
+
+    def test_a_rule_present_in_both_the_approval_and_the_baseline_is_refused(self) -> None:
+        """어느 승인이 그 Rule을 지탱하는지 알 수 없는 Profile은 만들지 않는다."""
+        with self.assertRaises(ApprovalRejectedError) as raised:
+            publish_profile(
+                policy_profile_id="profile-combined",
+                version="v1",
+                candidates=self.approved,
+                approvals=[self.approval],
+                sources=[self.internal_source],
+                baseline=self._baseline(self._baseline_rule(rule_id="CUST-PUBLIC-1")),
+            )
+        self.assertEqual(
+            raised.exception.rejection_code, ApprovalRejectionCode.DUPLICATE_RULE_REFERENCE
+        )
+
+    def test_rules_from_two_documents_publish_as_one_profile(self) -> None:
+        """문서 하나 제한은 API 경계에만 있었다. 판정은 Rule마다 그 Rule의 승인 record로 한다."""
+        second = _document(b"# Logging\n\nBuckets write access logs.\n", source_id="second-doc")
+        second_approval, second_approved = approve_source(
+            second,
+            [_candidate(second, "heading/logging/item/1", rule_id="CUST-LOG-1")],
+            approved_by="policy-owner",
+            approved_at="2026-09-02T00:00:00Z",
+        )
+        second_source = PolicySource(
+            source_id="second-doc",
+            kind=PolicySourceKind.INTERNAL_POLICY,
+            title="Logging standard",
+            version=SOURCE_VERSION,
+            artifact_id=second_approval.artifact_id,
+            content_sha256=second_approval.content_sha256,
+        )
+
+        profile = publish_profile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            candidates=[*self.approved, *second_approved],
+            approvals=[self.approval, second_approval],
+            sources=[self.internal_source, second_source],
+        )
+
+        self.assertEqual(
+            [reference.rule_id for reference in profile.rule_references],
+            ["CUST-PUBLIC-1", "CUST-LOG-1"],
+        )
+        self.assertEqual(profile.source_kinds, (PolicySourceKind.INTERNAL_POLICY,))
+        self.assertEqual(
+            {segment.source_id for segment in profile.segments}, {SOURCE_ID, "second-doc"}
+        )
+
+    def test_a_profile_published_without_source_metadata_carries_no_segments(self) -> None:
+        """예전 호출자는 `sources`를 넘기지 않는다. 절반만 분류하느니 분류하지 않는다."""
+        profile = publish_profile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            candidates=self.approved,
+            approvals=[self.approval],
+        )
+
+        self.assertEqual(profile.segments, ())
+        self.assertEqual(profile.rule_kinds(), {})
 
 
 class PublishedProfileReachesAssessmentTest(unittest.TestCase):

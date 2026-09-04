@@ -304,17 +304,25 @@ class DynamoDbPolicySourceUploadRepository:
         return tuple(items)
 
     def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None:
-        """Delete one unapproved policy source: the DynamoDB record, then its S3 artifacts.
+        """Delete one unapproved policy source: its record, its authoring items, its artifacts.
 
         Refuses if the source has an approval record — an approved source may back a published
         Profile's Rules, and deleting it would break evidence traceability. Tenant-scoped: the
         keys are built from the caller's own customer_id, and the record delete additionally
         asserts the stored `customer_id` so a key collision cannot cross the partition.
 
-        The record goes first. A delete is only observable once that write lands, so if the S3
-        cleanup then fails the leftovers are unreferenced objects (invisible to every read path,
-        collectable by a lifecycle rule) rather than a live record pointing at bytes that are
-        already gone. Ordering it the other way turns one failure into a broken document.
+        **The ingestion record is not the whole document.** 한 판본은 `POLICY_INGESTION#` item
+        하나와 `POLICY_SOURCE#{sid}#VERSION#{ver}` 아래의 자식 item들(`#REQUEST`, `#AUTHORING`,
+        `#CANDIDATE#*`, `#UNSUPPORTED#*`, `#REJECTED#*`, 그리고 판본 자체의 `PolicySource`)로
+        이루어진다. 예전에는 앞의 하나만 지웠고, 그래서 지운 문서의 후보와 추출 요청이 테이블에
+        그대로 남았다(라이브 sandbox에서 한 source에 95개). 남은 `#REQUEST`는 더 나쁘다 — 문서가
+        사라진 판본을 가리키는 추출 요청이 조회 경로에 계속 보인다. 삭제는 판본 단위로 완결한다.
+
+        순서는 복구 가능성으로 정한다. 삭제는 ingestion record가 사라져야 관측되므로 그것을 먼저
+        지운다. 이후 자식 item이나 S3 정리가 실패하면 남는 것은 어떤 read 경로에도 보이지 않는
+        고아 데이터다. 반대로 정렬하면 한 번의 실패가 "바이트 없는 살아 있는 문서"를 만든다. 다만
+        그 중간 실패는 이 호출을 다시 불러도 낫지 않는다 — record가 이미 없으므로 재시도는 404다.
+        고아 정리는 운영 작업으로 남는다.
         """
         pk = f"CUSTOMER#{customer_id}"
         approval_sk = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#APPROVAL"
@@ -336,6 +344,7 @@ class DynamoDbPolicySourceUploadRepository:
             if _is_conditional_check_failure(error):
                 raise PolicySourceNotFound("policy source version not found") from None
             raise RuntimeError("policy source record delete failed") from error
+        self._delete_version_children(customer_id, source_id, source_version)
         # 없는 객체 삭제는 S3에서 성공으로 취급되므로 UPLOAD_PENDING(원본 미업로드) 문서도
         # 안전하게 지운다.
         for key_fn in (original_object_key, normalized_object_key):
@@ -346,6 +355,45 @@ class DynamoDbPolicySourceUploadRepository:
                 self._presigner.delete_object(Bucket=self._bucket, Key=key)  # type: ignore[union-attr]
             except Exception as error:
                 raise RuntimeError("policy artifact delete failed") from error
+
+    def _delete_version_children(
+        self, customer_id: str, source_id: str, source_version: str
+    ) -> None:
+        """Remove every item stored under one source version's `POLICY_SOURCE#` key space.
+
+        Query와 delete 모두 호출자 자신의 파티션에 고정되어 있으므로 여기서는 조건식을 걸지
+        않는다. 지울 키는 사용자가 고르는 것이 아니라 그 파티션의 query가 돌려준 것이다.
+
+        접두사는 판본 경계에서 잘라야 한다. `...#VERSION#v1`은 `...#VERSION#v10`의 접두사이기도
+        하므로, query가 돌려준 SK를 다시 걸러 정확히 그 판본(또는 그 아래 자식)만 지운다.
+        """
+        pk = f"CUSTOMER#{customer_id}"
+        base = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}"
+        kwargs: dict[str, object] = {
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk)",
+            "ExpressionAttributeValues": {":pk": pk, ":sk": base},
+        }
+        keys: list[str] = []
+        while True:
+            try:
+                page = self._table.query(**kwargs)
+            except Exception as error:
+                raise RuntimeError("policy source child read failed") from error
+            for item in page.get("Items", []):
+                if not isinstance(item, Mapping):
+                    continue
+                sort_key = str(item.get("SK", ""))
+                if sort_key == base or sort_key.startswith(f"{base}#"):
+                    keys.append(sort_key)
+            token = page.get("LastEvaluatedKey")
+            if not token:
+                break
+            kwargs["ExclusiveStartKey"] = token
+        for sort_key in keys:
+            try:
+                self._table.delete_item(Key={"PK": pk, "SK": sort_key})
+            except Exception as error:
+                raise RuntimeError("policy source child delete failed") from error
 
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str

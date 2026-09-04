@@ -18,7 +18,7 @@ from apps.backend.api.policy_candidates import (
 )
 from apps.backend.auth import Principal, Role
 from apps.backend.auth.authorization import AuthorizationDenied
-from apps.backend.repositories.errors import RepositoryError
+from packages.common.errors import PolicySourceNotFound
 from packages.contracts import (
     AuthoringRunStatus,
     PolicyAuthoringRequest,
@@ -221,6 +221,30 @@ class ListCandidatesTest(unittest.TestCase):
         self.assertEqual(page.unsupported, ())
         self.assertIsNone(page.cursor)
 
+    def test_a_requested_run_with_no_result_yet_reads_as_queued_not_as_a_fault(self) -> None:
+        """업로드 직후부터 worker가 결과를 쓸 때까지가 이 구간이다.
+
+        예전에는 manifest가 없다는 사실이 `RepositoryError`로 올라가 503이 됐고, 콘솔은 그동안
+        내내 "요청 실패"를 보여줬다. 추출이 계속 실패하는 문서에서는 그 상태가 끝나지 않는다.
+        아직 결과가 없는 것은 장애가 아니라 상태다.
+        """
+        self.service.request_extraction(
+            principal(),
+            source_id=DOCUMENT.source_id,
+            source_version=DOCUMENT.source_version,
+        )
+
+        page = self._list()
+
+        self.assertIs(page.status, AuthoringRunStatus.QUEUED)
+        self.assertEqual(page.candidates, ())
+        self.assertIsNone(page.cursor)
+
+    def test_a_version_that_was_never_requested_is_not_found(self) -> None:
+        """요청도 결과도 없으면 이 판본에 대한 실행이 없다는 뜻이다. 기다릴 것이 없으므로 404."""
+        with self.assertRaises(PolicySourceNotFound):
+            self._list()
+
     def test_unsupported_and_rejected_results_are_returned_but_are_not_candidates(self) -> None:
         self._store_ready_run()
 
@@ -286,12 +310,16 @@ class ListCandidatesTest(unittest.TestCase):
 
 class TenantIsolationTest(unittest.TestCase):
     def test_another_customer_cannot_read_this_run(self) -> None:
-        """모든 read가 호출자의 partition만 사용한다. 다른 고객에게는 존재하지 않는 실행이다."""
+        """모든 read가 호출자의 partition만 사용한다. 다른 고객에게는 존재하지 않는 실행이다.
+
+        그래서 404다. 예전에는 503이었는데, 그것은 "잠시 후 다시 해보라"는 뜻이라 없는 것을
+        기다리게 만든다.
+        """
         table = FakeTable()
         _repository(table).record_authoring_result(customer_id=CUSTOMER, result=_result())
         service = _service(table, RecordingQueue())
 
-        with self.assertRaises(RepositoryError):
+        with self.assertRaises(PolicySourceNotFound):
             service.list_candidates(
                 principal(customer_id="cust-002"),
                 source_id=DOCUMENT.source_id,

@@ -78,7 +78,14 @@ _OPTIONAL_FIELDS = frozenset(
     }
 )
 
-PROMPT_VERSION = "policy-authoring/2026-09-04"
+#: prompt 본문이 바뀌면 이 값도 바뀐다. 배포된 Model Profile의 `prompt_version`이 정확히 같아야
+#: 추출기가 생성되므로(생성자에서 fail-closed), 두 값은 같은 변경에서 함께 움직인다.
+#:
+#: `.2`: AUTOMATABLE에 필요한 다섯 필드를 prompt가 모두 요구하도록 고쳤다. 이전 prompt는 규칙과
+#: 예시 어디에서도 `required_evidence`와 `evaluation_rubric`을 말하지 않았는데, Contract는 그 둘이
+#: 없는 AUTOMATABLE을 거부한다. 그래서 모델이 낸 AUTOMATABLE은 하나도 남지 못했고 저장된 실행
+#: 세 건이 모두 `accepted: 0`이었다 — 업로드한 정책이 자동 평가 Rule을 만들지 못한 직접 원인이다.
+PROMPT_VERSION = "policy-authoring/2026-09-04.2"
 
 _SYSTEM_PROMPT = (
     "You extract compliance requirements from policy text and map each to a governance control "
@@ -104,9 +111,13 @@ _SYSTEM_PROMPT = (
     "\n"
     "Classification rules — follow exactly, or the requirement is rejected:\n"
     '- "AUTOMATABLE": the requirement maps to a control whose automation_support is AVAILABLE. '
-    'You MUST set "mapped_control_key" to that control_key AND set "evaluation_type" to one of '
-    '"IAC", "AWS", or "HYBRID". Set "resource_types" using only the control\'s '
-    "supported_resource_types.\n"
+    "You MUST set all five of these, or the requirement is discarded: "
+    '"mapped_control_key" (that control_key); "evaluation_type" (one of "IAC", "AWS", "HYBRID" '
+    "that the control lists in supported_evaluation_types); "
+    '"resource_types" (only values from the control\'s supported_resource_types); '
+    '"required_evidence" (one or more capability_key values taken from that control\'s '
+    'evidence_capabilities); and "evaluation_rubric" (one sentence stating what makes a '
+    "resource fail or pass this requirement).\n"
     '- "MANUAL": the requirement needs human review. You MUST set "mapped_control_key" to the '
     'catalog control whose automation_support is MANUAL, and set "evaluation_type" to "MANUAL".\n'
     '- "UNSUPPORTED": no catalog control applies. Omit "mapped_control_key" and '
@@ -120,7 +131,9 @@ _SYSTEM_PROMPT = (
     '"requirement_summary":"S3 buckets block public access.",'
     '"mapping_reason":"Maps to the S3 public access block control.",'
     '"classification":"AUTOMATABLE","mapped_control_key":"S3_BLOCK_PUBLIC_ACCESS",'
-    '"evaluation_type":"AWS","resource_types":["AWS::S3::Bucket"]}\n'
+    '"evaluation_type":"AWS","resource_types":["AWS::S3::Bucket"],'
+    '"required_evidence":["S3.PUBLIC_ACCESS_BLOCK"],'
+    '"evaluation_rubric":"Fail when any block-public-access setting is disabled."}\n'
     'MANUAL: {"source_locators":["heading/policy/item/1"],'
     '"requirement":"A security officer must approve external AI service adoption.",'
     '"requirement_summary":"Officer approves external AI adoption.",'

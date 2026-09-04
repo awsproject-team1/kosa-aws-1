@@ -12,7 +12,12 @@ from apps.backend.repositories.ports import (
     RepositoryError,
     RevisionConflictError,
 )
-from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
+from packages.common.errors import (
+    AuthoringRunNotFound,
+    PolicyProfileNotFound,
+    PolicySourceDeleteForbidden,
+    PolicySourceNotFound,
+)
 from packages.contracts import ApiError
 
 
@@ -64,7 +69,10 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
         return _failure(401, "UNAUTHORIZED", "Authentication is required")
     if isinstance(error, (AuthorizationDenied, AssessmentScopeDenied)):
         return _failure(403, "SCOPE_DENIED", "The requested resource is outside the approved scope")
-    if isinstance(error, (JobNotFoundError, PolicySourceNotFound)):
+    if isinstance(
+        error,
+        (AuthoringRunNotFound, JobNotFoundError, PolicyProfileNotFound, PolicySourceNotFound),
+    ):
         return _failure(404, "NOT_FOUND", "The requested resource was not found")
     if isinstance(error, RequestValidationError):
         return _failure(400, "VALIDATION_ERROR", "The request is invalid")

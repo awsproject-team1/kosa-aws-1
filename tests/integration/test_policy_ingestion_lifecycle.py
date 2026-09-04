@@ -191,8 +191,7 @@ class PolicyIngestionLifecycleTest(unittest.TestCase):
         )
         profile = approvals.publish(
             admin_a,
-            source_id="source-1",
-            source_version="v1",
+            sources=(("source-1", "v1"),),
             policy_profile_id="profile-1",
             version="v1",
         )
@@ -211,8 +210,7 @@ class PolicyIngestionLifecycleTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             approvals.publish(
                 admin_b,
-                source_id="source-1",
-                source_version="v1",
+                sources=(("source-1", "v1"),),
                 policy_profile_id="profile-1",
                 version="v1",
             )

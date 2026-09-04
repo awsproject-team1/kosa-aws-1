@@ -205,7 +205,14 @@ def _http_handler() -> JobHttpHandler:
         job_id_factory=lambda: f"job-{uuid.uuid4()}",
         assessment_id_factory=lambda: f"asm-{uuid.uuid4()}",
     )
-    reports = DynamoDbAssessmentReportStore(_metadata_table())
+    reports = DynamoDbAssessmentReportStore(
+        _metadata_table(),
+        # 보고서가 준비도를 정책 원본별로 나눌 수 있게 한다. 한 Profile이 사내 문서와 ISMS-P를
+        # 함께 담을 수 있으므로, 두 점수를 합친 하나의 숫자는 어느 기준에 대한 답도 아니다.
+        policy_catalog_factory=lambda customer_id: DynamoDbPolicyCatalog(
+            metadata_table, customer_id=customer_id
+        ),
+    )
     policy_sources, policy_reader = _policy_source_components()
     return JobHttpHandler(
         service,

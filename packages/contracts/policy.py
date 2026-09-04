@@ -302,10 +302,64 @@ class PolicyRuleReference:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PolicyProfileSegment:
+    """One policy origin inside a Profile, named so its readiness is never merged away.
+
+    한 Profile은 사내 정책 문서와 ISMS-P 기준선을 함께 담을 수 있다(PRD: "사내 정책 및 ISMS-P
+    요구사항을 함께 평가"). 그러나 두 준비도를 하나의 숫자로 합치면 그 숫자는 어느 쪽에 대한
+    답도 아니다 — 사내 기준 미달과 인증 기준 미달은 서로 다른 조치를 부른다. Segment는 게시
+    시점에 "이 Rule이 어느 원본에서 왔는가"를 고정해, 보고 단계가 점수를 원본별로 나눌 수 있게
+    한다.
+
+    한 Rule이 여러 Segment에 속할 수 있다. `PolicyRule.source_references`는 여러 Source를 인용할
+    수 있고, 실제로 기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을 동시에 인용한다. 그런
+    Rule은 두 준비도 모두에 기여하며, 그것이 중복 계산이 아니라 사실이다.
+    """
+
+    kind: PolicySourceKind
+    source_id: str
+    source_version: str
+    rule_references: tuple[PolicyRuleReference, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, PolicySourceKind):
+            raise TypeError("kind must be a PolicySourceKind")
+        for name in ("source_id", "source_version"):
+            require_non_empty_string(getattr(self, name), name)
+        if not isinstance(self.rule_references, tuple) or not self.rule_references:
+            raise ValueError("rule_references must be a non-empty tuple")
+        seen: set[tuple[str, str]] = set()
+        for reference in self.rule_references:
+            if not isinstance(reference, PolicyRuleReference):
+                raise TypeError("rule_references items must be PolicyRuleReference values")
+            key = (reference.rule_id, reference.version)
+            if key in seen:
+                raise ValueError("a segment must not repeat a rule reference")
+            seen.add(key)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "source_id": self.source_id,
+            "source_version": self.source_version,
+            "rule_references": [reference.to_dict() for reference in self.rule_references],
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PolicyProfile:
+    """The approved Rule allow-list one Assessment evaluates against.
+
+    `segments`는 additive다. 값이 없으면 원본 구분 없이 게시된 Profile이고(이 계약 이전에 게시된
+    모든 Profile), 값이 있으면 `rule_references`의 모든 Rule이 최소 하나의 Segment에 속해야 한다 —
+    일부만 분류된 Profile은 "나머지는 어느 원본인가"에 답할 수 없으므로 보고 단계가 점수를 나눌 때
+    조용히 일부를 빠뜨리게 된다.
+    """
+
     policy_profile_id: str
     version: str
     rule_references: tuple[PolicyRuleReference, ...]
+    segments: tuple[PolicyProfileSegment, ...] = ()
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.policy_profile_id, "policy_profile_id")
@@ -315,13 +369,62 @@ class PolicyProfile:
         for reference in self.rule_references:
             if not isinstance(reference, PolicyRuleReference):
                 raise TypeError("rule_references items must be PolicyRuleReference values")
+        if not isinstance(self.segments, tuple):
+            raise TypeError("segments must be a tuple")
+        if not self.segments:
+            return
+        known = {(reference.rule_id, reference.version) for reference in self.rule_references}
+        classified: set[tuple[str, str]] = set()
+        origins: set[tuple[str, str]] = set()
+        for segment in self.segments:
+            if not isinstance(segment, PolicyProfileSegment):
+                raise TypeError("segments items must be PolicyProfileSegment values")
+            origin = (segment.source_id, segment.source_version)
+            if origin in origins:
+                raise ValueError("segments must not repeat a policy source version")
+            origins.add(origin)
+            for reference in segment.rule_references:
+                key = (reference.rule_id, reference.version)
+                if key not in known:
+                    raise ValueError("a segment must not reference a rule outside the profile")
+                classified.add(key)
+        if classified != known:
+            raise ValueError("every profile rule must belong to at least one segment")
+
+    @property
+    def source_kinds(self) -> tuple[PolicySourceKind, ...]:
+        """The distinct policy origins this Profile spans, in segment order."""
+        kinds: list[PolicySourceKind] = []
+        for segment in self.segments:
+            if segment.kind not in kinds:
+                kinds.append(segment.kind)
+        return tuple(kinds)
+
+    def rule_kinds(self) -> dict[str, tuple[PolicySourceKind, ...]]:
+        """Map each rule id to every origin it answers to.
+
+        보고 단계가 준비도를 원본별로 나눌 때 쓰는 유일한 근거다. Segment가 없는 Profile은 빈
+        map을 돌려주며, 그 경우 보고는 지금까지처럼 Profile 전체 점수 하나만 낸다.
+        """
+        kinds: dict[str, list[PolicySourceKind]] = {}
+        for segment in self.segments:
+            for reference in segment.rule_references:
+                entry = kinds.setdefault(reference.rule_id, [])
+                if segment.kind not in entry:
+                    entry.append(segment.kind)
+        return {rule_id: tuple(value) for rule_id, value in kinds.items()}
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "policy_profile_id": self.policy_profile_id,
             "version": self.version,
             "rule_references": [reference.to_dict() for reference in self.rule_references],
         }
+        # Segment가 없는 Profile은 이 키를 갖지 않는다. 빈 목록을 쓰면 "원본 구분 없이 게시된
+        # Profile"과 "구분했는데 비어 있는 Profile"이 저장된 item에서 같아진다.
+        if self.segments:
+            payload["segments"] = [segment.to_dict() for segment in self.segments]
+        return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

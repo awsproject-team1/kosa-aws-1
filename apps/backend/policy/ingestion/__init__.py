@@ -6,6 +6,7 @@ AI 후보 추출은 C가 담당하며 둘 다 여기서 나오는 `NormalizedPol
 
 from apps.backend.policy.ingestion.approval import (
     ApprovalRejectedError,
+    ProfileBaseline,
     approve_source,
     publish_profile,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "normalized_artifact_id",
     "normalized_object_key",
     "original_object_key",
+    "ProfileBaseline",
     "publish_profile",
     "source_reference_for",
     "text_sha256",

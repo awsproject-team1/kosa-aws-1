@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
+from apps.backend.policy.serialization import profile_from_dict
 from packages.contracts import (
     AssessmentPhase,
     EvaluationPerspective,
@@ -11,6 +12,7 @@ from packages.contracts import (
     GoldenDatasetCase,
     PolicyControl,
     PolicyProfile,
+    PolicyProfileSegment,
     PolicyRule,
     PolicyRuleReference,
     PolicySource,
@@ -182,6 +184,108 @@ class PolicyContractTest(unittest.TestCase):
                 title="정보시스템 접근",
                 source_reference={"source_id": "isms-p-2023"},
                 rule_references=(PolicyRuleReference(rule_id="S3-ACL-001", version="v1"),),
+            )
+
+
+class PolicyProfileSegmentContractTest(unittest.TestCase):
+    """Profile이 여러 정책 원본을 담을 때 그 구분이 저장·복원을 견디는가.
+
+    구분이 저장되지 않으면 보고 단계가 준비도를 사내 정책과 ISMS-P로 나눌 근거를 잃고, 두 기준의
+    미달이 하나의 숫자 뒤로 사라진다.
+    """
+
+    @staticmethod
+    def _reference(rule_id: str) -> PolicyRuleReference:
+        return PolicyRuleReference(rule_id=rule_id, version="v1")
+
+    def _profile(self) -> PolicyProfile:
+        return PolicyProfile(
+            policy_profile_id="profile-combined",
+            version="v1",
+            rule_references=(self._reference("CUST-1"), self._reference("ISMS-1")),
+            segments=(
+                PolicyProfileSegment(
+                    kind=PolicySourceKind.INTERNAL_POLICY,
+                    source_id="src-internal",
+                    source_version="ver-1",
+                    rule_references=(self._reference("CUST-1"),),
+                ),
+                PolicyProfileSegment(
+                    kind=PolicySourceKind.ISMS_P,
+                    source_id="isms-p-2023",
+                    source_version="2023-10-31",
+                    rule_references=(self._reference("ISMS-1"),),
+                ),
+            ),
+        )
+
+    def test_segments_survive_a_store_and_restore(self) -> None:
+        profile = self._profile()
+
+        restored = profile_from_dict(
+            {"entity_type": "POLICY_PROFILE", "customer_id": "cust-a", **profile.to_dict()}
+        )
+
+        self.assertEqual(restored, profile)
+        self.assertEqual(
+            restored.rule_kinds(),
+            {
+                "CUST-1": (PolicySourceKind.INTERNAL_POLICY,),
+                "ISMS-1": (PolicySourceKind.ISMS_P,),
+            },
+        )
+
+    def test_a_profile_stored_before_segments_existed_still_restores(self) -> None:
+        """이 계약 이전에 게시된 Profile에는 `segments` 키가 없다."""
+        stored = self._profile().to_dict()
+        del stored["segments"]
+
+        restored = profile_from_dict(stored)
+
+        self.assertEqual(restored.segments, ())
+        self.assertEqual(restored.rule_kinds(), {})
+
+    def test_a_profile_without_segments_omits_the_key_entirely(self) -> None:
+        """빈 목록을 쓰면 "구분 안 함"과 "구분했는데 비어 있음"이 저장된 item에서 같아진다."""
+        plain = PolicyProfile(
+            policy_profile_id="profile-internal",
+            version="v1",
+            rule_references=(self._reference("CUST-1"),),
+        )
+
+        self.assertNotIn("segments", plain.to_dict())
+
+    def test_a_rule_left_out_of_every_segment_is_refused(self) -> None:
+        """절반만 분류된 Profile은 나머지를 어느 점수에 넣을지 답할 수 없다."""
+        with self.assertRaises(ValueError):
+            PolicyProfile(
+                policy_profile_id="profile-combined",
+                version="v1",
+                rule_references=(self._reference("CUST-1"), self._reference("ISMS-1")),
+                segments=(
+                    PolicyProfileSegment(
+                        kind=PolicySourceKind.INTERNAL_POLICY,
+                        source_id="src-internal",
+                        source_version="ver-1",
+                        rule_references=(self._reference("CUST-1"),),
+                    ),
+                ),
+            )
+
+    def test_a_segment_referencing_a_rule_outside_the_profile_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            PolicyProfile(
+                policy_profile_id="profile-combined",
+                version="v1",
+                rule_references=(self._reference("CUST-1"),),
+                segments=(
+                    PolicyProfileSegment(
+                        kind=PolicySourceKind.ISMS_P,
+                        source_id="isms-p-2023",
+                        source_version="2023-10-31",
+                        rule_references=(self._reference("CUST-1"), self._reference("ISMS-1")),
+                    ),
+                ),
             )
 
 

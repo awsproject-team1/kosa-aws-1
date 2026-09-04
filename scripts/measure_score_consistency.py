@@ -8,6 +8,8 @@ pairwise 차이)과 계약 위반·Severe Overestimation 후보를 그대로 보
 
 Case 종류
 - self-agreement: 같은 입력 N회 (RDS/S3/ALB/EC2 위반·준수, IAC/AWS_ACTUAL 관점)
+- partial-compliance: 일부만 충족한 리소스. **연속 점수가 등급을 담는지 확인하는 유일한 Case**이며,
+  전부/전무 Case만으로는 0/100 분포가 Case 설계 탓인지 모델 탓인지 구별할 수 없다.
 - expected transition: before(위반) → after(준수) 쌍. after 평균이 before 평균보다 낮으면 방향 위반.
 - invariance/attribute-order: 같은 문서의 key 순서만 바꾼 입력. 평가기의 request body는
   `sort_keys=True`라 prompt 바이트가 같아야 한다 — 모델을 부르지 않고 결정적으로 확인한다.
@@ -337,6 +339,52 @@ def _ec2_actual(*, public: bool) -> dict[str, object]:
     }
 
 
+def _s3_partial(flags: Mapping[str, bool]) -> dict[str, object]:
+    """A bucket whose Block Public Access is only partly enabled."""
+    return {
+        "resource_type": "AWS::S3::Bucket",
+        "resource_id": BUCKET_ID,
+        "attributes": {
+            "public_access_block": dict(flags),
+            "encryption": {},
+            "policy": {"IsPublic": not all(flags.values())},
+        },
+    }
+
+
+def _alb_mixed_listeners() -> dict[str, object]:
+    """HTTPS **and** a plaintext HTTP listener: the rule allows HTTPS/TLS listeners only."""
+    document = _alb_actual(https=True)
+    document["attributes"]["listeners"] = [
+        *document["attributes"]["listeners"],
+        {"ListenerArn": f"{ALB_ARN}/l2", "Port": 80, "Protocol": "HTTP"},
+    ]
+    return document
+
+
+def _rds_open_security_group() -> dict[str, object]:
+    """Not publicly accessible, yet 3306 is open to the internet and IAM auth is off."""
+    document = _rds_actual(public=False, encrypted=True)
+    document["attributes"]["vpc_security_groups"] = [
+        {
+            "VpcSecurityGroupId": "sg-rds",
+            "Status": "active",
+            "GroupId": "sg-rds",
+            "GroupName": "acme-rds",
+            "VpcId": "vpc-1",
+            "IpPermissions": [
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": 3306,
+                    "ToPort": 3306,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            ],
+        }
+    ]
+    return document
+
+
 def _actual_evidence(resource_type: str, resource_id: str) -> tuple[str, ...]:
     from apps.backend.assessment.actual import actual_evidence_reference
 
@@ -614,6 +662,63 @@ def builtin_cases(rules_path: Path) -> tuple[ConsistencyCase, ...]:
             _actual_evidence(ec2, INSTANCE_ID),
             ok,
             transition_from="ec2-public-ip-actual",
+        ),
+        # --- 부분 준수: 등급화 여부와 False Negative를 함께 드러낸다 ---
+        # Rule이 "모두"(S3 네 플래그) 또는 "만"(ALB HTTPS 전용, RDS 필요한 네트워크만)을
+        # 요구하는데 일부만 충족한 상태다. 기대 status는 Rule 문언이 정한다.
+        case(
+            "s3-two-of-four-actual",
+            "partial-compliance",
+            rules["S3-PUBLIC-001"],
+            actual,
+            BUCKET_ID,
+            _s3_partial(
+                {
+                    "BlockPublicAcls": True,
+                    "IgnorePublicAcls": True,
+                    "BlockPublicPolicy": False,
+                    "RestrictPublicBuckets": False,
+                }
+            ),
+            _actual_evidence(s3, BUCKET_ID),
+            fail,
+        ),
+        case(
+            "s3-three-of-four-actual",
+            "partial-compliance",
+            rules["S3-PUBLIC-001"],
+            actual,
+            BUCKET_ID,
+            _s3_partial(
+                {
+                    "BlockPublicAcls": True,
+                    "IgnorePublicAcls": True,
+                    "BlockPublicPolicy": True,
+                    "RestrictPublicBuckets": False,
+                }
+            ),
+            _actual_evidence(s3, BUCKET_ID),
+            fail,
+        ),
+        case(
+            "alb-https-plus-http-actual",
+            "partial-compliance",
+            rules["ALB-HTTPS-001"],
+            actual,
+            ALB_ARN,
+            _alb_mixed_listeners(),
+            _actual_evidence(alb, ALB_ARN),
+            fail,
+        ),
+        case(
+            "rds-private-open-sg-actual",
+            "partial-compliance",
+            rules["RDS-ACCESS-001"],
+            actual,
+            DB_ID,
+            _rds_open_security_group(),
+            _actual_evidence(rds, DB_ID),
+            fail,
         ),
         # --- Policy phrasing invariance: same control, same document, different wording ---
         case(

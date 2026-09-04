@@ -49,6 +49,31 @@ class HarnessTest(unittest.TestCase):
         ids = {case.case_id for case in CASES}
         self.assertTrue(all(case.transition_from in ids for case in transitions))
 
+    def test_partial_compliance_cases_exist_and_are_not_all_or_nothing(self) -> None:
+        """Without a partially compliant document, a 0/100 distribution proves nothing.
+
+        Live measurement showed the model answers 0 or 100 on these too, and that two of
+        them are false negatives — which the all-or-nothing cases could not have surfaced.
+        """
+        partial = [case for case in CASES if case.kind == "partial-compliance"]
+        self.assertEqual(len(partial), 4)
+        flags = next(
+            case for case in partial if case.case_id == "s3-three-of-four-actual"
+        ).resource_document["attributes"]["public_access_block"]
+        self.assertEqual(sum(bool(value) for value in flags.values()), 3)
+        listeners = next(
+            case for case in partial if case.case_id == "alb-https-plus-http-actual"
+        ).resource_document["attributes"]["listeners"]
+        self.assertEqual({entry["Protocol"] for entry in listeners}, {"HTTPS", "HTTP"})
+        rds = next(
+            case for case in partial if case.case_id == "rds-private-open-sg-actual"
+        ).resource_document
+        self.assertFalse(rds["attributes"]["db_instance"]["PubliclyAccessible"])
+        self.assertEqual(
+            rds["attributes"]["vpc_security_groups"][0]["IpPermissions"][0]["IpRanges"],
+            [{"CidrIp": "0.0.0.0/0"}],
+        )
+
     def test_dry_run_is_deterministic_without_jitter(self) -> None:
         reports = measure(
             (_case("rds-public-actual"),),

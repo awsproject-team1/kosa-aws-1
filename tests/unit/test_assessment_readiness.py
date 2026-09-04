@@ -3,6 +3,7 @@
 import unittest
 
 from apps.backend.assessment import calculate_readiness_score
+from apps.backend.assessment.readiness import calculate_segment_readiness
 from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
@@ -122,6 +123,86 @@ class ReadinessScoreTest(unittest.TestCase):
     def test_rejects_a_count_where_the_planned_set_is_required(self) -> None:
         with self.assertRaises(TypeError):
             calculate_readiness_score(results=(result(),), planned_evaluations=1)  # type: ignore[arg-type]
+
+
+class SegmentReadinessTest(unittest.TestCase):
+    """사내 정책과 ISMS-P를 한 Profile로 평가해도 두 준비도는 합치지 않는다.
+
+    합친 하나의 숫자는 어느 기준에 대한 답도 아니다. 사내 기준은 통과하는데 인증 기준은 미달인
+    상태가 평균 뒤로 사라지면, 그 보고서를 읽고 할 수 있는 판단이 없다.
+    """
+
+    INTERNAL = "INTERNAL_POLICY"
+    ISMS = "ISMS_P"
+
+    def test_each_origin_is_scored_over_only_its_own_coordinates(self) -> None:
+        scores = calculate_segment_readiness(
+            results=(
+                result(rule_id="CUST-1", score=100),
+                result(rule_id="ISMS-1", resource_id="bucket-002", score=0),
+            ),
+            planned_evaluations=(
+                planned(rule_id="CUST-1"),
+                planned(rule_id="ISMS-1", resource_id="bucket-002"),
+            ),
+            rule_kinds={"CUST-1": (self.INTERNAL,), "ISMS-1": (self.ISMS,)},
+        )
+
+        by_kind = {entry.kind: entry.score for entry in scores}
+        self.assertEqual(sorted(by_kind), [self.INTERNAL, self.ISMS])
+        assert by_kind[self.INTERNAL] is not None
+        assert by_kind[self.ISMS] is not None
+        self.assertEqual(by_kind[self.INTERNAL].score, 100)
+        self.assertEqual(by_kind[self.ISMS].score, 0)
+
+    def test_a_rule_serving_both_standards_counts_toward_both(self) -> None:
+        """기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을 함께 인용한다."""
+        scores = calculate_segment_readiness(
+            results=(result(rule_id="SHARED-1", score=40),),
+            planned_evaluations=(planned(rule_id="SHARED-1"),),
+            rule_kinds={"SHARED-1": (self.INTERNAL, self.ISMS)},
+        )
+
+        self.assertEqual([entry.kind for entry in scores], [self.INTERNAL, self.ISMS])
+        for entry in scores:
+            assert entry.score is not None
+            self.assertEqual(entry.score.score, 40)
+            self.assertEqual(entry.score.evaluated_evaluations, 1)
+
+    def test_one_origin_can_be_scored_while_the_other_is_still_running(self) -> None:
+        """전체 점수 하나였을 때는 할 수 없던 구분이다 — 미완결 쪽만 `None`이다."""
+        scores = calculate_segment_readiness(
+            results=(result(rule_id="CUST-1", score=70),),
+            planned_evaluations=(
+                planned(rule_id="CUST-1"),
+                planned(rule_id="ISMS-1", resource_id="bucket-002"),
+            ),
+            rule_kinds={"CUST-1": (self.INTERNAL,), "ISMS-1": (self.ISMS,)},
+        )
+
+        by_kind = {entry.kind: entry.score for entry in scores}
+        assert by_kind[self.INTERNAL] is not None
+        self.assertEqual(by_kind[self.INTERNAL].score, 70)
+        self.assertIsNone(by_kind[self.ISMS])
+
+    def test_a_profile_without_recorded_origins_is_not_split(self) -> None:
+        """원본 구분 없이 게시된 Profile은 나눌 근거가 없다. 지금처럼 전체 점수 하나만 쓴다."""
+        self.assertEqual(
+            calculate_segment_readiness(
+                results=(result(),), planned_evaluations=(planned(),), rule_kinds={}
+            ),
+            (),
+        )
+
+    def test_an_origin_whose_rules_never_applied_reports_no_score(self) -> None:
+        """Rule은 Profile에 있으나 어떤 Resource에도 적용되지 않았다. 0점이 아니라 점수 없음이다."""
+        scores = calculate_segment_readiness(
+            results=(result(rule_id="CUST-1"),),
+            planned_evaluations=(planned(rule_id="CUST-1"),),
+            rule_kinds={"CUST-1": (self.INTERNAL,), "ISMS-1": (self.ISMS,)},
+        )
+
+        self.assertIsNone({entry.kind: entry.score for entry in scores}[self.ISMS])
 
 
 if __name__ == "__main__":

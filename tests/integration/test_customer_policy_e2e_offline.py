@@ -892,8 +892,7 @@ class CustomerPolicyEndToEndTest(unittest.TestCase):
         self.assertEqual(set(approval.approved_rules), set(references))
         profile = approvals.publish(
             self.admin,
-            source_id=document.source_id,
-            source_version=document.source_version,
+            sources=((document.source_id, document.source_version),),
             policy_profile_id="profile-acme-standard",
             version="v1",
         )

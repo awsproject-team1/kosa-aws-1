@@ -49,6 +49,21 @@ score 필드 자체는 Contract대로 항상 존재한다(범위·유한성 검�
 PASS/FAIL의 연속 점수는 그대로 모델이 정하며, 반복 평가의 실제 편차는
 `scripts/measure_score_consistency.py`로 측정해 보고한다(허용 오차는 이 스크립트가 정하지 않는다).
 
+**이 고정은 Code가 하고 prompt는 하지 않는다.** 처음 구현에서는 prompt에도 세 status와 각각의
+score 0을 열거했는데, 라이브 A/B에서 그 문구가 정확도를 떨어뜨렸다: RDS-ACCESS-001(퍼블릭 아님 +
+3306을 0.0.0.0/0에 개방, n=8) 기준 열거 없는 prompt는 5/8 FAIL, 열거한 prompt는 0/8 FAIL(전부
+OUT_OF_SCOPE 회피)이었다. 판정 회피 선택지를 점수와 함께 제시하면 모델이 그것을 더 자주 고른다.
+그래서 prompt에서 열거를 지우고 정규화는 `_normalized_score()`에만 남겼으며, 같은 Case가 5/5
+FAIL로 회복됐다. **평가 문제를 prompt 문구로 덮지 않는다**는 규칙이 여기서는 반대 방향으로도
+적용된다 — prompt에 안전해 보이는 문장을 더하는 것도 측정 없이는 하지 않는다.
+
+**부분 준수는 등급이 되지 않는다 (측정 결과).** 현재 승인 Model Profile(`amazon.nova-lite-v1:0`)은
+일부만 충족한 리소스에도 0 또는 100만 낸다. S3 네 플래그 중 둘/셋만 켠 버킷, HTTPS와 평문 HTTP
+리스너를 함께 가진 ALB, 퍼블릭은 아니지만 3306이 전개방인 RDS를 각각 5회 평가한 결과가 전부
+0 또는 100이었고, prompt에 "부분 충족은 양 극단 사이에 둔다"를 명시해도 바뀌지 않았다. 연속
+점수 계약은 유지하되 **현재 모델에서 그 연속성은 실현되지 않는다**는 사실을 기록해 둔다. 자세한
+수치와 그 과정에서 드러난 False Negative는 `docs/evaluations/data/score-consistency-20260904.md`.
+
 ## Natural-language and Model Profile boundary
 
 명시적 UI/API 요청은 대응 Workflow로 직접 진입한다. 자연어 요청은 Parent Orchestrator가
@@ -172,6 +187,20 @@ legacy Result/Finding은 provenance 없이 읽을 수 있으나 remediation 자�
 `EXECUTION_ERROR` 또는 미완료 평가가 있으면 Readiness Score는 `null`이며 Coverage가 그
 이유를 표시한다. 이 산식은 AI가 아닌 C의 결정적 report projection이다.
 
+`SegmentReadinessScore`는 **Profile이 여러 정책 원본에 걸칠 때 원본별 준비도**다. 한 Profile이
+사내 정책 문서와 ISMS-P 기준선을 함께 담을 수 있으므로(PRD: "사내 정책 및 ISMS-P 요구사항을
+함께 평가"), 그 둘을 하나의 숫자로 합치면 그 숫자는 어느 기준에 대한 답도 아니게 된다 — 사내
+기준 미달과 인증 기준 미달은 서로 다른 조치를 부르고, 한쪽이 다른 쪽을 가린다. 산식은
+`ReadinessScore`와 같고, 대상만 그 원본이 뒷받침하는 좌표로 좁힌다. 각 원본의 점수는 **그
+원본의 계획이 전부 끝났을 때만** 나오므로, 한쪽이 진행 중이면 그쪽만 `null`이다. 두 기준을
+함께 뒷받침하는 Rule은 양쪽 점수에 들어간다.
+
+`AssessmentReport.readiness_score`는 그대로 남는다. 그것은 **이 Profile 전체의 준비도**이며
+배포 전후 비교(ADR-0020)가 같은 계획을 비교할 때 쓰는 값이다. 준법 보고로 사용자에게 보여주는
+것은 `segment_readiness`이고, 원본이 여러 개인 Profile에서 콘솔은 전체 숫자를 표시하지 않는다.
+`kind`는 `PolicySourceKind`의 값 문자열이다 — `packages.contracts.policy`가
+`packages.contracts.assessments`를 import하므로 enum 자체를 반대로 가져올 수 없다.
+
 ## M1 DRIFT derivation boundary
 
 `DRIFT`는 AI 판정이 아니라 같은 Resource × Rule에 대한 `IAC`와 `AWS_ACTUAL` 결과의 기계적
@@ -233,6 +262,12 @@ Lambda의 남은 시간이 3분이면 조건부 checkpoint 저장과 다음 Task
 - `PolicyRuleReference`: Rule ID와 version을 함께 고정하는 Profile 참조
 - `PolicyProfile`: `rule_references`로 구성된 versioned allow-list. Repository/AWS Account 권한은
   Profile이 아니라 Backend의 JWT scope에서 강제한다.
+- `PolicyProfileSegment`: 한 Profile 안의 정책 원본 하나와 그 원본이 뒷받침하는 Rule 목록.
+  `PolicyProfile.segments`는 additive이며, 값이 있으면 `rule_references`의 **모든** Rule이 최소
+  하나의 Segment에 속해야 한다. 한 Rule은 여러 Segment에 속할 수 있다 — `PolicyRule`은 여러
+  Source를 인용할 수 있고, 실제로 기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을 함께
+  인용한다. `segments`가 비어 있으면 원본 구분 없이 게시된 Profile이며(이 계약 이전의 모든
+  Profile), 보고는 전체 점수 하나만 낸다.
 - `PolicyControl`: 정책 통제 항목과 그것을 구현하는 Rule version 목록. Control은 Rule보다
   상위 단위이며, Coverage는 이 매핑으로 "어떤 통제가 어떤 Rule로 평가됐는지" 설명한다.
 

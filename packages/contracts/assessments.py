@@ -285,6 +285,32 @@ class ReadinessScore:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SegmentReadinessScore:
+    """One policy origin's readiness inside a Profile that spans several.
+
+    한 Profile은 사내 정책 문서와 ISMS-P 기준선을 함께 담을 수 있다. 그 둘의 준비도를 하나의
+    숫자로 합치면 그 숫자는 어느 쪽에 대한 답도 아니다 — 사내 기준 미달과 인증 기준 미달은 서로
+    다른 조치를 부르고, 한쪽이 다른 쪽을 가린다. 그래서 점수는 원본별로 따로 낸다.
+
+    `kind`는 `PolicySourceKind`의 값 문자열이다. enum 자체를 쓰지 않는 이유는 import 방향
+    하나뿐이다 — `packages.contracts.policy`가 이 모듈을 import하므로 반대로 가져올 수 없다.
+
+    `score`가 `None`인 것은 "이 원본의 계획이 아직 다 끝나지 않았다"이지 0점이 아니다.
+    """
+
+    kind: str
+    score: ReadinessScore | None
+
+    def __post_init__(self) -> None:
+        require_non_empty_string(self.kind, "kind")
+        if self.score is not None and not isinstance(self.score, ReadinessScore):
+            raise TypeError("score must be a ReadinessScore or None")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"kind": self.kind, "score": None if self.score is None else self.score.to_dict()}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PlannedEvaluation:
     """One planned applicable coordinate, fixed by the server before evaluation.
 

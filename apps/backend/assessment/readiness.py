@@ -1,11 +1,14 @@
 """Deterministic, severity-weighted Initial Assessment readiness calculation."""
 
+from collections.abc import Mapping, Sequence
+
 from packages.contracts import (
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     PlannedEvaluation,
     ReadinessScore,
+    SegmentReadinessScore,
 )
 
 _SEVERITY_WEIGHTS = {"LOW": 1, "MEDIUM": 2, "HIGH": 4, "CRITICAL": 8}
@@ -83,3 +86,65 @@ def calculate_readiness_score(
         score=round(weighted_score / total_weight, 2),
         evaluated_evaluations=len(scoring_results),
     )
+
+
+def calculate_segment_readiness(
+    *,
+    results: tuple[EvaluationResult, ...],
+    planned_evaluations: tuple[PlannedEvaluation, ...],
+    rule_kinds: Mapping[str, Sequence[str]],
+) -> tuple[SegmentReadinessScore, ...]:
+    """Score each policy origin the Profile spans, separately.
+
+    사내 정책과 ISMS-P를 한 Profile에 담을 수 있게 되면서 필요해진 계산이다. 합친 하나의 숫자는
+    어느 기준에 대한 답도 아니므로, 원본 종류별로 그 원본이 뒷받침하는 좌표만 모아 같은
+    severity 가중 평균을 낸다.
+
+    **한 Rule이 여러 원본에 속할 수 있다.** 기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을
+    함께 인용하며, 그런 Rule은 두 준비도 모두에 들어간다. 중복 계산이 아니라, 그 Rule이 실제로
+    두 기준을 동시에 뒷받침한다는 사실이다.
+
+    각 원본의 점수는 **그 원본의 계획이 전부 끝났을 때만** 나온다(`calculate_readiness_score`와
+    같은 규칙). 한쪽이 아직 진행 중이면 그쪽만 `None`이고 다른 쪽은 그대로 나온다 — 하나의
+    전체 점수로 묶여 있을 때는 할 수 없던 구분이다.
+
+    `rule_kinds`가 비어 있으면 빈 tuple을 돌려준다. 원본을 분류하지 않고 게시된 Profile
+    (이 계약 이전의 모든 Profile)은 나눌 근거가 없으므로 지금처럼 전체 점수 하나만 갖는다.
+    """
+    if not isinstance(results, tuple):
+        raise TypeError("results must be a tuple")
+    if not isinstance(planned_evaluations, tuple):
+        raise TypeError("planned_evaluations must be a tuple")
+    if not isinstance(rule_kinds, Mapping):
+        raise TypeError("rule_kinds must be a mapping")
+    kinds: list[str] = []
+    for values in rule_kinds.values():
+        if isinstance(values, str):
+            raise TypeError("rule_kinds values must be sequences of kind strings")
+        for kind in values:
+            if not isinstance(kind, str) or not kind.strip():
+                raise ValueError("rule_kinds values must be non-empty strings")
+            if kind not in kinds:
+                kinds.append(kind)
+    if not kinds:
+        return ()
+    scores: list[SegmentReadinessScore] = []
+    for kind in kinds:
+        rule_ids = {rule_id for rule_id, values in rule_kinds.items() if kind in values}
+        planned = tuple(
+            coordinate for coordinate in planned_evaluations if coordinate.rule_id in rule_ids
+        )
+        if not planned:
+            # 계획에 없는 원본이다. Rule은 Profile에 있으나 어떤 Resource에도 적용되지 않았다.
+            scores.append(SegmentReadinessScore(kind=kind, score=None))
+            continue
+        scores.append(
+            SegmentReadinessScore(
+                kind=kind,
+                score=calculate_readiness_score(
+                    results=tuple(result for result in results if result.rule_id in rule_ids),
+                    planned_evaluations=planned,
+                ),
+            )
+        )
+    return tuple(scores)

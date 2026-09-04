@@ -43,6 +43,22 @@ class ArtifactIntegrityError(ArtifactStoreError):
     """Raised when stored bytes do not match their content digest."""
 
 
+class AuthoringRunNotFound(LookupError):
+    """No authoring run has been recorded for this policy source version.
+
+    `RepositoryError`가 아니다. 저장소가 고장난 것이 아니라 아직 만들어진 실행이 없다는
+    사실이고, 그 둘을 같은 예외로 올리면 호출자는 "잠시 후 다시"와 "아직 시작 안 됨"을
+    구별할 수 없다 — 실제로 후보 조회가 그 이유로 503을 돌려주고 있었다.
+    """
+
+
+class PolicyProfileNotFound(LookupError):
+    """The requested policy profile version does not exist in the caller's partition.
+
+    게시 요청이 고른 기준선 Profile이 없다는 뜻이며, 저장소 오류가 아니라 잘못된 선택이다.
+    """
+
+
 class PolicySourceNotFound(LookupError):
     """Raised when a policy source version does not exist in the caller's partition."""
 

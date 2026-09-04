@@ -17,6 +17,7 @@ API가 `POLICY_AUTHORING_QUEUE_URL`로 보낸 `PolicyAuthoringRequest`를 SQS ev
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Mapping
 
@@ -65,11 +66,23 @@ def run_requests(
     """Extract and persist candidates for every request in this batch."""
     manifests: list[AuthoringManifest] = []
     for request in parse_requests(event):
-        document = documents.get_document(  # type: ignore[attr-defined]
-            customer_id=request.customer_id,
-            source_id=request.source_id,
-            source_version=request.source_version,
-        )
+        try:
+            document = documents.get_document(  # type: ignore[attr-defined]
+                customer_id=request.customer_id,
+                source_id=request.source_id,
+                source_version=request.source_version,
+            )
+        except LookupError:
+            # 사용자가 문서를 지운 뒤 도착한 요청이다. 이것을 올리면 SQS가 재시도하고, 재시도해도
+            # 문서는 돌아오지 않으므로 결국 DLQ에 쌓여 큐 상태를 읽을 수 없게 만든다(라이브
+            # sandbox에서 실제로 그렇게 됐다). 없어진 문서에 대한 추출은 실패가 아니라 할 일이
+            # 없는 것이다. 조용히 넘기지 않고 기록은 남긴다.
+            logging.getLogger("governance.policy.authoring").info(
+                "skipping authoring request for a deleted policy source version: %s %s",
+                request.source_id,
+                request.source_version,
+            )
+            continue
         if not isinstance(document, NormalizedPolicyDocument):
             raise PolicyAuthoringRuntimeError("policy ingestion record is invalid")
         result = extract_policy_candidates(

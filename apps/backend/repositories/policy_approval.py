@@ -6,9 +6,11 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
-from apps.backend.policy.serialization import rule_from_dict
+from apps.backend.policy.ingestion import ProfileBaseline
+from apps.backend.policy.serialization import profile_from_dict, rule_from_dict
 from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.errors import RepositoryError
+from packages.common.errors import AuthoringRunNotFound, PolicyProfileNotFound
 from packages.contracts import (
     ApprovalRejectionCode,
     ArtifactReadFailureCode,
@@ -514,11 +516,31 @@ class DynamoDbPolicyApprovalRepository:
     def load_authoring_manifest(
         self, *, customer_id: str, source_id: str, source_version: str
     ) -> AuthoringManifest:
+        """Load the run manifest, or say there is none.
+
+        없는 manifest를 `RepositoryError`로 올리면 API가 503으로 옮긴다. 업로드 직후부터
+        worker가 결과를 쓸 때까지 manifest는 존재하지 않으므로, 그 구간 내내 후보 조회가
+        "서비스 장애"로 보였다. 없음은 오류가 아니라 상태다.
+        """
         _non_empty(customer_id, "customer_id")
-        item = self._read_item(
+        item = self._find_item(
             customer_id, f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#AUTHORING"
         )
+        if item is None:
+            raise AuthoringRunNotFound("no authoring run for this policy source version")
         return _manifest_from_item(item)
+
+    def has_authoring_request(
+        self, *, customer_id: str, source_id: str, source_version: str
+    ) -> bool:
+        """Whether an extraction was requested for this version (queued or in flight)."""
+        _non_empty(customer_id, "customer_id")
+        return (
+            self._find_item(
+                customer_id, f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#REQUEST"
+            )
+            is not None
+        )
 
     def load_authoring_results(
         self, *, customer_id: str, source_id: str, source_version: str
@@ -668,7 +690,7 @@ class DynamoDbPolicyApprovalRepository:
             manifest = self.load_authoring_manifest(
                 customer_id=customer_id, source_id=source_id, source_version=source_version
             )
-        except RepositoryError:
+        except (AuthoringRunNotFound, RepositoryError):
             legacy = self._read_item(
                 customer_id, f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#CANDIDATES"
             )
@@ -729,7 +751,121 @@ class DynamoDbPolicyApprovalRepository:
         )
         return approved, (approval,), (source,)
 
-    def _read_item(self, customer_id: str, sk: str) -> Mapping[str, object]:
+    def load_baseline(
+        self, *, customer_id: str, policy_profile_id: str, version: str
+    ) -> ProfileBaseline:
+        """Load an already-published Profile so its Rules can join a new one.
+
+        기준선은 **이 고객 파티션에 이미 게시된 Profile**이어야 한다. 임의의 Rule 목록을 받으면
+        승인 게이트를 우회하는 입구가 되므로, 입력은 Profile 식별자 하나뿐이고 Rule은 저장된
+        것에서만 나온다.
+
+        Rule item은 Catalog가 Assessment 시점에 거는 것과 같은 검사를 통과해야 한다 —
+        `entity_type`이 `POLICY_RULE`이고 lifecycle이 `APPROVED`. 두 곳의 검사가 다르면 게시는
+        통과하는데 평가는 실패하는 Profile이 만들어진다.
+        """
+        _non_empty(customer_id, "customer_id")
+        _non_empty(policy_profile_id, "policy_profile_id")
+        _non_empty(version, "version")
+        item = self._find_item(customer_id, f"POLICY_PROFILE#{policy_profile_id}#VERSION#{version}")
+        if item is None:
+            raise PolicyProfileNotFound("baseline policy profile version not found")
+        try:
+            profile = profile_from_dict(dict(item))
+        except (KeyError, TypeError, ValueError) as error:
+            raise RepositoryError("stored policy profile is invalid") from error
+
+        rules = []
+        sources: dict[tuple[str, str], PolicySource] = {}
+        for reference in profile.rule_references:
+            rule_item = self._find_item(
+                customer_id, f"RULE#{reference.rule_id}#VERSION#{reference.version}"
+            )
+            if rule_item is None:
+                raise RepositoryError("baseline profile references a rule that is not stored")
+            if rule_item.get("entity_type") != "POLICY_RULE":
+                raise RepositoryError("stored policy rule entity type is invalid")
+            if rule_item.get("lifecycle") != RuleLifecycle.APPROVED.value:
+                raise RepositoryError("baseline profile references a rule that is not approved")
+            try:
+                rule = rule_from_dict(dict(rule_item))
+            except (KeyError, TypeError, ValueError) as error:
+                raise RepositoryError("stored policy rule is invalid") from error
+            rules.append(rule)
+            for cited in rule.source_references:
+                key = (cited.source_id, cited.source_version)
+                if key in sources:
+                    continue
+                source_item = self._find_item(
+                    customer_id, f"POLICY_SOURCE#{cited.source_id}#VERSION#{cited.source_version}"
+                )
+                if source_item is None:
+                    raise RepositoryError("baseline rule cites a policy source that is not stored")
+                sources[key] = _source_from_item(source_item)
+        return ProfileBaseline(
+            policy_profile_id=profile.policy_profile_id,
+            version=profile.version,
+            rules=tuple(rules),
+            sources=tuple(sources.values()),
+        )
+
+    def list_profiles(self, *, customer_id: str) -> tuple[dict[str, object], ...]:
+        """Summarise the Profiles published in this customer's partition.
+
+        게시 화면이 기준선을 고르려면 어떤 Profile이 있는지 알아야 한다. current pointer item만
+        읽는다 — 판본 이력까지 돌려주면 목록이 이력으로 가득 차고, 고를 수 있는 것은 각 Profile의
+        현재 판본이다. 정책 원문은 이 응답에 없다.
+        """
+        _non_empty(customer_id, "customer_id")
+        if self._table is None:
+            raise RepositoryError("a read table is required to list policy profiles")
+        summaries: list[dict[str, object]] = []
+        start_key: object | None = None
+        for _ in range(_MAX_QUERY_PAGES):
+            request: dict[str, object] = {
+                "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk)",
+                "ExpressionAttributeValues": {
+                    ":pk": f"CUSTOMER#{customer_id}",
+                    ":sk": "POLICY_PROFILE#",
+                },
+            }
+            if start_key is not None:
+                request["ExclusiveStartKey"] = start_key
+            try:
+                response = self._table.query(**request)
+            except Exception:
+                raise RepositoryError("policy profile listing failed") from None
+            for item in response.get("Items", []):  # type: ignore[union-attr]
+                if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
+                    raise RepositoryError("stored policy profile customer scope is invalid")
+                if "#VERSION#" in str(item.get("SK", "")):
+                    continue
+                try:
+                    profile = profile_from_dict(dict(item))
+                except (KeyError, TypeError, ValueError) as error:
+                    raise RepositoryError("stored policy profile is invalid") from error
+                summaries.append(
+                    {
+                        "policy_profile_id": profile.policy_profile_id,
+                        "version": profile.version,
+                        "rule_count": len(profile.rule_references),
+                        "source_kinds": [kind.value for kind in profile.source_kinds],
+                        "published_at": item.get("published_at"),
+                    }
+                )
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                break
+        else:
+            raise RepositoryError("policy profile listing did not terminate")
+        return tuple(summaries)
+
+    def _find_item(self, customer_id: str, sk: str) -> Mapping[str, object] | None:
+        """Read one item in the caller's partition, returning None when it does not exist.
+
+        `_read_item`은 없음과 읽기 실패를 같은 `RepositoryError`로 합친다. 호출자가 둘을
+        구별해야 하는 곳에서는 이쪽을 쓴다.
+        """
         if self._table is None:
             raise RepositoryError("a read table is required to load policy approval state")
         try:
@@ -739,6 +875,12 @@ class DynamoDbPolicyApprovalRepository:
         except Exception:
             raise RepositoryError("policy approval state read failed") from None
         if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
+            return None
+        return item
+
+    def _read_item(self, customer_id: str, sk: str) -> Mapping[str, object]:
+        item = self._find_item(customer_id, sk)
+        if item is None:
             raise RepositoryError("policy approval state not found")
         return item
 
@@ -1012,15 +1154,18 @@ def _approval_from_item(item: Mapping[str, object]) -> PolicySourceApproval:
 def _source_from_item(item: Mapping[str, object]) -> PolicySource:
     """`POLICY_SOURCE` item을 `PolicySource`로 되돌린다.
 
-    `version`은 write 시 `policy_source_version`으로 저장한다 — item에는 이미 스키마 `version`
-    (schema revision 정수)이 있어 이름이 겹치기 때문이다.
+    판본 필드가 두 이름으로 존재한다. 승인 경로가 쓴 item은 `policy_source_version`을 쓴다 —
+    item에 이미 스키마 `version`(정수)이 있어 이름이 겹치기 때문이다. 반면 운영자 bootstrap이
+    Registry에서 쓴 item은 `PolicySource.to_dict()`를 그대로 펼치므로 `version`이 곧 판본이다.
+    기준선(ISMS-P) Rule이 인용하는 Source는 후자에서 오므로 두 모양을 모두 읽어야 한다.
     """
+    version = item.get("policy_source_version", item.get("version"))
     try:
         return PolicySource(
             source_id=_require_str(item, "source_id"),
             kind=PolicySourceKind(_require_str(item, "kind")),
             title=_require_str(item, "title"),
-            version=_require_str(item, "policy_source_version"),
+            version=version if isinstance(version, str) else "",
             artifact_id=_require_str(item, "artifact_id"),
             content_sha256=_require_str(item, "content_sha256"),
         )

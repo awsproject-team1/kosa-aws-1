@@ -45,6 +45,23 @@ Control Catalog(`apps/backend/policy/control_catalog.py`)가 정의하고, AI는
 Requirement를 제안할 뿐 판정·심각도·점수를 만들지 않는다. 자동 평가할 수 없는 요구사항은
 `UNSUPPORTED`로 보존되며 승인 가능한 Rule이 되지 않는다.
 
+**AUTOMATABLE 후보는 다섯 필드를 모두 가져야 한다** (2026-09-04): `mapped_control_key`,
+`evaluation_type`, `resource_types`, `required_evidence`, `evaluation_rubric`. `ExtractedRequirement`
+계약이 이 다섯을 강제하는데 prompt는 앞의 셋만 요구하고 있었다 — 규칙에도 예시에도
+`required_evidence`와 `evaluation_rubric`이 없었다. 그래서 모델이 낸 AUTOMATABLE은 전부 계약
+위반으로 폐기됐고, 저장된 추출 실행 세 건이 모두 `accepted: 0`이었다(자동 평가 Rule이 하나도
+없는 Profile이 게시된 직접 원인). prompt가 다섯 필드를 모두 요구하도록 고쳤고 `PROMPT_VERSION`을
+`policy-authoring/2026-09-04.2`로 올렸다. **배포 변수 `POLICY_AUTHORING_MODEL_PROFILE_JSON`의
+`prompt_version`을 같은 값으로 바꾸지 않으면 추출기가 생성 단계에서 fail-closed한다.**
+
+**업로드 문서의 구조가 추출 성공률을 좌우한다.** 완결성 게이트는 청크의 모든 locator가
+요구사항이거나 `non_requirement_locators`로 설명되기를 요구하는데, 라이브 측정에서 모델이
+빠뜨리는 unit은 예외 없이 **요구사항이 아닌 unit**이었다 — `##` 소제목과 서두의 적용범위
+문단. 문서를 소제목 없이 쓰고 적용범위를 항목으로 바꾸자 그 실패가 사라졌다. 참고 문서는
+`policies-local/internal-cloud-security-standard.md`(Git 제외)이며 Catalog의 자동 통제 15개를
+모두 덮는다. 남은 실패는 확률적이다 — 20 unit·4 청크 문서에서 실행 성공률 2/8이며, 청크
+하나가 실패하면 문서 전체가 실패하는 현재 설계 때문이다.
+
 추출 Worker는 각 청크의 모든 정규화 unit locator를 반드시 설명하게 한다. locator는 하나 이상의
 Requirement가 인용하거나 `non_requirement_locators`에서 heading/문맥으로 명시돼야 하며, 두 집합의
 중복·누락·청크 밖 locator를 모두 거부한다. 응답 JSON, 후보 하나, 청크 하나라도 검증에 실패하면
@@ -206,6 +223,67 @@ B가 문서 의미와 승인 경계를 소유하지만, public upload와 저장 
 4번은 요청을 durable하게 남긴 뒤 Authoring Queue로 보낸다. 조회는 완결된 실행만 후보를 돌려준다 —
 부분 결과를 보여주면 리뷰어가 그것을 전체로 착각하고 승인한다. 응답에는 정규화 문서의 원문이
 들어가지 않으며, 리뷰어가 보는 문장은 모델이 쓴 재진술과 서버가 만든 `content_sha256`이다.
+
+**아직 결과가 없는 것은 장애가 아니다** (2026-09-04). 후보 조회는 세 가지를 구분해서 답한다.
+
+| 상태 | 응답 |
+| --- | --- |
+| 요청은 있고 manifest가 아직 없음 | `200` + `status: QUEUED` |
+| manifest가 있으나 완결 전 | `200` + manifest의 상태만 |
+| 요청도 manifest도 없음(다른 고객의 판본 포함) | `404 NOT_FOUND` |
+
+예전에는 첫 번째와 세 번째가 모두 `RepositoryError` → `503`이었다. `503`은 "잠시 후 다시"라는
+뜻이라, 업로드 직후부터 worker가 결과를 쓸 때까지 콘솔이 내내 "요청 실패"를 표시했고 추출이 계속
+실패하는 문서에서는 그 표시가 끝나지 않았다. `AuthoringRunNotFound`(=`LookupError`)를 저장소 오류와
+분리해 이 셋을 갈랐다.
+
+## Deleting a policy source version
+
+삭제는 **판본 단위로 완결한다**. 한 판본은 `POLICY_INGESTION#{sid}#VERSION#{ver}` item 하나가
+아니라, 그 item과 `POLICY_SOURCE#{sid}#VERSION#{ver}` 아래의 자식 전부(`#REQUEST`, `#AUTHORING`,
+`#CANDIDATE#*`, `#UNSUPPORTED#*`, `#REJECTED#*`, 그리고 판본 자체의 `PolicySource`)와 S3의 원본·
+정규화 객체로 이루어진다. 예전에는 맨 앞의 하나만 지웠고, 라이브 sandbox에서 한 source에 95개의
+고아 item이 남았다. 남은 `#REQUEST`는 사라진 문서를 가리키는 추출 요청이라 더 나쁘다.
+
+승인된 판본은 여전히 거부한다(`409`) — 승인된 Source는 게시된 Profile의 Rule을 뒷받침하므로
+지우면 근거 추적이 끊어진다.
+
+순서는 복구 가능성으로 정한다. 삭제는 ingestion record가 사라져야 관측되므로 그것이 먼저 간다.
+그 뒤 자식이나 S3 정리가 실패하면 남는 것은 어떤 read 경로에도 보이지 않는 고아 데이터이고,
+반대로 정렬하면 한 번의 실패가 "바이트 없는 살아 있는 문서"를 만든다. 다만 그 중간 실패는 같은
+삭제를 다시 불러도 낫지 않는다(record가 이미 없어 `404`). 고아 정리는 운영 작업으로 남는다.
+
+**Authoring Worker는 사라진 판본의 요청을 건너뛴다.** 삭제가 큐를 되돌리지는 못하므로, 이미
+발행된 메시지는 문서가 없어진 뒤에 도착한다. 그때 예외를 올리면 SQS가 재시도하고 재시도해도 문서는
+돌아오지 않아 결국 DLQ에 쌓인다 — 라이브 sandbox에서 실제로 그렇게 됐다. worker는 `LookupError`를
+잡아 그 요청 하나만 기록과 함께 넘기고 같은 배치의 나머지는 그대로 처리한다.
+
+**하나의 Profile은 여러 문서와 기준선을 담는다** (2026-09-04). 게시 요청은 `sources` 목록으로
+여러 `(source_id, source_version)`을 받고, 선택적으로 `baseline`으로 이미 게시된 Profile
+하나를 받는다. 예전 형태(`source_id`/`source_version` 한 쌍)도 그대로 받으며, 두 형태를 섞으면
+거부한다. 문서 하나 제한은 처음부터 API 경계에만 있었다 — 아래 세 거부 조건은 Rule마다 그
+Rule이 인용한 Source의 승인 record로 판정하므로 문서 수와 무관하다.
+
+기준선(예: ISMS-P Registry)의 Rule에는 **고객 승인 record를 요구하지 않는다.** 고객이 올린
+문서가 아니기 때문이다 — 저장소에 커밋되어 코드 리뷰를 거치고 운영자 배포가 고객 파티션에
+게시한 Registry다. 승인 record를 요구하면 고객이 검토한 적 없는 문서에 대한 승인을 만들어
+내야 하고, 그것은 승인 경계를 지키는 것이 아니라 흉내 내는 것이다. 대신 두 가지를 요구한다.
+
+1. 기준선은 **이미 같은 고객 파티션에 게시된 Profile**이어야 한다. 임의의 Rule 목록은 받지
+   않는다 — 그러면 승인 게이트를 우회하는 입구가 된다. 그 Profile의 Rule은 Catalog가 평가
+   시점에 거는 것과 같은 검사(`entity_type == POLICY_RULE`, lifecycle `APPROVED`)를 통과해야
+   한다. 두 곳의 검사가 다르면 게시는 통과하는데 평가는 실패하는 Profile이 생긴다.
+2. 그 Rule이 인용하는 Source가 함께 읽혀야 한다. 원본을 이름 붙일 수 없는 Rule은 Segment에
+   넣을 수 없고, Segment가 없으면 준비도를 원본별로 나눌 수 없다.
+
+사람의 결정은 그대로 남는다. 기준선을 넣을지는 `PUBLISH_POLICY_PROFILE` 권한을 가진 사람이
+게시 요청에서 명시적으로 고른다. 고를 대상은 `GET /policy-profiles`가 돌려준다.
+
+게시된 Profile은 `segments`에 원본 구분을 기록한다. 보고 단계는 그것으로 준비도를 사내 정책과
+ISMS-P로 나눈다 — **두 점수를 하나로 합치지 않는다**(`docs/CONTRACTS.md`,
+`SegmentReadinessScore`). 모든 Rule의 모든 인용 Source를 이름 붙일 수 있을 때만 Segment를
+만든다. 절반만 분류된 Profile은 나머지를 어느 점수에 넣을지 답할 수 없고, 그 상태로 나눈
+점수는 조용히 일부를 빠뜨린 값이다.
 
 5번과 6번은 서로 다른 operation이다. 승인은 Source/Control/Rule version을 확정할 뿐이고, 그
 Rule들을 실제 평가 경계로 만드는 것은 Profile publication이다. Profile publication은 다음을

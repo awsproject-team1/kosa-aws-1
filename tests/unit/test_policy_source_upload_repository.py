@@ -272,8 +272,10 @@ class DeleteTable:
             return self.pages[index]
         values = kwargs["ExpressionAttributeValues"]
         return {
+            # DynamoDB가 그렇듯 key 속성은 항목에 들어 있다. 접두사 경계 판정이 SK를 읽으므로
+            # fake가 그것을 빼면 그 판정이 테스트되지 않는다.
             "Items": [
-                item
+                {"PK": pk, "SK": sk, **item}
                 for (pk, sk), item in self.items.items()
                 if pk == values[":pk"] and sk.startswith(values[":sk"])
             ]
@@ -282,9 +284,14 @@ class DeleteTable:
     def delete_item(self, **kwargs):
         key = (kwargs["Key"]["PK"], kwargs["Key"]["SK"])
         item = self.items.get(key)
-        expected = kwargs["ExpressionAttributeValues"][":customer"]
-        if item is None or item.get("customer_id") != expected:
-            raise ConditionalCheckFailed()
+        values = kwargs.get("ExpressionAttributeValues")
+        if values is not None:
+            # 조건식이 붙은 삭제만 조건을 강제한다. 자식 item 삭제는 이미 호출자 파티션에 고정된
+            # query가 돌려준 키를 지우므로 조건이 없다.
+            if item is None or item.get("customer_id") != values[":customer"]:
+                raise ConditionalCheckFailed()
+        elif item is None:
+            return
         del self.items[key]
         self.deleted.append(key)
 
@@ -429,6 +436,91 @@ class PolicySourceDeleteTest(unittest.TestCase):
                 customer_id="cust-a", source_id="source-1", source_version="v1"
             )
         self.assertEqual(s3.deleted, [])
+
+    def test_every_item_of_the_version_goes_not_just_the_ingestion_record(self) -> None:
+        """A version is a record plus its authoring items; deleting one of them is not a delete.
+
+        예전에는 `POLICY_INGESTION#` 하나만 지웠고, 후보·추출 요청은 테이블에 남았다. 남은
+        `#REQUEST`는 사라진 문서를 가리키는 추출 요청이라 worker가 계속 그것을 집어 든다.
+        """
+        table, s3 = self._one_source(), DeletingS3()
+        for suffix in ("", "#REQUEST", "#AUTHORING", "#CANDIDATE#001", "#REJECTED#001"):
+            table.items[("CUSTOMER#cust-a", f"POLICY_SOURCE#source-1#VERSION#v1{suffix}")] = {
+                "customer_id": "cust-a"
+            }
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(
+            sorted(sort_key for _pk, sort_key in table.deleted),
+            [
+                "POLICY_INGESTION#source-1#VERSION#v1",
+                "POLICY_SOURCE#source-1#VERSION#v1",
+                "POLICY_SOURCE#source-1#VERSION#v1#AUTHORING",
+                "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATE#001",
+                "POLICY_SOURCE#source-1#VERSION#v1#REJECTED#001",
+                "POLICY_SOURCE#source-1#VERSION#v1#REQUEST",
+            ],
+        )
+        self.assertEqual(table.items, {})
+
+    def test_a_neighbouring_version_that_shares_the_key_prefix_survives(self) -> None:
+        """`v1` is a prefix of `v10`: the boundary is the `#`, not the query."""
+        table, s3 = self._one_source(), DeletingS3()
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#REQUEST")] = {
+            "customer_id": "cust-a"
+        }
+        keep = ("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v10#REQUEST")
+        table.items[keep] = {"customer_id": "cust-a"}
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(list(table.items), [keep])
+
+    def test_another_customers_items_are_never_in_the_delete_set(self) -> None:
+        table, s3 = self._one_source(), DeletingS3()
+        other = ("CUSTOMER#cust-b", "POLICY_SOURCE#source-1#VERSION#v1#REQUEST")
+        table.items[other] = {"customer_id": "cust-b"}
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(list(table.items), [other])
+
+    def test_the_children_go_only_after_the_record_is_observably_gone(self) -> None:
+        table, s3 = self._one_source(), DeletingS3()
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#REQUEST")] = {
+            "customer_id": "cust-a"
+        }
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(table.deleted[0][1], "POLICY_INGESTION#source-1#VERSION#v1")
+
+    def test_an_approved_source_keeps_its_authoring_items_too(self) -> None:
+        table = self._one_source()
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL")] = {
+            "entity_type": "POLICY_SOURCE_APPROVAL"
+        }
+        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATE#001")] = {
+            "customer_id": "cust-a"
+        }
+        s3 = DeletingS3()
+        with self.assertRaises(PolicySourceDeleteForbidden):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(table.deleted, [])
+
+    def test_a_missing_record_does_not_reach_the_child_sweep(self) -> None:
+        """404 경로에서 자식을 지우면 ingestion record 없이 존재하는 seed 판본을 부순다."""
+        table, s3 = DeleteTable(), DeletingS3()
+        seeded = ("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1")
+        table.items[seeded] = {"customer_id": "cust-a"}
+        with self.assertRaises(PolicySourceNotFound):
+            self._repository(table, s3).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+        self.assertEqual(list(table.items), [seeded])
 
     def test_an_artifact_failure_surfaces_after_the_record_is_gone(self) -> None:
         table, s3 = self._one_source(), DeletingS3(fail=True)

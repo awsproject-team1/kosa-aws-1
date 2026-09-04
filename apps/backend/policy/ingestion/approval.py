@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 from packages.contracts import (
     NormalizedPolicyDocument,
     PolicyProfile,
+    PolicyProfileSegment,
     PolicyRule,
     PolicyRuleReference,
     PolicySource,
@@ -115,6 +117,48 @@ def approve_source(
     return approval, approved
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProfileBaseline:
+    """An operator-published Profile whose Rules join a customer Profile unchanged.
+
+    사내 문서와 ISMS-P를 한 Profile에 담으려면 두 종류의 Rule을 합쳐야 하는데, 그 둘은 승인
+    경로가 다르다. 업로드 문서의 Rule은 고객 리뷰어가 원문 문장과 대조해 승인한 것이고
+    (`PolicySourceApproval`), 기준선 Rule은 고객이 올린 적 없는 원문에서 나온다 — 저장소에
+    커밋되어 코드 리뷰를 거치고 배포가 고객 파티션에 게시한 Registry다.
+
+    그래서 기준선 Rule에는 `PolicySourceApproval`을 요구하지 않는다. 요구하면 고객이 검토한
+    적 없는 문서에 대한 승인 record를 만들어 내야 하고, 그것은 승인 경계를 지키는 것이 아니라
+    흉내 내는 것이다. 대신 두 가지를 요구한다.
+
+    1. 기준선은 **이미 같은 고객 파티션에 게시된 Profile**이어야 한다. 임의의 Rule 목록을
+       받지 않는다 — 그러면 승인 게이트를 우회하는 입구가 된다.
+    2. 그 Profile의 모든 Rule이 인용하는 Source가 함께 넘어와야 한다. 원본을 이름 붙일 수
+       없는 Rule은 Segment에 넣을 수 없고, Segment가 없으면 준비도를 원본별로 나눌 수 없다.
+
+    사람의 결정은 그대로 남는다. 기준선을 넣을지는 `PUBLISH_POLICY_PROFILE` 권한을 가진 사람이
+    게시 요청에서 명시적으로 고른다.
+    """
+
+    policy_profile_id: str
+    version: str
+    rules: tuple[PolicyRule, ...]
+    sources: tuple[PolicySource, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("policy_profile_id", "version"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"baseline {name} must be a non-empty string")
+        if not isinstance(self.rules, tuple) or not self.rules:
+            raise ValueError("baseline rules must be a non-empty tuple")
+        if not all(isinstance(rule, PolicyRule) for rule in self.rules):
+            raise TypeError("baseline rules must contain PolicyRule values")
+        if not isinstance(self.sources, tuple):
+            raise TypeError("baseline sources must be a tuple")
+        if not all(isinstance(source, PolicySource) for source in self.sources):
+            raise TypeError("baseline sources must contain PolicySource values")
+
+
 def publish_profile(
     *,
     policy_profile_id: str,
@@ -122,6 +166,7 @@ def publish_profile(
     candidates: Iterable[RuleCandidate],
     approvals: Iterable[PolicySourceApproval],
     sources: Iterable[PolicySource] = (),
+    baseline: ProfileBaseline | None = None,
 ) -> PolicyProfile:
     """Build a Policy Profile from approved rules, refusing anything unapproved.
 
@@ -136,11 +181,25 @@ def publish_profile(
     필드가 없어 대조는 `(artifact_id, content_sha256)`까지다 — 두 값이 같으면 같은 바이트이므로
     판본이 뒤바뀌는 경우는 걸린다. S3 object version까지 못 박는 것은 A의 조건부 write 몫이며
     `PolicySourceApproval.original_binding`이 그 tuple을 그대로 준다.
+
+    `candidates`는 **여러 Source version에서 와도 된다.** 세 거부 조건은 Rule마다 그 Rule이 인용한
+    Source의 승인 record를 찾아 판정하므로, 문서 하나로 제한할 이유가 애초에 없었다. 사내 문서를
+    여러 개 올린 고객은 그 승인 Rule들을 한 Profile로 게시할 수 있다.
+
+    `baseline`은 ISMS-P 같은 운영자 게시 기준선이다. 그 Rule에는 고객 승인 record가 없으므로
+    (`ProfileBaseline` 참조) 위 세 조건 대신 "이미 이 고객 파티션에 게시된 Profile의 Rule이고
+    그 Rule이 인용하는 Source가 함께 넘어왔다"를 요구한다.
+
+    **Segment.** 모든 Rule의 모든 인용 Source를 이름 붙일 수 있으면 원본별 Segment를 함께 만든다.
+    보고 단계는 이것으로 준비도를 사내 정책과 ISMS-P로 나눈다. 하나라도 이름 붙일 수 없으면
+    Segment를 만들지 않는다 — 절반만 분류된 Profile은 나머지를 어느 점수에 넣을지 답할 수 없고,
+    그 상태로 나눈 점수는 조용히 일부를 빠뜨린 값이다.
     """
     approval_index = _approval_index(approvals)
     source_index = {(source.source_id, source.version): source for source in sources}
 
     references: list[PolicyRuleReference] = []
+    rules: list[PolicyRule] = []
     seen: set[tuple[str, str]] = set()
     for candidate in candidates:
         if not isinstance(candidate, RuleCandidate):
@@ -161,6 +220,32 @@ def publish_profile(
             )
         seen.add(key)
         references.append(candidate.reference)
+        rules.append(rule)
+
+    if baseline is not None:
+        baseline_sources = {
+            (source.source_id, source.version): source for source in baseline.sources
+        }
+        for rule in baseline.rules:
+            key = (rule.rule_id, rule.version)
+            if rule.rule_id in {rule_id for rule_id, _ in seen}:
+                # 같은 Rule을 승인 경로와 기준선 양쪽에서 넣으면 어느 승인이 그 Rule을 지탱하는지
+                # 알 수 없다. 판본만 다른 경우도 같은 이유로 막는다.
+                raise ApprovalRejectedError(
+                    ApprovalRejectionCode.DUPLICATE_RULE_REFERENCE,
+                    f"rule {rule.rule_id} comes from both an approved source and the baseline",
+                )
+            for reference in rule.source_references:
+                if (reference.source_id, reference.source_version) not in baseline_sources:
+                    raise ApprovalRejectedError(
+                        ApprovalRejectionCode.SOURCE_NOT_APPROVED,
+                        f"baseline rule {rule.rule_id}@{rule.version} cites a policy source "
+                        "that was not published with the baseline",
+                    )
+            seen.add(key)
+            references.append(PolicyRuleReference(rule_id=rule.rule_id, version=rule.version))
+            rules.append(rule)
+        source_index.update(baseline_sources)
 
     if not references:
         raise ApprovalRejectedError(
@@ -170,6 +255,42 @@ def publish_profile(
         policy_profile_id=policy_profile_id,
         version=version,
         rule_references=tuple(references),
+        segments=_segments(rules, source_index),
+    )
+
+
+def _segments(
+    rules: Iterable[PolicyRule], sources: Mapping[tuple[str, str], PolicySource]
+) -> tuple[PolicyProfileSegment, ...]:
+    """Group the Profile's Rules by the policy source version each one cites.
+
+    Rule 하나가 여러 Source를 인용하면 그 Rule은 모든 해당 Segment에 들어간다. 기준선 Rule
+    대부분이 실제로 사내 체크리스트와 ISMS-P 조항을 함께 인용하며, 그런 Rule은 두 준비도 모두를
+    뒷받침한다. Segment 순서는 Rule 순서에서 처음 등장한 순서다 — 게시 결과가 결정적이어야
+    같은 입력이 같은 item을 만든다.
+    """
+    grouped: dict[tuple[str, str], list[PolicyRuleReference]] = {}
+    order: list[tuple[str, str]] = []
+    for rule in rules:
+        for reference in rule.source_references:
+            key = (reference.source_id, reference.source_version)
+            if key not in sources:
+                # 이름 붙일 수 없는 원본이 하나라도 있으면 분류 자체를 하지 않는다.
+                return ()
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            entry = PolicyRuleReference(rule_id=rule.rule_id, version=rule.version)
+            if entry not in grouped[key]:
+                grouped[key].append(entry)
+    return tuple(
+        PolicyProfileSegment(
+            kind=sources[key].kind,
+            source_id=key[0],
+            source_version=key[1],
+            rule_references=tuple(grouped[key]),
+        )
+        for key in order
     )
 
 
