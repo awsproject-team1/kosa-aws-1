@@ -854,6 +854,32 @@ class HttpApiCorsTest(unittest.TestCase):
         """A Bearer token is sent explicitly; allowing credentials would invite cookie CSRF."""
         self.assertFalse(self.cors["AllowCredentials"])
 
+    def test_the_hosted_ui_redirect_lists_follow_the_same_rule(self) -> None:
+        """A CORS origin the Hosted UI will not redirect to is a login that cannot complete.
+
+        The SPA signs in through Cognito and calls the API from the same origin, so the callback
+        and logout lists must be assembled the way the CORS origins are: one parameter, the local
+        origin appended only in sandbox and only when distinct. Cognito rejects a duplicate too.
+        """
+        template = _template()
+        client = _properties(template["Resources"]["UserPoolClient"])
+        conditions = template["Conditions"]
+        for field_name, parameter in (
+            ("CallbackURLs", "FrontendCallbackUrl"),
+            ("LogoutURLs", "FrontendLogoutUrl"),
+        ):
+            with self.subTest(field=field_name):
+                value = client[field_name]
+                self.assertEqual(len(value), 3, f"{field_name} must be an Fn::If")
+                condition_name, with_local, without_local = value
+                for branch in (with_local, without_local):
+                    self.assertEqual(len(branch), len(set(branch)))
+                self.assertEqual(list(without_local), [parameter])
+                self.assertEqual(list(with_local), [parameter, self.LOCAL_DEVELOPMENT_ORIGIN])
+                condition = json.dumps(conditions[condition_name])
+                self.assertIn(parameter, condition)
+                self.assertIn(self.LOCAL_DEVELOPMENT_ORIGIN, condition)
+
     def test_no_wildcard_origin(self) -> None:
         for branch in self._origin_branches():
             self.assertNotIn("*", branch)
