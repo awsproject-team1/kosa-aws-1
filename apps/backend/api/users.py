@@ -15,6 +15,8 @@ FORCE_CHANGE_PASSWORD flow to hand a first-login challenge to.
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -23,6 +25,48 @@ from apps.backend.auth import Action, AuthorizationDenied, Principal, authorize
 from apps.backend.jobs.errors import RequestValidationError
 
 _ALLOWED_ROLES = ("Admin", "User")
+
+#: The user pool's password policy. The template declares none, so Cognito's default applies; the
+#: security suite checks the template against these so the two cannot drift apart silently. They
+#: are enforced *before* any Cognito write because `admin_set_user_password` is the last of three
+#: calls — a rejection there used to leave a created, grouped user with no usable password.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_REQUIRED_CLASSES: Mapping[str, re.Pattern[str]] = {
+    "uppercase": re.compile(r"[A-Z]"),
+    "lowercase": re.compile(r"[a-z]"),
+    "number": re.compile(r"[0-9]"),
+    # Cognito's own symbol set.
+    "symbol": re.compile(r"[\^$*.\[\]{}()?\"!@#%&/\\,><':;|_~`=+\-]"),
+}
+
+_LOGGER = logging.getLogger("governance.users")
+
+
+def password_policy_violations(password: object) -> tuple[str, ...]:
+    """Name what a candidate initial password is missing. Empty means it satisfies the pool."""
+    if not isinstance(password, str):
+        return ("string",)
+    violations = []
+    if len(password) < PASSWORD_MIN_LENGTH:
+        violations.append(f"at least {PASSWORD_MIN_LENGTH} characters")
+    violations.extend(
+        name
+        for name, pattern in PASSWORD_REQUIRED_CLASSES.items()
+        if pattern.search(password) is None
+    )
+    return tuple(violations)
+
+
+def normalize_email(value: object) -> str:
+    """Trim and lower-case an address so creation and sign-in agree on the username.
+
+    The pool was created without `UsernameConfiguration`, which leaves usernames case-sensitive:
+    an account created as `Jin@…` cannot sign in as `jin@…`. Email is case-insensitive in practice,
+    so the address is canonicalized once here and every Cognito call uses the same spelling.
+    """
+    if not isinstance(value, str) or "@" not in value or not value.strip():
+        raise UserManagementError("email is invalid")
+    return value.strip().lower()
 
 
 class UserManagementError(RequestValidationError):
@@ -42,12 +86,13 @@ class CreateUserRequest:
     temporary_password: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.email, str) or "@" not in self.email:
-            raise UserManagementError("email is invalid")
+        object.__setattr__(self, "email", normalize_email(self.email))
         if self.role not in _ALLOWED_ROLES:
             raise UserManagementError("role must be Admin or User")
-        if not isinstance(self.temporary_password, str) or len(self.temporary_password) < 8:
-            raise UserManagementError("temporary_password must be at least 8 characters")
+        violations = password_policy_violations(self.temporary_password)
+        if violations:
+            # Names only — the message travels to the client and into logs, the password must not.
+            raise UserManagementError("temporary_password must contain " + ", ".join(violations))
 
 
 class CognitoUserClient(Protocol):
@@ -91,16 +136,37 @@ class UserManagementService:
             if _aws_error_code(error) == "UsernameExistsException":
                 raise UserManagementError("a user with that email already exists") from None
             raise
-        self._client.admin_add_user_to_group(
-            UserPoolId=self._pool, Username=request.email, GroupName=request.role
-        )
-        self._client.admin_set_user_password(
-            UserPoolId=self._pool,
-            Username=request.email,
-            Password=request.temporary_password,
-            Permanent=True,
-        )
+        # Three writes, no transaction. If the group or password step fails, the user that the
+        # first call created is real but cannot sign in — and the admin, seeing an error, retries
+        # and gets "already exists". Undo the creation so the pool never holds that half-made
+        # account; the original failure is what gets reported.
+        try:
+            self._client.admin_add_user_to_group(
+                UserPoolId=self._pool, Username=request.email, GroupName=request.role
+            )
+            self._client.admin_set_user_password(
+                UserPoolId=self._pool,
+                Username=request.email,
+                Password=request.temporary_password,
+                Permanent=True,
+            )
+        except Exception as error:
+            self._discard_half_created(request.email)
+            if _aws_error_code(error) == "InvalidPasswordException":
+                raise UserManagementError(
+                    "temporary_password does not satisfy the user pool policy"
+                ) from None
+            raise
         return {"email": request.email, "role": request.role, "customer_id": principal.customer_id}
+
+    def _discard_half_created(self, email: str) -> None:
+        try:
+            self._client.admin_delete_user(UserPoolId=self._pool, Username=email)
+        except Exception as error:  # noqa: BLE001 - the original failure must surface, not this
+            _LOGGER.warning(
+                "could not discard half-created user: %s",
+                _aws_error_code(error) or type(error).__name__,
+            )
 
     def list_users(self, principal: Principal) -> tuple[dict[str, object], ...]:
         _require(principal)
@@ -134,8 +200,7 @@ class UserManagementService:
     ) -> dict[str, object]:
         _require(principal)
         authorize(principal, Action.MANAGE_USERS)
-        if not isinstance(email, str) or "@" not in email:
-            raise UserManagementError("email is invalid")
+        email = normalize_email(email)
         if not isinstance(policy_profile_id, str) or not policy_profile_id.strip():
             raise UserManagementError("policy_profile_id is invalid")
         self._require_same_customer(principal, email)

@@ -47,6 +47,10 @@ class FakeCognito:
         self.passwords: dict[str, tuple[str, bool]] = {}
         self.pages: list[dict] | None = None
         self.get_user_error: Exception | None = None
+        self.add_group_error: Exception | None = None
+        self.set_password_error: Exception | None = None
+        self.delete_error: Exception | None = None
+        self.deleted: list[str] = []
 
     def admin_create_user(self, **kwargs):
         self.calls.append(("admin_create_user", kwargs))
@@ -59,11 +63,15 @@ class FakeCognito:
 
     def admin_add_user_to_group(self, **kwargs):
         self.calls.append(("admin_add_user_to_group", kwargs))
+        if self.add_group_error is not None:
+            raise self.add_group_error
         self.groups[kwargs["Username"]] = kwargs["GroupName"]
         return {}
 
     def admin_set_user_password(self, **kwargs):
         self.calls.append(("admin_set_user_password", kwargs))
+        if self.set_password_error is not None:
+            raise self.set_password_error
         self.passwords[kwargs["Username"]] = (kwargs["Password"], kwargs["Permanent"])
         return {}
 
@@ -71,6 +79,14 @@ class FakeCognito:
         self.calls.append(("admin_update_user_attributes", kwargs))
         attributes = {a["Name"]: a["Value"] for a in kwargs["UserAttributes"]}
         self.profiles[kwargs["Username"]] = attributes["profile"]
+        return {}
+
+    def admin_delete_user(self, **kwargs):
+        self.calls.append(("admin_delete_user", kwargs))
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted.append(kwargs["Username"])
+        self.users.pop(kwargs["Username"], None)
         return {}
 
     def admin_get_user(self, **kwargs):
@@ -87,11 +103,6 @@ class FakeCognito:
                 {"Name": "custom:customer_id", "Value": self.users[email]},
             ],
         }
-
-    def admin_delete_user(self, **kwargs):
-        self.calls.append(("admin_delete_user", kwargs))
-        self.users.pop(kwargs["Username"], None)
-        return {}
 
     def list_users(self, **kwargs):
         self.calls.append(("list_users", kwargs))
@@ -123,7 +134,9 @@ class CreateUserTest(unittest.TestCase):
         client = FakeCognito()
         result = _service(client).create_user(
             ADMIN,
-            CreateUserRequest(email="new@example.com", role="User", temporary_password="pw-123456"),
+            CreateUserRequest(
+                email="new@example.com", role="User", temporary_password="Tmp!2026ok"
+            ),
         )
         self.assertEqual(client.users["new@example.com"], "cust-a")
         self.assertEqual(result["customer_id"], "cust-a")
@@ -133,7 +146,9 @@ class CreateUserTest(unittest.TestCase):
         client = FakeCognito()
         _service(client).create_user(
             ADMIN,
-            CreateUserRequest(email="new@example.com", role="User", temporary_password="pw-123456"),
+            CreateUserRequest(
+                email="new@example.com", role="User", temporary_password="Tmp!2026ok"
+            ),
         )
         _method, kwargs = client.calls[0]
         attributes = {a["Name"]: a["Value"] for a in kwargs["UserAttributes"]}
@@ -152,7 +167,7 @@ class CreateUserTest(unittest.TestCase):
             _service(client).create_user(
                 ADMIN,
                 CreateUserRequest(
-                    email="victim@example.com", role="Admin", temporary_password="pw-123456"
+                    email="victim@example.com", role="Admin", temporary_password="Tmp!2026ok"
                 ),
             )
         self.assertEqual(client.passwords, {})
@@ -164,7 +179,7 @@ class CreateUserTest(unittest.TestCase):
             _service(client).create_user(
                 USER,
                 CreateUserRequest(
-                    email="new@example.com", role="User", temporary_password="pw-123456"
+                    email="new@example.com", role="User", temporary_password="Tmp!2026ok"
                 ),
             )
         self.assertEqual(client.calls, [])
@@ -172,7 +187,7 @@ class CreateUserTest(unittest.TestCase):
     def test_the_request_rejects_an_unknown_role(self) -> None:
         with self.assertRaises(UserManagementError):
             CreateUserRequest(
-                email="new@example.com", role="Superuser", temporary_password="pw-123456"
+                email="new@example.com", role="Superuser", temporary_password="Tmp!2026ok"
             )
 
     def test_the_request_rejects_a_short_password(self) -> None:
@@ -183,9 +198,11 @@ class CreateUserTest(unittest.TestCase):
         client = FakeCognito()
         result = _service(client).create_user(
             ADMIN,
-            CreateUserRequest(email="new@example.com", role="User", temporary_password="pw-123456"),
+            CreateUserRequest(
+                email="new@example.com", role="User", temporary_password="Tmp!2026ok"
+            ),
         )
-        self.assertNotIn("pw-123456", str(result))
+        self.assertNotIn("Tmp!2026ok", str(result))
 
 
 class ListUsersTest(unittest.TestCase):
@@ -359,6 +376,104 @@ class ServiceConstructionTest(unittest.TestCase):
     def test_a_principal_is_required(self) -> None:
         with self.assertRaises(TypeError):
             _service(FakeCognito()).list_users("admin")  # type: ignore[arg-type]
+
+
+class InitialPasswordPolicyTest(unittest.TestCase):
+    """The pool rejects a weak password on the *last* of three Cognito writes.
+
+    Checked up front, a weak password is a 400 and nothing is written. Left to Cognito, the user
+    and the group already exist by the time it says no — a real account with no usable password,
+    which the admin then cannot re-create ("already exists") and the user cannot sign in to.
+    """
+
+    def test_a_policy_compliant_password_is_accepted(self) -> None:
+        CreateUserRequest(email="a@example.com", role="User", temporary_password="Tmp!2026ok")
+
+    def test_each_missing_class_is_named_without_echoing_the_password(self) -> None:
+        for password, missing in (
+            ("tmp!2026ok", "uppercase"),
+            ("TMP!2026OK", "lowercase"),
+            ("Tmp!okokok", "number"),
+            ("Tmp2026okok", "symbol"),
+            ("T!2o", "at least 8 characters"),
+        ):
+            with self.subTest(missing=missing):
+                with self.assertRaises(UserManagementError) as raised:
+                    CreateUserRequest(
+                        email="a@example.com", role="User", temporary_password=password
+                    )
+                self.assertIn(missing, str(raised.exception))
+                self.assertNotIn(password, str(raised.exception))
+
+    def test_the_backend_rule_matches_cognito_defaults(self) -> None:
+        from apps.backend.api.users import PASSWORD_MIN_LENGTH, PASSWORD_REQUIRED_CLASSES
+
+        self.assertEqual(PASSWORD_MIN_LENGTH, 8)
+        self.assertEqual(
+            set(PASSWORD_REQUIRED_CLASSES), {"uppercase", "lowercase", "number", "symbol"}
+        )
+
+
+class EmailNormalizationTest(unittest.TestCase):
+    """Usernames in this pool are case-sensitive; an address must have one spelling everywhere."""
+
+    def test_the_address_is_trimmed_and_lower_cased_on_create(self) -> None:
+        client = FakeCognito()
+        result = _service(client).create_user(
+            ADMIN,
+            CreateUserRequest(
+                email="  Jin.Test@Example.COM ", role="User", temporary_password="Tmp!2026ok"
+            ),
+        )
+        self.assertEqual(result["email"], "jin.test@example.com")
+        self.assertIn("jin.test@example.com", client.users)
+        for _method, kwargs in client.calls:
+            self.assertEqual(kwargs.get("Username"), "jin.test@example.com")
+
+    def test_profile_assignment_finds_the_user_regardless_of_typed_case(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        _service(client).assign_profile(ADMIN, email="A@Example.com", policy_profile_id="p-1")
+        self.assertEqual(client.profiles["a@example.com"], "p-1")
+
+
+class HalfCreatedUserRollbackTest(unittest.TestCase):
+    """If the group or password write fails, the account the first write made is removed."""
+
+    def _create(self, client: FakeCognito):
+        return _service(client).create_user(
+            ADMIN,
+            CreateUserRequest(
+                email="new@example.com", role="User", temporary_password="Tmp!2026ok"
+            ),
+        )
+
+    def test_a_password_rejected_by_the_pool_removes_the_user_and_is_a_client_error(self) -> None:
+        client = FakeCognito()
+        client.set_password_error = ClientError("InvalidPasswordException")
+        with self.assertRaises(UserManagementError):
+            self._create(client)
+        self.assertEqual(client.deleted, ["new@example.com"])
+        self.assertNotIn("new@example.com", client.users)
+
+    def test_a_group_failure_removes_the_user_and_surfaces_the_real_error(self) -> None:
+        client = FakeCognito()
+        client.add_group_error = ClientError("ResourceNotFoundException")
+        with self.assertRaises(ClientError):
+            self._create(client)
+        self.assertEqual(client.deleted, ["new@example.com"])
+        self.assertNotIn("admin_set_user_password", [m for m, _ in client.calls])
+
+    def test_a_failed_rollback_does_not_hide_the_original_failure(self) -> None:
+        client = FakeCognito()
+        client.set_password_error = ClientError("InvalidPasswordException")
+        client.delete_error = ClientError("AccessDeniedException")
+        with self.assertRaises(UserManagementError):
+            self._create(client)
+
+    def test_a_clean_create_deletes_nothing(self) -> None:
+        client = FakeCognito()
+        self._create(client)
+        self.assertEqual(client.deleted, [])
 
 
 if __name__ == "__main__":

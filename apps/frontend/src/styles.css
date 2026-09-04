@@ -141,3 +141,7 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 9px; border-bottom: 1px solid var(--line); font-size: 13px; }
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
 code { background: var(--panel-2); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+
+/* inline text-button: an action that reads as part of a sentence (session reset hint) */
+button.linklike { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+.topbar button.ghost { padding: 5px 10px; font-size: 12px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer; }
