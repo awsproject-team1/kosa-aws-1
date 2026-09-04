@@ -290,14 +290,24 @@ class ResponseGateTest(unittest.TestCase):
         with self.assertRaisesRegex(BedrockExtractionError, "invalid requirement shape"):
             _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_every_policy_unit_must_be_classified(self) -> None:
+    def test_unclassified_policy_units_are_absorbed_not_rejected(self) -> None:
+        """모델이 일부 unit을 분류하지 않아도 추출된 요구사항은 유지한다.
+
+        실제 응답은 모든 unit을 빠짐없이 분류하지 못하는 경우가 흔하다. 미분류를 하드 실패로
+        다루면 문서 전체 추출이 죽는다(503 회귀). 미분류 unit은 요구사항이 아닌 것으로 흡수하고,
+        경계 위반(locator 중복·판정 시도)만 실패로 남긴다.
+        """
+        # VALID_REQUIREMENT는 STORAGE를 다루고, DATABASE만 비요구로 선언한다.
+        # governance/facilities 두 unit은 어느 쪽에도 없어 미분류로 남는다.
         payload = {
             "requirements": [VALID_REQUIREMENT],
             "non_requirement_locators": [DATABASE_LOCATOR],
         }
 
-        with self.assertRaisesRegex(BedrockExtractionError, "classify every policy unit"):
-            _extract(payload, complete=False)
+        requirements, _client = _extract(payload, complete=False)
+
+        self.assertEqual(len(requirements), 1)
+        self.assertEqual(requirements[0].source_locators, (STORAGE_LOCATOR,))
 
     def test_a_locator_cannot_be_requirement_and_non_requirement(self) -> None:
         payload = _response([VALID_REQUIREMENT])
