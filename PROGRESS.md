@@ -1663,3 +1663,9 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     감지해 무엇을 눌러야 하는지 경고 이름과 함께 말하고, 문서 목록의 그 행에는 '검토 확인'
     버튼만 보인다(확인 전에는 추출을 걸 수 없으므로). 확인은 이어서 추출까지 건다 — 사용자에게
     두 번 누를 이유가 없다.
+  - **route가 없어서 브라우저에는 `Failed to fetch`로만 보였다.** handler에 분기를 넣고 콘솔에
+    버튼을 달았는데도 눌리지 않았다 — API Gateway route를 CloudFormation에 선언하지 않아 호출이
+    handler까지 가지 못했다. `PostPolicySourceConfirmReviewRoute`를 추가했다. 기존 회귀 테스트는
+    `_policy_source_path()` helper가 처리하는 경로를 사람이 유지하는 allow-list로 제외하고
+    있어서 이 누락을 잡지 못했으므로, **helper가 받는 action 집합을 소스에서 파생해 각각 route가
+    있는지 확인하는 테스트**를 더했다(목록을 갱신하는 것을 잊어도 걸린다).

@@ -1204,6 +1204,17 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # 병합 셀·불규칙 행 같은 경고로 `REVIEW_REQUIRED`에 멈춘 문서를 사람이 확인해 `READY`로
+  # 올린다. 이 route가 없으면 게이트를 통과할 방법이 아예 없어 문서가 그 자리에 영구히 멈춘다
+  # (라이브에서 ISMS-P 엑셀이 그랬다). Rule 승인과 같은 관리자 전용 JWT 인가다.
+  PostPolicySourceConfirmReviewRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /policy-sources/{sourceId}/versions/{version}/confirm-review"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   # 검토된 Source/Rule version 승인과 승인된 Rule의 Policy Profile 게시(관리자 전용, JWT 인가).
   PostPolicySourceApproveRoute:
     Type: AWS::ApiGatewayV2::Route

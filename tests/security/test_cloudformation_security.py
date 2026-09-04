@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -462,6 +463,26 @@ class CloudFormationSecurityTest(unittest.TestCase):
                     f"handler serves {route.describe()} but no API Gateway route declares it",
                 )
 
+    def test_every_policy_source_action_the_helper_accepts_has_a_route(self) -> None:
+        """`_policy_source_path()`가 받는 action은 전부 API Gateway route를 가져야 한다.
+
+        위 `helper_served` 목록은 사람이 유지하므로, helper에 action을 더하고 route를 안 만들면
+        그 목록에 넣지 않는 한 아무 테스트도 걸리지 않는다. 그런데 route 없는 action은 브라우저에
+        `Failed to fetch`로만 보인다 — handler에 코드가 있어도 호출이 API Gateway를 넘지 못한다.
+        `confirm-review`가 실제로 그렇게 배포됐다. 그래서 목록이 아니라 helper의 소스에서 파생한다.
+        """
+        source = HANDLER_PATH.read_text(encoding="utf-8")
+        actions = re.search(r"parts\[5\] not in \{([^}]*)\}", source)
+        assert actions is not None, "the policy-source action allow-list moved"
+        declared = {f"{method} {path}" for method, path in self._declared_routes()}
+        for action in re.findall(r'"([^"]+)"', actions.group(1)):
+            with self.subTest(action=action):
+                base = "/policy-sources/{sourceId}/versions/{version}"
+                self.assertTrue(
+                    any(route.endswith(f"{base}/{action}") for route in declared),
+                    f"handler accepts /{action} but no API Gateway route declares it",
+                )
+
     def test_no_route_is_declared_that_no_handler_branch_serves(self) -> None:
         """반대 방향도 막는다 — 선언됐지만 handler가 처리하지 않는 route는 런타임 404다.
 
@@ -478,6 +499,7 @@ class CloudFormationSecurityTest(unittest.TestCase):
             "POST /policy-sources/{sourceId}/versions/{version}/approve",
             "POST /policy-sources/{sourceId}/versions/{version}/candidates",
             "GET /policy-sources/{sourceId}/versions/{version}/candidates",
+            "POST /policy-sources/{sourceId}/versions/{version}/confirm-review",
         }
         for method, path in sorted(self._declared_routes()):
             if f"{method} {path}" in helper_served:
