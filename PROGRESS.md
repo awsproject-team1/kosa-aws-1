@@ -2,6 +2,15 @@
 
 ## Current
 
+- **관리자 정책 후보 조회가 Backend의 전체 검토 형식을 표시한다.** 기존 SPA는
+  `CandidateReviewEntry`에서 Rule ID/version·요약·매핑 사유만 보여 상세 요구사항, resource/evidence,
+  평가 rubric·semantics, 서버 생성 locator/hash를 숨겼고 `unsupported`/`rejected` 결과도 렌더링하지
+  않았다. 이제 승인 가능·미지원·검증 거절을 별도 섹션으로 표시하고, 집계와 rejection code를 함께
+  보여준다. READY 결과는 opaque cursor가 끝날 때까지 읽어 50건 초과 후보를 누락하지 않으며,
+  `QUEUED`뿐 아니라 `PROCESSING`도 진행 중으로 처리한다. Frontend 응답 타입이 Backend 검토 Contract의
+  전체 필드와 일치하는 회귀 테스트를 추가했다. 검증: frontend production build, 관련
+  contract/unit/integration 31건, Ruff, diff check 통과.
+
 - **PR #72 리뷰 후속(2026-09-04, `f574c0c`·`34b5f05`, #72에 포함돼 `dev` 병합):** `assign_profile`이 호출자가 준
   email을 검증 없이 Cognito에 넘겨 다른 customer 사용자의 `profile`을 덮어쓸 수 있던 테넌트 구멍을 닫았다
   (`admin_get_user`로 대상의 `custom:customer_id` 확인, 없는 사용자와 남의 사용자는 같은 403).

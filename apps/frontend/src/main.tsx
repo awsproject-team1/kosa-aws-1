@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -18,8 +18,54 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 type OrchestrationDecision = { intent: string; rationale: string; answer: string | null; selector: (Record<string, unknown> & { repository_id?: string; policy_profile_id?: string }) | null; requires_confirmation: boolean };
 type NormalizedDoc = { source_id: string; source_version: string; status: string; source_format: string | null; byte_size: number; units: { locator: string }[]; warnings: string[]; failure_code: string | null };
 type UploadSession = { source_id: string; source_version: string; upload_url: string };
-type Candidate = { rule_id: string; rule_version: string; classification: string; requirement_summary: string; mapping_reason: string; control_key: string; evaluation_type: string; proposed_severity: string; resource_types: string[] };
-type CandidatePage = { status: string; counts: Record<string, number> | null; candidates: Candidate[]; unsupported: { requirement_summary?: string; requirement?: string }[]; rejected: unknown[]; cursor: string | null };
+type SourceReference = { source_id: string; source_version: string; locator: string; content_sha256: string };
+type ExtractedRequirement = {
+  source_locators: string[];
+  requirement: string;
+  requirement_summary: string;
+  classification: string;
+  mapping_reason: string;
+  mapped_control_key: string | null;
+  resource_types: string[];
+  evaluation_type: string | null;
+  applicability_semantics: string | null;
+  required_evidence: string[];
+  optional_evidence: string[];
+  evaluation_rubric: string | null;
+  severity_guidance: string | null;
+  exception_semantics: string | null;
+  compensating_control_semantics: string | null;
+};
+type Candidate = {
+  rule_id: string;
+  rule_version: string;
+  classification: string;
+  requirement: string;
+  requirement_summary: string;
+  mapping_reason: string;
+  control_key: string;
+  evaluation_type: string;
+  proposed_severity: string;
+  locators: SourceReference[];
+  resource_types: string[];
+  required_evidence: string[];
+  optional_evidence: string[];
+  applicability_semantics: string | null;
+  evaluation_rubric: string | null;
+  severity_guidance: string | null;
+  exception_semantics: string | null;
+  compensating_control_semantics: string | null;
+};
+type RejectedRequirement = { requirement: ExtractedRequirement; rejection_codes: string[] };
+type CandidatePage = {
+  status: string;
+  counts: Record<string, number> | null;
+  provenance: Record<string, unknown> | null;
+  candidates: Candidate[];
+  unsupported: ExtractedRequirement[];
+  rejected: RejectedRequirement[];
+  cursor: string | null;
+};
 type Report = { assessment_id: string; results: { resource_id: string; rule_id: string; perspective: string; status: string; score: number }[]; findings: { finding_id: string; resource_id: string; rule_id: string; status: string; severity: string; score: number; rationale: string }[]; readiness_score: { score: number } | null; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number } };
 
 /* =========================================================================
@@ -123,6 +169,40 @@ async function api<T>(path: string, token: string, init?: RequestInit): Promise<
 async function putPresigned(url: string, file: File, contentType: string) {
   const res = await fetch(url, { method: "PUT", headers: { "content-type": contentType }, body: file });
   if (!res.ok) throw new Error(`원본 업로드 실패 (${res.status})`);
+}
+
+const AUTHORING_PENDING = new Set(["QUEUED", "PROCESSING"]);
+
+async function fetchCandidatePage(token: string, sourceId: string, sourceVersion: string, cursor?: string): Promise<CandidatePage> {
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) query.set("cursor", cursor);
+  return api<CandidatePage>(`/policy-sources/${enc(sourceId)}/versions/${enc(sourceVersion)}/candidates?${query}`, token);
+}
+
+/** Read a completed immutable authoring run to the end instead of silently dropping page 2+. */
+async function fetchAllCandidateResults(token: string, sourceId: string, sourceVersion: string): Promise<CandidatePage> {
+  let first: CandidatePage | null = null;
+  const candidates: Candidate[] = [];
+  const unsupported: ExtractedRequirement[] = [];
+  const rejected: RejectedRequirement[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  for (;;) {
+    const page = await fetchCandidatePage(token, sourceId, sourceVersion, cursor);
+    if (page.status !== "READY") return page;
+    first ??= page;
+    candidates.push(...page.candidates);
+    unsupported.push(...page.unsupported);
+    rejected.push(...page.rejected);
+    if (!page.cursor) break;
+    if (seenCursors.has(page.cursor)) throw new Error("후보 조회 cursor가 반복되었습니다.");
+    seenCursors.add(page.cursor);
+    cursor = page.cursor;
+  }
+
+  if (!first) throw new Error("후보 조회 결과가 비어 있습니다.");
+  return { ...first, candidates, unsupported, rejected, cursor: null };
 }
 
 /* per-user profile assignment + known profiles (client-side for the demo) */
@@ -268,6 +348,84 @@ const FORMATS = [
   { label: "XLSX", mt: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
   { label: "DOCX", mt: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
 ];
+
+function CandidateField({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
+  return <div className={wide ? "candidate-field wide" : "candidate-field"}><dt>{label}</dt><dd>{children}</dd></div>;
+}
+
+function TextOrDash({ value }: { value: string | null }) {
+  return <>{value?.trim() ? value : "-"}</>;
+}
+
+function CodeValues({ values }: { values: string[] }) {
+  return values.length > 0
+    ? <ul className="candidate-values">{values.map(value => <li key={value}><code>{value}</code></li>)}</ul>
+    : <>-</>;
+}
+
+function CandidateCard({ candidate, checked, onToggle }: { candidate: Candidate; checked: boolean; onToggle: () => void }) {
+  return <article className="candidate">
+    <div className="candidate-heading">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        aria-label={`${candidate.requirement_summary} 후보 선택`}
+      />
+      <div className="candidate-heading-main">
+        <div className="candidate-identity">
+          <span>Rule ID</span><code>{candidate.rule_id}</code>
+          <span>Version</span><code>{candidate.rule_version}</code>
+        </div>
+        <div className="candidate-badges" aria-label="후보 분류">
+          <span className="badge">{candidate.classification}</span>
+          <span className="badge severity">{candidate.proposed_severity}</span>
+          <span className="badge">{candidate.evaluation_type}</span>
+        </div>
+        <h3>{candidate.requirement_summary}</h3>
+      </div>
+    </div>
+    <dl className="candidate-fields compact">
+      <CandidateField label="Control" wide><code>{candidate.control_key}</code></CandidateField>
+      <CandidateField label="요구사항" wide>{candidate.requirement}</CandidateField>
+      <CandidateField label="매핑 근거" wide>{candidate.mapping_reason}</CandidateField>
+    </dl>
+    <details className="candidate-details">
+      <summary>평가 형식과 근거 상세 보기</summary>
+      <dl className="candidate-fields">
+        <CandidateField label="Resource types"><CodeValues values={candidate.resource_types} /></CandidateField>
+        <CandidateField label="Required evidence"><CodeValues values={candidate.required_evidence} /></CandidateField>
+        <CandidateField label="Optional evidence"><CodeValues values={candidate.optional_evidence} /></CandidateField>
+        <CandidateField label="평가 기준" wide><TextOrDash value={candidate.evaluation_rubric} /></CandidateField>
+        <CandidateField label="적용 조건" wide><TextOrDash value={candidate.applicability_semantics} /></CandidateField>
+        <CandidateField label="심각도 근거" wide><TextOrDash value={candidate.severity_guidance} /></CandidateField>
+        <CandidateField label="예외 조건" wide><TextOrDash value={candidate.exception_semantics} /></CandidateField>
+        <CandidateField label="보완 통제" wide><TextOrDash value={candidate.compensating_control_semantics} /></CandidateField>
+        <CandidateField label="정책 근거" wide>
+          {candidate.locators.length > 0 ? <ul className="candidate-references">{candidate.locators.map(reference => <li key={`${reference.source_id}:${reference.source_version}:${reference.locator}`}>
+            <code>{reference.source_id}@{reference.source_version}#{reference.locator}</code>
+            <span>SHA-256 {reference.content_sha256}</span>
+          </li>)}</ul> : "-"}
+        </CandidateField>
+      </dl>
+    </details>
+  </article>;
+}
+
+function NonApprovableCard({ kind, requirement, rejectionCodes = [] }: { kind: "UNSUPPORTED" | "REJECTED"; requirement: ExtractedRequirement; rejectionCodes?: string[] }) {
+  return <article className={`candidate non-approvable ${kind.toLowerCase()}`}>
+    <div className="candidate-heading-main">
+      <div className="candidate-badges"><span className="badge">{kind}</span>{rejectionCodes.map(code => <span className="badge" key={code}>{code}</span>)}</div>
+      <h3>{requirement.requirement_summary}</h3>
+    </div>
+    <dl className="candidate-fields compact">
+      <CandidateField label="요구사항" wide>{requirement.requirement}</CandidateField>
+      <CandidateField label="분류 근거" wide>{requirement.mapping_reason}</CandidateField>
+      <CandidateField label="원문 위치" wide><CodeValues values={requirement.source_locators} /></CandidateField>
+    </dl>
+  </article>;
+}
+
 function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
   type Doc = { source_id: string; source_version: string; filename: string; status: string; source_format: string | null; byte_size: number | null; unit_count: number };
   type CartItem = { rule_id: string; rule_version: string; source_id: string; source_version: string; severity: string; control_key: string };
@@ -340,17 +498,23 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       for (let i = 0; i < 40; i++) {
         await sleep(3000);
         let p: CandidatePage;
-        try { p = await api<CandidatePage>(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates?limit=50`, session.accessToken); }
+        try { p = await fetchCandidatePage(session.accessToken, s.source_id, s.source_version); }
         catch { obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active", meta: `대기 중 (${i + 1}/40)` }); continue; }
         obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active", meta: `${p.status} (${i + 1}/40)` });
-        if (p.candidates.length > 0 || (p.status !== "QUEUED" && p.status !== "RUNNING")) { result = p; break; }
+        if (!AUTHORING_PENDING.has(p.status)) {
+          result = p.status === "READY"
+            ? await fetchAllCandidateResults(session.accessToken, s.source_id, s.source_version)
+            : p;
+          break;
+        }
       }
       if (!result) throw new Error("후보 추출이 2분 내에 완료되지 않았습니다. 잠시 후 문서 목록에서 '후보 조회'를 누르세요.");
+      if (result.status === "FAILED") throw new Error("후보 추출에 실패했습니다. 문서 상태와 Authoring Worker 로그를 확인하세요.");
       obs.patchPipeline("poll", "done"); obs.lightNode("authoring", "done");
       obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "done", meta: `${result.candidates.length} 후보` });
       setCandidates(c => ({ ...c, [s.source_id]: result! }));
       setOpenDoc(s.source_id);
-      setNotice(`추출 완료 · 후보 ${result.candidates.length}개. 필요한 후보를 담아 Profile로 만드세요.`);
+      setNotice(`추출 완료 · 승인 가능 ${result.candidates.length}개 · 미지원 ${result.unsupported.length}개 · 거절 ${result.rejected.length}개.`);
       await refresh();
     } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
     finally { setRunning(false); }
@@ -359,16 +523,16 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   async function loadCandidates(d: Doc) {
     setError(null); setOpenDoc(d.source_id);
     try {
-      const p = await api<CandidatePage>(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/candidates?limit=50`, session.accessToken);
+      const p = await fetchAllCandidateResults(session.accessToken, d.source_id, d.source_version);
       setCandidates(c => ({ ...c, [d.source_id]: p }));
     } catch (e) { setError(`후보 조회 실패: ${(e as Error).message}`); }
   }
 
   const inCart = (rid: string, rv: string) => cart.some(i => i.rule_id === rid && i.rule_version === rv);
-  function toggleCart(d: Doc, c: Candidate) {
+  function toggleCart(sourceId: string, c: Candidate) {
     setCart(prev => inCart(c.rule_id, c.rule_version)
       ? prev.filter(i => !(i.rule_id === c.rule_id && i.rule_version === c.rule_version))
-      : [...prev, { rule_id: c.rule_id, rule_version: c.rule_version, source_id: d.source_id, source_version: d.source_version, severity: c.proposed_severity, control_key: c.control_key }]);
+      : [...prev, { rule_id: c.rule_id, rule_version: c.rule_version, source_id: sourceId, source_version: c.rule_version, severity: c.proposed_severity, control_key: c.control_key }]);
   }
 
   async function publishCart() {
@@ -417,14 +581,48 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
           {docs.length === 0 && <tr><td colSpan={5} className="obs-empty">업로드된 문서가 없습니다.</td></tr>}</tbody></table>
     </div>
 
-    {openDoc && candidates[openDoc] && <div className="card">
-      <h2>후보 — 필요한 것만 장바구니에 담기</h2>
-      <p className="hint">심각도는 Catalog가 정한 읽기 전용 값입니다. 여러 문서에서 담아 하나의 Profile로 만들 수 있습니다.</p>
-      {candidates[openDoc].candidates.length === 0 && <p className="obs-empty">후보 없음 (상태 {candidates[openDoc].status}).</p>}
-      {candidates[openDoc].candidates.map(c => <div key={`${c.rule_id}@${c.rule_version}`} className="candidate">
-        <label><input type="checkbox" checked={inCart(c.rule_id, c.rule_version)} onChange={() => toggleCart(docs.find(d => d.source_id === openDoc)!, c)} />
-          <span><strong>{c.rule_id}@{c.rule_version}</strong><span className="badge">{c.proposed_severity}</span><span className="badge">{c.control_key}</span><br />{c.requirement_summary}<br /><span className="hint">{c.mapping_reason}</span></span></label>
-      </div>)}
+    {openDoc && candidates[openDoc] && <div className="card candidate-results">
+      <h2>정책 Rule 후보 조회 결과</h2>
+      <p className="hint">백엔드의 CandidateReviewEntry 형식을 그대로 표시합니다. 심각도는 Catalog가 정한 읽기 전용 값이며, 승인 가능한 후보만 장바구니에 담을 수 있습니다.</p>
+      <div className="candidate-summary" aria-label="후보 추출 집계">
+        <span><strong>{candidates[openDoc].status}</strong><small>상태</small></span>
+        <span><strong>{candidates[openDoc].counts?.accepted ?? candidates[openDoc].candidates.filter(c => c.classification === "AUTOMATABLE").length}</strong><small>자동 평가</small></span>
+        <span><strong>{candidates[openDoc].counts?.manual ?? candidates[openDoc].candidates.filter(c => c.classification === "MANUAL").length}</strong><small>수동 검토</small></span>
+        <span><strong>{candidates[openDoc].counts?.unsupported ?? candidates[openDoc].unsupported.length}</strong><small>미지원</small></span>
+        <span><strong>{candidates[openDoc].counts?.rejected ?? candidates[openDoc].rejected.length}</strong><small>거절</small></span>
+      </div>
+
+      <section className="candidate-section" aria-labelledby="approvable-candidates">
+        <h3 id="approvable-candidates">승인 가능한 후보 ({candidates[openDoc].candidates.length})</h3>
+        {candidates[openDoc].candidates.length === 0 && <p className="obs-empty">승인 가능한 후보가 없습니다.</p>}
+        {candidates[openDoc].candidates.map(c => <CandidateCard
+          key={`${c.rule_id}@${c.rule_version}`}
+          candidate={c}
+          checked={inCart(c.rule_id, c.rule_version)}
+          onToggle={() => toggleCart(openDoc, c)}
+        />)}
+      </section>
+
+      <section className="candidate-section" aria-labelledby="unsupported-candidates">
+        <h3 id="unsupported-candidates">미지원 요구사항 ({candidates[openDoc].unsupported.length})</h3>
+        {candidates[openDoc].unsupported.length === 0 && <p className="obs-empty">미지원으로 분류된 요구사항이 없습니다.</p>}
+        {candidates[openDoc].unsupported.map((requirement, index) => <NonApprovableCard
+          key={`${requirement.requirement_summary}:${index}`}
+          kind="UNSUPPORTED"
+          requirement={requirement}
+        />)}
+      </section>
+
+      <section className="candidate-section" aria-labelledby="rejected-candidates">
+        <h3 id="rejected-candidates">검증 거절 ({candidates[openDoc].rejected.length})</h3>
+        {candidates[openDoc].rejected.length === 0 && <p className="obs-empty">검증에서 거절된 요구사항이 없습니다.</p>}
+        {candidates[openDoc].rejected.map((entry, index) => <NonApprovableCard
+          key={`${entry.requirement.requirement_summary}:${index}`}
+          kind="REJECTED"
+          requirement={entry.requirement}
+          rejectionCodes={entry.rejection_codes}
+        />)}
+      </section>
     </div>}
 
     <div className="card">
