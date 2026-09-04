@@ -547,23 +547,35 @@ def _with_complete_evaluation_plan(
     # **Perspective는 Rule마다 다르다.** IaC 전용 Rule은 IAC만, AWS 전용은 AWS_ACTUAL만, MANUAL은
     # governance 좌표의 MANUAL만 만든다. 세 관점을 모든 Rule에 계획하면 채워질 수 없는 좌표가
     # 생겨 coverage가 100%가 되지 않고 readiness가 영원히 null로 남는다.
-    planned = tuple(
-        PlannedEvaluation(
-            resource_id=work.resource_id,
-            rule_id=rule.rule_id,
-            perspective=perspective,
-        )
-        for work in works
-        for rule in context_resolver.resolve(
-            policy_profile_id=work.policy_profile_id,
-            phase=work.phase,
-            resource_type=work.resource_type,
-            expected_profile_version=work.expected_profile_version,
-        ).rules
-        for perspective in _planner_for(work.resource_type).perspectives_for(rule)
-    )
+    #
+    # 한 resource work에 적용 가능한 Rule이 하나도 없는 것("no applicable policy rules")은 오류가
+    # 아니라 "이 Profile은 이 리소스 유형을 평가하지 않는다"는 답이다 (예: MANUAL-only Profile을
+    # S3 리소스에 적용). 그 work는 좌표 없이 넘어가고, governance 좌표나 다른 리소스가 계획을
+    # 채운다. 전체 계획이 비었을 때만 진짜 오류다 — worker가 무한 재시도로 큐를 막지 않도록,
+    # 이 예외를 lambda까지 전파시키지 않는다.
+    planned_list: list[PlannedEvaluation] = []
+    for work in works:
+        try:
+            resolved = context_resolver.resolve(
+                policy_profile_id=work.policy_profile_id,
+                phase=work.phase,
+                resource_type=work.resource_type,
+                expected_profile_version=work.expected_profile_version,
+            )
+        except NoApplicablePolicyRulesError:
+            continue
+        for rule in resolved.rules:
+            for perspective in _planner_for(work.resource_type).perspectives_for(rule):
+                planned_list.append(
+                    PlannedEvaluation(
+                        resource_id=work.resource_id,
+                        rule_id=rule.rule_id,
+                        perspective=perspective,
+                    )
+                )
+    planned = tuple(planned_list)
     if not planned:
-        raise RuntimeError("assessment resolves no evaluable coordinates")
+        raise NoApplicablePolicyRulesError("assessment resolves no evaluable coordinates")
     if len(set(planned)) != len(planned):
         raise RuntimeError("multi-resource assessment plan contains duplicate coordinates")
     return tuple(replace(work, planned_coordinates=planned) for work in works)

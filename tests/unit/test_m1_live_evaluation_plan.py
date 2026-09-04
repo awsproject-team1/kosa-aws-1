@@ -159,6 +159,37 @@ class LivePlanFollowsThePlannerTest(unittest.TestCase):
             },
         )
 
+    def test_a_manual_only_profile_plans_the_governance_coordinate_and_skips_the_resource(
+        self,
+    ) -> None:
+        """A MANUAL-only Profile (no rule applies to the S3 resource) must not crash the worker.
+
+        This is the live failure: a customer Profile made of only ORGANIZATIONAL_CONTROL MANUAL
+        rules resolved no applicable S3 rules, `_with_complete_evaluation_plan` raised, and the
+        assessment message retried forever into the DLQ. The S3 work is now skipped and the
+        governance MANUAL coordinate carries the plan.
+        """
+        resolver = Resolver({GOVERNANCE_ASSESSMENT_RESOURCE_TYPE: (MANUAL,)})  # no S3 rule
+        works = _with_governance_work((_work(),), resolver, repository_id=REPOSITORY)
+        works = _with_complete_evaluation_plan(works, resolver)
+        self.assertEqual(
+            _coordinates(works),
+            {
+                PlannedEvaluation(
+                    resource_id=f"governance:{REPOSITORY}",
+                    rule_id=MANUAL.rule_id,
+                    perspective=EvaluationPerspective.MANUAL,
+                )
+            },
+        )
+
+    def test_a_profile_that_evaluates_nothing_is_a_no_applicable_rules_error(self) -> None:
+        """When not one work resolves any rule, the plan is empty and the assessment is refused
+        with NoApplicablePolicyRulesError — the honest 'nothing to evaluate' answer, not a crash
+        the worker would retry."""
+        with self.assertRaises(NoApplicablePolicyRulesError):
+            _with_complete_evaluation_plan((_work(),), Resolver({}))
+
 
 class GovernanceWorkTest(unittest.TestCase):
     def test_no_manual_rule_means_no_governance_work(self) -> None:
