@@ -72,9 +72,9 @@ def context():
     return build_remediation_context(
         finding=finding(),
         snapshot=snapshot(),
-        iac_result=result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
-        actual_result=result(
-            perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL
+        results=(
+            result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
+            result(perspective=EvaluationPerspective.AWS_ACTUAL, status=EvaluationStatus.FAIL),
         ),
     )
 
@@ -117,10 +117,12 @@ class RemediationContextTest(unittest.TestCase):
             build_remediation_context(
                 finding=finding(),
                 snapshot=snapshot(),
-                iac_result=mismatched,
-                actual_result=result(
-                    perspective=EvaluationPerspective.AWS_ACTUAL,
-                    status=EvaluationStatus.FAIL,
+                results=(
+                    mismatched,
+                    result(
+                        perspective=EvaluationPerspective.AWS_ACTUAL,
+                        status=EvaluationStatus.FAIL,
+                    ),
                 ),
             )
 
@@ -139,6 +141,81 @@ class RemediationContextTest(unittest.TestCase):
             context=context(), plan_input=plan_input(refreshed=False)
         )
         self.assertIs(readiness.status, DeploymentReadinessStatus.BLOCKED)
+
+
+class SinglePerspectiveContextTest(unittest.TestCase):
+    """authoring이 만든 Rule은 `evaluation_type` 하나를 선언하므로 관점 하나만 평가된다.
+
+    두 관점을 모두 요구하면 고객이 업로드한 정책에서 나온 Finding은 조치 경로에 들어가지도
+    못한다 — 라이브에서 그 요구가 503으로 나타났다. 어느 관점이 있고 없는지로 조치 유형을 가르는
+    것은 `RemediationPolicy.decide()`의 일이다.
+    """
+
+    @staticmethod
+    def _finding(perspective: EvaluationPerspective) -> Finding:
+        source = result(perspective=perspective, status=EvaluationStatus.FAIL)
+        return Finding(
+            finding_id="finding-001",
+            resource_id=source.resource_id,
+            rule_id=source.rule_id,
+            rule_version=source.rule_version,
+            perspective=perspective,
+            status=source.status,
+            severity=source.severity,
+            score=source.score,
+            rationale=source.rationale,
+            evidence_references=("evidence:finding",),
+        )
+
+    def test_one_perspective_is_enough_when_it_is_the_findings_own(self) -> None:
+        """`IAC` Rule에는 Actual 판정이 애초에 없다."""
+        built = build_remediation_context(
+            finding=self._finding(EvaluationPerspective.IAC),
+            snapshot=snapshot(),
+            results=(result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),),
+        )
+
+        self.assertIn("evidence:finding", built.evidence_references)
+
+    def test_results_without_the_findings_perspective_are_refused(self) -> None:
+        """Finding이 나온 그 관점의 결과가 없으면 저장된 증거가 서로 어긋난 것이다."""
+        with self.assertRaisesRegex(RemediationContextError, "finding's perspective"):
+            build_remediation_context(
+                finding=self._finding(EvaluationPerspective.IAC),
+                snapshot=snapshot(),
+                results=(
+                    result(
+                        perspective=EvaluationPerspective.AWS_ACTUAL,
+                        status=EvaluationStatus.FAIL,
+                    ),
+                ),
+            )
+
+    def test_a_drift_finding_still_requires_both_perspectives(self) -> None:
+        """DRIFT는 저장된 판정이 아니라 두 관점의 비교다. 하나만으로는 뒷받침되지 않는다."""
+        with self.assertRaisesRegex(RemediationContextError, "both the IAC and AWS_ACTUAL"):
+            build_remediation_context(
+                finding=finding(),
+                snapshot=snapshot(),
+                results=(
+                    result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
+                ),
+            )
+
+    def test_no_results_at_all_are_refused(self) -> None:
+        with self.assertRaises(RemediationContextError):
+            build_remediation_context(finding=finding(), snapshot=snapshot(), results=())
+
+    def test_a_repeated_perspective_is_refused(self) -> None:
+        with self.assertRaisesRegex(RemediationContextError, "repeat a perspective"):
+            build_remediation_context(
+                finding=finding(),
+                snapshot=snapshot(),
+                results=(
+                    result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
+                    result(perspective=EvaluationPerspective.IAC, status=EvaluationStatus.FAIL),
+                ),
+            )
 
 
 if __name__ == "__main__":

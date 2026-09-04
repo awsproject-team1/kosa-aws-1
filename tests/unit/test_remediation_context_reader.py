@@ -228,10 +228,32 @@ class RemediationContextReaderTest(unittest.TestCase):
                 customer_id=CUSTOMER, finding_id=FINDING_ID
             )
 
-    def test_missing_iac_result_fails_closed(self):
+    def test_a_rule_evaluated_in_one_perspective_still_reaches_the_policy(self):
+        """`AWS` Rule에는 IaC 판정이 없다. 저장소가 그것을 오류로 막으면 정책이 판단할 기회가 없다.
+
+        Finding은 `AWS_ACTUAL` 관점이므로 IaC 결과가 없어도 증거는 완결돼 있다. Patch와 동기화를
+        가를 수 없다는 판단은 `RemediationPolicy.decide()`가 `MANUAL_REVIEW`로 내린다.
+        """
         table = Table()
         del table.items[
             f"ASSESSMENT#{ASSESSMENT}#RESULT#tfsbx-bucket#RULE#S3-PUBLIC-001#PERSPECTIVE#IAC"
+        ]
+        reader = DynamoDbRemediationContextReader(table)
+
+        context = reader.get_context(customer_id=CUSTOMER, finding_id=FINDING_ID)
+        target = reader.get_target(customer_id=CUSTOMER, finding_id=FINDING_ID)
+
+        self.assertEqual(context.finding.finding_id, FINDING_ID)
+        # 세 필드는 한 묶음이다. IaC 판정이 없으면 출처도 없다.
+        self.assertIsNone(target.iac_status)
+        self.assertIsNone(target.iac_perspective)
+        self.assertIsNone(target.iac_commit_sha)
+
+    def test_the_findings_own_perspective_is_still_required(self):
+        """Finding이 나온 그 결과가 없으면 저장된 증거가 서로 어긋난 것이다."""
+        table = Table()
+        del table.items[
+            f"ASSESSMENT#{ASSESSMENT}#RESULT#tfsbx-bucket#RULE#S3-PUBLIC-001#PERSPECTIVE#AWS_ACTUAL"
         ]
 
         with self.assertRaises(StoredDataError):

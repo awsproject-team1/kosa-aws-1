@@ -70,39 +70,39 @@ class DynamoDbRemediationContextReader:
 
     def get_context(self, *, customer_id: str, finding_id: str) -> RemediationContext:
         finding, assessment_id = self._load_finding(customer_id, finding_id)
-        iac_result = self._result(customer_id, assessment_id, finding, EvaluationPerspective.IAC)
-        actual_result = self._result(
-            customer_id, assessment_id, finding, EvaluationPerspective.AWS_ACTUAL
-        )
+        results = self._results(customer_id, assessment_id, finding)
         snapshot = self._snapshot(customer_id, assessment_id, finding)
         try:
             return build_remediation_context(
                 finding=finding,
                 snapshot=snapshot,
-                iac_result=iac_result,
-                actual_result=actual_result,
+                results=tuple(results.values()),
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("stored remediation evidence is invalid") from error
 
     def get_target(self, *, customer_id: str, finding_id: str) -> RemediationTarget:
         finding, assessment_id = self._load_finding(customer_id, finding_id)
-        iac_result = self._result(customer_id, assessment_id, finding, EvaluationPerspective.IAC)
-        actual_result = self._result(
-            customer_id, assessment_id, finding, EvaluationPerspective.AWS_ACTUAL
-        )
+        results = self._results(customer_id, assessment_id, finding)
+        iac_result = results.get(EvaluationPerspective.IAC)
+        actual_result = results.get(EvaluationPerspective.AWS_ACTUAL)
         try:
             return RemediationTarget(
                 resource_id=finding.resource_id,
-                resource_type=_resource_type(actual_result),
+                resource_type=_resource_type(actual_result or results[finding.perspective]),
                 rule_id=finding.rule_id,
                 rule_version=finding.rule_version,
-                # IAC 관점이 평가됐다는 것은 이 리소스가 Terraform으로 관리된다는 뜻이다.
-                # M1 live 경로는 Terraform repository의 commit에서 IaC를 읽어 평가한다.
+                # M1 live 경로는 Terraform repository의 commit에서 IaC를 읽어 평가하므로, 이
+                # 경로에 닿은 리소스는 Terraform이 관리한다.
                 terraform_managed=True,
-                iac_status=iac_result.status,
-                iac_perspective=EvaluationPerspective.IAC,
-                iac_commit_sha=iac_result.assessed_commit_sha,
+                # IaC 판정은 **있을 때만** 싣는다. authoring이 만든 Rule은 `evaluation_type`
+                # 하나를 선언하므로 그 관점만 평가된다 — `AWS` Rule에는 IaC 판정이 없다.
+                # Contract가 세 필드를 한 묶음으로 요구하므로 함께 비운다. 그 경우
+                # `RemediationPolicy.decide()`는 Actual Finding을 `MANUAL_REVIEW`로 돌린다:
+                # IaC가 이미 옳은지 모르면 Patch와 동기화를 가를 수 없다.
+                iac_status=None if iac_result is None else iac_result.status,
+                iac_perspective=None if iac_result is None else EvaluationPerspective.IAC,
+                iac_commit_sha=None if iac_result is None else iac_result.assessed_commit_sha,
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("stored remediation target is invalid") from error
@@ -129,16 +129,47 @@ class DynamoDbRemediationContextReader:
         matches = [item for item in items if isinstance(item, Mapping)]
         if not matches:
             raise StoredDataError("remediation finding not found")
-        if len(matches) != 1:
-            # 같은 finding_id가 여러 Assessment에 있으면 어느 증거 집합을 조치 대상으로
-            # 삼을지 모호하다. deterministic ID가 충돌하지 않는 한 일어나지 않지만, 조용히
-            # 아무거나 고르는 대신 fail-closed한다.
-            raise StoredDataError("remediation finding is ambiguous")
-        item = matches[0]
+        item = _current_occurrence(matches, finding_id)
         assessment_id = _string(item.get("assessment_id"), "assessment_id")
         if item.get("customer_id") != customer_id:
             raise StoredDataError("remediation finding scope is invalid")
         return _finding_from_item(item, finding_id), assessment_id
+
+    def _results(
+        self, customer_id: str, assessment_id: str, finding: Finding
+    ) -> dict[EvaluationPerspective, EvaluationResult]:
+        """Load whichever machine perspectives this Rule was actually evaluated in.
+
+        예전에는 `IAC`와 `AWS_ACTUAL` 결과가 **둘 다** 있어야 조치 요청이 진행됐다. legacy
+        fixture Rule은 `evaluation_type`이 없어 세 관점 모두 평가되므로 그 가정이 보이지 않았지만,
+        authoring이 만든 Rule은 관점 하나를 선언한다 — `AWS` Rule에는 IaC 판정이, `IAC` Rule에는
+        Actual 판정이 애초에 없다. 그래서 고객이 업로드한 정책에서 나온 Finding은 모두 조치
+        요청에서 503이 됐다(라이브에서 그렇게 멈췄다).
+
+        관점의 유무는 정책이 답할 질문이지 저장소가 막을 일이 아니다. 여기서는 있는 것을 모아
+        주고, Patch·동기화·사람 검토의 판단은 `RemediationPolicy.decide()`에 남긴다. 다만 Finding
+        자신의 관점 결과는 반드시 있어야 한다 — 그것이 이 Finding이 나온 근거이고, 없다면 저장된
+        증거가 서로 어긋난 것이다.
+        """
+        results: dict[EvaluationPerspective, EvaluationResult] = {}
+        for perspective in (EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL):
+            result = self._result(customer_id, assessment_id, finding, perspective, required=False)
+            if result is not None:
+                results[perspective] = result
+        if finding.perspective is EvaluationPerspective.DRIFT:
+            # DRIFT Finding은 두 관점의 비교다. 하나라도 없으면 비교를 뒷받침할 수 없다.
+            for perspective in (EvaluationPerspective.IAC, EvaluationPerspective.AWS_ACTUAL):
+                if perspective not in results:
+                    raise StoredDataError(
+                        f"remediation evidence is missing the {perspective.value} result"
+                    )
+        elif finding.perspective not in results:
+            required = self._result(
+                customer_id, assessment_id, finding, finding.perspective, required=True
+            )
+            assert required is not None
+            results[finding.perspective] = required
+        return results
 
     def _result(
         self,
@@ -146,7 +177,9 @@ class DynamoDbRemediationContextReader:
         assessment_id: str,
         finding: Finding,
         perspective: EvaluationPerspective,
-    ) -> EvaluationResult:
+        *,
+        required: bool = True,
+    ) -> EvaluationResult | None:
         sk = (
             f"ASSESSMENT#{assessment_id}#RESULT#{finding.resource_id}"
             f"#RULE#{finding.rule_id}#PERSPECTIVE#{perspective.value}"
@@ -158,6 +191,8 @@ class DynamoDbRemediationContextReader:
         except Exception:
             raise RepositoryError("remediation evaluation result read failed") from None
         if not isinstance(item, Mapping):
+            if not required:
+                return None
             raise StoredDataError(f"remediation evidence is missing the {perspective.value} result")
         if item.get("customer_id") != customer_id or item.get("assessment_id") != assessment_id:
             raise StoredDataError("remediation evaluation result scope is invalid")
@@ -206,9 +241,13 @@ class DynamoDbRemediationContextReader:
             raise StoredDataError("remediation snapshot is invalid") from error
 
 
-def _resource_type(actual_result: EvaluationResult) -> str:
-    """The resource type the Actual read observed, restored from its evidence locator."""
-    for reference in actual_result.evidence_references:
+def _resource_type(result: EvaluationResult) -> str:
+    """The resource type the evaluation observed, restored from its evidence locator.
+
+    Actual 결과가 있으면 그것을 쓴다 — AWS 조회 locator가 유형을 가장 곧게 말한다. `IAC` 전용
+    Rule에는 Actual 결과가 없으므로 Finding 자신의 결과에서 읽는다.
+    """
+    for reference in result.evidence_references:
         resource_type = resource_type_for_evidence_reference(reference)
         if resource_type is not None:
             return resource_type
@@ -228,6 +267,40 @@ def _snapshot_digest(*, customer_id: str, repository_id: str, commit_sha: str) -
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _current_occurrence(
+    matches: list[Mapping[str, object]], finding_id: str
+) -> Mapping[str, object]:
+    """Return the newest occurrence of one violation across the Assessments that found it.
+
+    Finding ID는 결정적이다 — 같은 Resource × Rule × Perspective는 어느 Assessment에서 평가하든
+    같은 ID를 갖는다. 그것이 의도다: ID는 **위반**을 가리키지 실행을 가리키지 않는다. 그래서 같은
+    대상을 두 번 평가하면 같은 ID의 finding item이 둘 생긴다.
+
+    예전에는 그것을 모호함으로 보고 거부했고, 그 결과 **같은 리소스를 두 번째로 평가한 순간부터
+    조치 요청이 영영 503**이었다. 라이브에서 finding ID 24개 중 11개가 그 상태였다.
+
+    조치는 지금의 상태를 고치는 일이므로 가장 최근 증거를 쓴다. 순서는 평가 시각으로 정하고,
+    같은 시각이면 assessment_id로 결정적으로 가른다 — 같은 요청이 매번 같은 증거를 고른다.
+
+    provenance(`evaluated_at`)가 없는 옛 record는 순서를 매길 수 없다. remediation은 어차피
+    provenance를 요구하므로(ADR-0011), 있는 것들 중에서 고른다. 하나도 없으면 예전처럼 하나일
+    때만 통과시키고 여럿이면 거부한다 — 무엇이 현재인지 말할 근거가 없다.
+
+    모든 후보는 같은 위반이어야 한다. 좌표가 서로 다르면 ID가 진짜로 충돌한 것이므로 fail-closed다.
+    """
+    coordinates = {
+        (item.get("resource_id"), item.get("rule_id"), item.get("perspective")) for item in matches
+    }
+    if len(coordinates) != 1:
+        raise StoredDataError("remediation finding is ambiguous")
+    dated = [item for item in matches if isinstance(item.get("evaluated_at"), str)]
+    if not dated:
+        if len(matches) != 1:
+            raise StoredDataError("remediation finding is ambiguous")
+        return matches[0]
+    return max(dated, key=lambda item: (str(item["evaluated_at"]), str(item.get("assessment_id"))))
 
 
 def _finding_from_item(item: Mapping[str, object], finding_id: str) -> Finding:

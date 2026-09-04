@@ -2,6 +2,54 @@
 
 ## Current
 
+- **조치 요청의 503 두 가지를 고쳤다 (2026-09-04).** 콘솔에서 Finding의 "조치 요청"이
+  `503 EXECUTION_ERROR`로 떨어졌다. 라이브 데이터로 재현해 원인을 갈랐다.
+  - **원인 1 — 같은 위반을 두 번 평가하면 조회가 모호해졌다.** Finding ID는 결정적이라
+    `Resource × Rule × Perspective`가 같으면 어느 Assessment에서든 같은 ID다(그것이 의도다 —
+    ID는 위반을 가리키지 실행을 가리키지 않는다). `_load_finding`은 그 중복을 모호함으로 보고
+    거부했고, 결과적으로 **같은 리소스를 두 번째로 평가한 순간부터 조치 요청이 영영 503**이었다.
+    라이브에서 Finding ID 24개 중 11개가 그 상태였다. 조치는 지금 상태를 고치는 일이므로 가장
+    최근 증거를 쓴다(평가 시각 순, 동시각이면 assessment_id로 결정적으로 가름). 좌표가 서로 다른
+    진짜 충돌은 그대로 거부한다.
+  - **원인 2 — 관점 하나로 평가된 Rule이 조치 경로에 들어가지 못했다.** 조치 context/target이
+    `IAC`와 `AWS_ACTUAL` 결과를 **둘 다** 요구했다. legacy fixture Rule은 `evaluation_type`이 없어
+    세 관점 모두 평가되므로 그 가정이 드러나지 않았지만, authoring이 만든 Rule은 관점 하나를
+    선언한다 — `AWS` Rule에는 IaC 판정이, `IAC` Rule에는 Actual 판정이 애초에 없다. 그래서
+    **고객이 업로드한 정책에서 나온 Finding은 전부** 503이었다. 저장소는 있는 결과를 모아 주고,
+    Patch·동기화·사람 검토의 판단은 `RemediationPolicy.decide()`에 남긴다(`RemediationTarget`의
+    IaC 세 필드는 이미 optional이며, 없으면 Actual Finding은 `MANUAL_REVIEW`가 된다). DRIFT
+    Finding은 두 관점의 비교이므로 여전히 둘 다 요구한다.
+  - **결과.** 라이브 Finding 4건이 모두 503 없이 판정에 도달한다(FAIL 3 + MANUAL 1).
+  - **남은 문제 — authored Rule은 조치 허용 범위에 없다.** `RemediationPolicy`는
+    `fixtures/rules/remediation.json`의 `(rule_id, version)`으로 eligibility를 찾는데, authored
+    Rule ID(`CUST-…@ver-…`)는 고객이 업로드해야 생기므로 커밋해 둘 수 없다. 그래서 네 건 모두
+    `MANUAL_REVIEW`다. eligibility는 Rule ID가 아니라 **Control**의 성질(Catalog가 이미 아는
+    automation support)로 판정하는 것이 맞아 보이지만, 그것은 자동 PR을 여는 경계를 넓히는
+    결정이라 사람 판단으로 남긴다.
+
+- **부분 준수 리소스의 점수를 라이브로 다시 측정했다 (2026-09-04, 배포된 prompt).** 시연에서
+  0·100 이외의 점수를 보고 싶다는 요청에 대한 근거다. 각 5회.
+
+  | Case | 기대 status | score | status |
+  | --- | --- | --- | --- |
+  | S3 4개 중 2개 차단 | FAIL | 0 ×5 | FAIL |
+  | S3 4개 중 3개 차단 | FAIL | 100 ×5 | **PASS (오탐)** |
+  | ALB HTTPS + HTTP 동시 | FAIL | 100 ×5 | **PASS (오탐)** |
+  | RDS private + 개방 SG | FAIL | 0 ×5 | FAIL |
+
+  **모델은 등급을 매기지 않는다.** prompt는 이미 "부분 충족은 양 극단 사이에 두라"고 명시하는데도
+  0과 100만 낸다(편차 0, 자기일치 1.0). 계약과 파이프라인은 연속 점수를 그대로 나르므로
+  (`ScoringMode.CONTINUOUS`) 이것은 파이프라인 결함이 아니라 모델 행동이다. Anchor 도입은
+  ADR-0003에 따라 사람 판단 사항이며 여기서 정하지 않는다.
+
+  **시연에서 0·100 아닌 점수를 보여주는 방법은 Readiness Score다.** 그것은 모델이 아니라 우리
+  코드가 severity 가중 평균으로 계산한다. 현재 `profile@v1`은 CRITICAL 1 + MEDIUM 2가 모두 FAIL이라
+  0.0이지만, 세 위반 중 하나만 고치면 비이진 값이 나온다 — 로깅만 켜면 `(0·8 + 0·2 + 100·2)/12 =
+  16.67`, ACL까지 고치면 `33.33`, 공개 차단만 고치면 `66.67`이다.
+
+  **오탐 2건이 점수 입도보다 중요하다.** "네 플래그 모두"·"HTTPS 전용"을 요구하는 Rule에서 일부만
+  충족한 리소스를 PASS로 판정한다. 이것은 별도 과제로 남긴다.
+
 - **GitHub installation token을 worker가 스스로 발급한다 (2026-09-04).** 지금까지 Secrets Manager에는
   1시간짜리 token이 들어 있었고, 만료되면 worker가 `LOAD_IAC`에서 401로 죽었다 — 평가를 돌릴 때마다
   사람이 재발급해 넣어야 했다. 자격의 정체를 token에서 **App private key**로 바꿔, 필요할 때
