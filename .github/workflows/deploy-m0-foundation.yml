@@ -341,8 +341,14 @@ jobs:
       - name: Deploy approved CloudFormation artifact
         run: |
           set -euo pipefail
+          # 템플릿을 S3로 올려서 배포한다. `aws cloudformation deploy`는 인라인 본문이 51,200
+          # 바이트를 넘으면 거부하고, 이 템플릿은 자기 보안 결정의 근거를 주석으로 담고 있어
+          # 계속 자란다 — 실제로 한도를 넘어 배포가 죽었다. prefix는 배포 role이 이미 쓰기
+          # 권한을 가진 경로라 bootstrap role을 다시 손대지 않아도 된다.
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/m0-foundation.yaml \
+            --s3-bucket "${LAMBDA_CODE_S3_BUCKET}" \
+            --s3-prefix lambda/m0 \
             --stack-name "${STACK_NAME}" \
             --role-arn "${CLOUDFORMATION_EXECUTION_ROLE_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM \
