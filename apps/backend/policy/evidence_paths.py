@@ -87,6 +87,35 @@ def missing_document_paths(document: object, paths: Sequence[str]) -> tuple[str,
     return tuple(path for path in paths if not document_path_present(document, path))
 
 
+def document_path_values(document: object, path: str) -> tuple[object, ...]:
+    """Resolve one declared path to the concrete values it names, expanding lists.
+
+    `document_path_present`가 "채워졌는가"에 답한다면 이것은 "무엇이 들어 있는가"에 답한다. 선언된
+    술어를 판정하려면 값이 필요하고, 그 값을 꺼내는 규칙은 존재 검사와 **같은 경로 문법**이어야
+    한다 — 두 곳이 다르게 해석하면 pre-flight를 통과한 경로가 판정에서 없는 것이 된다.
+    """
+    return tuple(_values(document, parse_document_path(path), 0))
+
+
+def _values(value: object, segments: tuple[_Segment, ...], index: int) -> list[object]:
+    if index == len(segments):
+        return [value]
+    segment = segments[index]
+    if not isinstance(value, Mapping) or segment.key not in value:
+        return []
+    child = value[segment.key]
+    if child is None:
+        return []
+    if not segment.expands_list:
+        return _values(child, segments, index + 1)
+    if isinstance(child, (str, bytes)) or not isinstance(child, Sequence):
+        return []
+    resolved: list[object] = []
+    for entry in child:
+        resolved.extend(_values(entry, segments, index + 1))
+    return resolved
+
+
 def _present(value: object, segments: tuple[_Segment, ...], index: int) -> bool:
     if index == len(segments):
         return value is not None

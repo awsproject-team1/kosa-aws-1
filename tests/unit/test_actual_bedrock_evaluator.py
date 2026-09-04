@@ -219,16 +219,50 @@ class EvidencePreflightGateTest(unittest.TestCase):
         self.assertNotIn("BlockPublicAcls", result.rationale)
         self.assertIn("attributes.public_access_block.IgnorePublicAcls", result.rationale)
 
-    def test_complete_evidence_reaches_the_model(self) -> None:
+    def test_a_decidable_capability_is_settled_without_the_model(self) -> None:
+        """`S3.PUBLIC_ACCESS_BLOCK`은 술어가 선언돼 있다 — 네 플래그가 모두 참인지는 사실이다.
+
+        사실을 모델에게 물으면 정확도·점수 입도·비용을 한꺼번에 잃는다
+        (`apps/backend/assessment/deterministic.py`). 근거는 그대로 남는다.
+        """
         rule = _authored_rule()
         client = Client()
+
         result = ActualBedrockEvaluator(
             evidence_loader=_loader(FULL_BLOCK), client=client
         ).evaluate(
             resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
         )
+
         self.assertIs(result.status, EvaluationStatus.PASS)
-        self.assertEqual(client.calls, 1)
+        self.assertEqual(result.score, 100.0)
+        self.assertEqual(client.calls, 0)
+        self.assertIn("aws:s3:bucket/logs-bucket#read-resource", result.evidence_references)
+
+    def test_partial_compliance_fails_with_a_graded_score(self) -> None:
+        """모델은 이 입력을 PASS로 봤다(라이브 측정). 비율은 계산이므로 75가 나온다."""
+        rule = _authored_rule()
+        client = Client()
+
+        result = ActualBedrockEvaluator(
+            evidence_loader=_loader(
+                {
+                    "public_access_block": {
+                        "BlockPublicAcls": True,
+                        "IgnorePublicAcls": True,
+                        "BlockPublicPolicy": True,
+                        "RestrictPublicBuckets": False,
+                    }
+                }
+            ),
+            client=client,
+        ).evaluate(
+            resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
+        )
+
+        self.assertIs(result.status, EvaluationStatus.FAIL)
+        self.assertEqual(result.score, 75.0)
+        self.assertEqual(client.calls, 0)
 
     def test_a_legacy_rule_has_no_gate(self) -> None:
         """legacy Rule은 evidence capability가 없으므로 이전과 같이 모델이 판단한다."""

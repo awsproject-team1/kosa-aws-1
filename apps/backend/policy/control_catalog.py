@@ -29,6 +29,7 @@ from packages.contracts import (
     ControlAutomationSupport,
     EvaluationPerspective,
     EvidenceCapabilityBinding,
+    EvidenceExpectation,
     GovernanceControl,
     GovernanceControlCatalog,
     RuleEvaluationType,
@@ -49,8 +50,18 @@ MANUAL_CONTROL_KEY = "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW"
 
 
 def _aws(
-    capability_key: str, resource_type: str, *document_paths: str
+    capability_key: str,
+    resource_type: str,
+    *document_paths: str,
+    expectation: EvidenceExpectation | None = None,
+    expected_value: str | None = None,
+    expectation_paths: tuple[str, ...] = (),
 ) -> EvidenceCapabilityBinding:
+    """Declare one AWS_ACTUAL capability, and — when its evidence decides the control — how.
+
+    `expectation`이 있으면 Runtime이 모델 없이 그 capability를 판정한다. 없으면 지금처럼 모델이
+    문서를 읽고 판단한다. 근거만으로 통제를 **확정할 수 있을 때만** 붙인다.
+    """
     for path in document_paths:
         parse_document_path(path)  # 오타 난 경로는 import 시점에 실패한다.
     return EvidenceCapabilityBinding(
@@ -58,6 +69,9 @@ def _aws(
         perspective=EvaluationPerspective.AWS_ACTUAL,
         resource_type=resource_type,
         document_paths=document_paths,
+        expectation=expectation,
+        expected_value=expected_value,
+        expectation_paths=expectation_paths,
     )
 
 
@@ -103,6 +117,7 @@ _S3_BLOCK_PUBLIC_ACCESS = GovernanceControl(
             "attributes.public_access_block.IgnorePublicAcls",
             "attributes.public_access_block.BlockPublicPolicy",
             "attributes.public_access_block.RestrictPublicBuckets",
+            expectation=EvidenceExpectation.ALL_TRUE,
         ),
         _iac(
             "S3.IAC_PUBLIC_ACCESS_BLOCK",
@@ -135,7 +150,12 @@ _S3_ENCRYPTION_AT_REST = GovernanceControl(
         RuleEvaluationType.HYBRID,
     ),
     available_evidence_capabilities=(
-        _aws("S3.ENCRYPTION", S3_RESOURCE_TYPE, "attributes.encryption.Rules[]"),
+        _aws(
+            "S3.ENCRYPTION",
+            S3_RESOURCE_TYPE,
+            "attributes.encryption.Rules[]",
+            expectation=EvidenceExpectation.NON_EMPTY,
+        ),
         _iac(
             "S3.IAC_ENCRYPTION",
             S3_RESOURCE_TYPE,
@@ -296,6 +316,9 @@ _EC2_EBS_ENCRYPTION = GovernanceControl(
             EC2_INSTANCE_RESOURCE_TYPE,
             "attributes.volumes[].VolumeId",
             "attributes.volumes[].Encrypted",
+            expectation=EvidenceExpectation.ALL_TRUE,
+            # VolumeId는 근거의 좌표이지 기준이 아니다. 판정 대상은 암호화 여부뿐이다.
+            expectation_paths=("attributes.volumes[].Encrypted",),
         ),
         _iac(
             "EC2.IAC_VOLUME_ENCRYPTION",
@@ -378,6 +401,7 @@ _RDS_NOT_PUBLIC = GovernanceControl(
             "RDS.PUBLICLY_ACCESSIBLE",
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.PubliclyAccessible",
+            expectation=EvidenceExpectation.ALL_FALSE,
         ),
         _iac(
             "RDS.IAC_PUBLICLY_ACCESSIBLE",
@@ -446,6 +470,7 @@ _RDS_ENCRYPTION_AT_REST = GovernanceControl(
             "RDS.STORAGE_ENCRYPTED",
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.StorageEncrypted",
+            expectation=EvidenceExpectation.ALL_TRUE,
         ),
         _iac(
             "RDS.IAC_STORAGE_ENCRYPTED",
@@ -477,6 +502,7 @@ _RDS_LOG_EXPORTS = GovernanceControl(
             "RDS.LOG_EXPORTS",
             RDS_INSTANCE_RESOURCE_TYPE,
             "attributes.db_instance.EnabledCloudwatchLogsExports",
+            expectation=EvidenceExpectation.NON_EMPTY,
         ),
         _iac(
             "RDS.IAC_LOG_EXPORTS",
@@ -513,6 +539,10 @@ _ALB_HTTPS_ONLY = GovernanceControl(
             ALB_RESOURCE_TYPE,
             "attributes.listeners[].ListenerArn",
             "attributes.listeners[].Protocol",
+            expectation=EvidenceExpectation.NONE_EQUAL,
+            expected_value="HTTP",
+            # ListenerArn은 좌표다. HTTPS 전용 여부는 Protocol만이 답한다.
+            expectation_paths=("attributes.listeners[].Protocol",),
         ),
         _iac(
             "ALB.IAC_LISTENER_PROTOCOL",
@@ -544,6 +574,8 @@ _ALB_ACCESS_LOGGING = GovernanceControl(
             "ALB.ACCESS_LOGS",
             ALB_RESOURCE_TYPE,
             "attributes.load_balancer_attributes.{access_logs.s3.enabled}",
+            expectation=EvidenceExpectation.ALL_EQUAL,
+            expected_value="true",
         ),
         _iac(
             "ALB.IAC_ACCESS_LOGS",

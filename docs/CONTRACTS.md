@@ -187,6 +187,21 @@ legacy Result/Finding은 provenance 없이 읽을 수 있으나 remediation 자�
 `EXECUTION_ERROR` 또는 미완료 평가가 있으면 Readiness Score는 `null`이며 Coverage가 그
 이유를 표시한다. 이 산식은 AI가 아닌 C의 결정적 report projection이다.
 
+`EvidenceCapabilityBinding.expectation`은 **그 근거만으로 통제를 확정할 수 있을 때** 선언하는
+술어다(`ALL_TRUE`·`ALL_FALSE`·`NON_EMPTY`·`ALL_EQUAL`·`NONE_EQUAL`, AWS_ACTUAL 전용). 선언되면
+Runtime이 모델을 부르지 않고 `document_paths`의 값으로 판정한다. `expectation_paths`는 그 술어가
+판정하는 경로이며 생략하면 `document_paths` 전체다 — capability는 식별자 경로
+(`volumes[].VolumeId`)를 함께 선언하는데 그것은 근거의 좌표이지 기준이 아니다.
+
+판정 규칙은 둘뿐이다. **status**는 Rule 문언 그대로 선언된 술어를 모두 충족해야 `PASS`다.
+**score**는 충족한 관측치의 비율이며 임계값이나 Anchor가 아니라 측정된 비율이다 — 네 플래그 중
+셋이 충족되면 75다. 술어가 없는 capability는 지금처럼 모델이 판단하고, Rule이 요구한 capability
+중 하나라도 술어가 없으면 통째로 모델 경로로 간다(하나의 결과가 두 근거 체계를 섞지 않는다).
+
+이것은 두 번째 평가 엔진이 아니다. 같은 `AssessmentRunner` 뒤에서 같은 `EvaluationResult`를
+만들고 `model_profile_id`·`rubric_version`을 그대로 실어, 조치·비교·보고가 결과의 출처로
+분기하지 않는다.
+
 `SegmentReadinessScore`는 **Profile이 여러 정책 원본에 걸칠 때 원본별 준비도**다. 한 Profile이
 사내 정책 문서와 ISMS-P 기준선을 함께 담을 수 있으므로(PRD: "사내 정책 및 ISMS-P 요구사항을
 함께 평가"), 그 둘을 하나의 숫자로 합치면 그 숫자는 어느 기준에 대한 답도 아니게 된다 — 사내

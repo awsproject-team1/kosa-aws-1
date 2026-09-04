@@ -16,6 +16,11 @@ from collections.abc import Mapping
 
 from apps.backend.assessment.actual import ActualEvidence, ActualEvidenceLoader
 from apps.backend.assessment.bedrock import BedrockConverseClient, BedrockStructuredEvaluator
+from apps.backend.assessment.deterministic import (
+    decidable_bindings,
+    decide,
+    result_from_verdict,
+)
 from apps.backend.policy import PolicyContext
 from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
 from apps.backend.policy.evidence_paths import missing_document_paths
@@ -87,6 +92,18 @@ class ActualBedrockEvaluator:
                 evidence=evidence,
                 model_profile=model_profile,
                 missing=missing,
+            )
+        # 선언된 술어만으로 답할 수 있으면 모델을 부르지 않는다. 사실을 모델에게 물으면
+        # 정확도·점수 입도·비용을 한꺼번에 잃는다(`deterministic` 모듈 참조). 술어가 없는
+        # capability가 하나라도 있으면 통째로 아래 모델 경로로 간다.
+        bindings = decidable_bindings(self._catalog, rule, resource_type=self.resource_type)
+        if bindings:
+            return result_from_verdict(
+                decide(bindings, evidence.resource_document),
+                resource_id=resource_id,
+                rule=rule,
+                evidence_references=evidence.evidence_references,
+                model_profile=model_profile,
             )
         return BedrockStructuredEvaluator(
             client=self._client,

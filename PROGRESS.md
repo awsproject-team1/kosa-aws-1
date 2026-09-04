@@ -2,6 +2,29 @@
 
 ## Current
 
+- **사실은 코드가 판정하고, 판단만 모델에 맡긴다 (2026-09-05).** ISMS-P 준비도 평가의 비용과
+  시간을 줄이는 것이 이 서비스의 목적이므로, 측정으로 드러난 세 가지 손실을 한 곳에서 없앤다.
+  - **왜.** 라이브 측정에서 status 오류 3건이 전부 위반을 PASS로 본 false negative였고 부분 준수
+    Case에 집중됐다(4건 중 2건 오답). 준법 제품에서 false negative는 "준비됐다"고 말해 놓고
+    준비되지 않은 상태다. 동시에 모델은 72회 평가에서 score를 0과 100만 냈다 — 점수가 등급을
+    담지 않았다. 그리고 판정 하나가 Bedrock 왕복 하나였다.
+  - **무엇을.** Catalog가 capability마다 술어를 선언한다
+    (`EvidenceCapabilityBinding.expectation`, AWS_ACTUAL 전용). 선언된 8개 capability는 Runtime이
+    `document_paths`의 값으로 직접 판정한다. status는 Rule 문언대로 전부 충족해야 PASS이고,
+    score는 충족 관측치의 비율이다 — 임계값이 아니라 측정된 비율이다.
+  - **결과.** 모델이 틀렸던 입력이 전부 바로잡혔고 점수가 등급을 갖는다: S3 차단 플래그
+    4/4→100, 3/4→**75**, 2/4→**50**, 0/4→0. ALB에 HTTP 리스너가 함께 있으면 50 FAIL(모델은
+    PASS라고 했다). 라이브 버킷에서 AES256 암호화가 PASS/100으로 바로잡혔고(모델은 FAIL이라고
+    했다) **Bedrock 호출은 0회**였다.
+  - **경계는 그대로다.** 술어가 없는 capability(EC2 공인 IP, 보안그룹 ingress 등 해석이 필요한
+    것)는 지금처럼 모델이 판단하고, Rule이 요구한 capability 중 하나라도 술어가 없으면 통째로
+    모델 경로로 간다. 두 번째 평가 엔진이 아니라 같은 `AssessmentRunner` 뒤의 같은
+    `EvaluationResult`이며, `model_profile_id`·`rubric_version`을 그대로 실어 조치·비교·보고가
+    결과의 출처로 분기하지 않는다.
+  - **다음.** IaC 관점은 여전히 모델이 판단한다 — Terraform 근거는 파일 단위이고 값의 위치가
+    authoritative하지 않기 때문이다. HCL을 파싱해 attribute 수준 근거를 만들면 같은 방식으로
+    결정적 판정을 넓힐 수 있다.
+
 - **점수가 유의한지 측정하고, 개선 시도를 하나 되돌렸다 (2026-09-05).**
   전체 기록은 `docs/evaluations/data/score-validity-20260905.md`.
   - **점수는 status의 재진술이다.** 24 Case × 3회 = 72회에서 관측된 score는 **0과 100뿐**이고

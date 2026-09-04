@@ -132,6 +132,39 @@ def _require_length(value: str | None, field_name: str, limit: int) -> None:
         raise ValueError(f"{field_name} must be at most {limit} characters")
 
 
+class EvidenceExpectation(StrEnum):
+    """What makes one capability's declared evidence *satisfied*, decidable without a model.
+
+    이 서비스의 목적은 ISMS-P 준비도 평가의 비용과 시간을 줄이는 것이다. 그런데 "네 플래그가 모두
+    true인가", "HTTP 리스너가 있는가" 같은 물음은 판단이 아니라 **사실**이다. 사실을 모델에게 묻는
+    것은 세 가지를 한꺼번에 잃는다 — 호출 비용, 지연, 그리고 정확도. 실제로 라이브 측정에서 정확도
+    오류 3건이 전부 이 부류였고 모두 위반을 PASS로 본 false negative였다(부분 준수 4건 중 2건).
+    준법 제품에서 false negative는 "준비됐다"고 말해 놓고 준비되지 않은 상태이므로 가장 나쁜 실패다.
+
+    그래서 판정 가능한 술어를 Catalog가 선언한다. 선언이 없는 capability는 그대로 모델이 판단한다 —
+    이것은 평가 경계를 대체하는 것이 아니라, 같은 경계 안에서 답할 수 있는 것을 코드가 답하는 것이다.
+
+    어휘는 닫혀 있다. 임의 표현식을 두면 Catalog가 작은 프로그래밍 언어가 되고, 그 언어의 오류는
+    리뷰로 걸러지지 않는다.
+    """
+
+    #: 선언된 모든 경로의 값이 참이어야 한다 (S3 public access block 네 플래그).
+    ALL_TRUE = "ALL_TRUE"
+    #: 선언된 모든 경로의 값이 거짓이어야 한다 (RDS PubliclyAccessible).
+    ALL_FALSE = "ALL_FALSE"
+    #: 선언된 모든 경로가 비어 있지 않아야 한다 (RDS 로그 내보내기 목록).
+    NON_EMPTY = "NON_EMPTY"
+    #: 선언된 모든 경로의 값이 `expected_value`와 같아야 한다 (ALB access log 활성 플래그).
+    ALL_EQUAL = "ALL_EQUAL"
+    #: 선언된 어느 경로에도 `expected_value`가 나타나면 안 된다 (ALB 리스너의 HTTP).
+    NONE_EQUAL = "NONE_EQUAL"
+
+
+_VALUE_BEARING_EXPECTATIONS = frozenset(
+    {EvidenceExpectation.ALL_EQUAL, EvidenceExpectation.NONE_EQUAL}
+)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EvidenceCapabilityBinding:
     """One piece of evidence the product can actually obtain for a Control.
@@ -151,6 +184,13 @@ class EvidenceCapabilityBinding:
     # IAC 전용 non-authoritative hint — prompt 경계와 화면 설명 용도.
     terraform_resource_types: tuple[str, ...] = ()
     terraform_attribute_names: tuple[str, ...] = ()
+    # AWS_ACTUAL 전용. 선언되면 Runtime이 모델 없이 이 capability를 판정한다.
+    expectation: EvidenceExpectation | None = None
+    expected_value: str | None = None
+    #: 술어가 판정하는 경로. 비어 있으면 `document_paths` 전체다. capability는 식별자 경로
+    #: (`volumes[].VolumeId`)를 함께 선언하는데 그것은 근거의 좌표이지 기준이 아니므로,
+    #: 기준을 담은 경로만 골라야 한다.
+    expectation_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.capability_key, "capability_key")
@@ -165,6 +205,7 @@ class EvidenceCapabilityBinding:
                 raise ValueError("an AWS_ACTUAL capability must declare document_paths")
             if self.terraform_resource_types or self.terraform_attribute_names:
                 raise ValueError("an AWS_ACTUAL capability must not declare Terraform hints")
+            self._require_expectation()
             return
         if self.perspective is EvaluationPerspective.IAC:
             if self.document_paths:
@@ -172,8 +213,44 @@ class EvidenceCapabilityBinding:
                     "an IAC capability must not declare document_paths — "
                     "IaC evidence is file-scoped, not attribute-scoped"
                 )
+            if self.expectation is not None:
+                # IaC 근거는 파일 단위이고 값의 위치가 authoritative하지 않다. 그 위에서 술어를
+                # 판정하면 HCL을 파싱하지도 않은 채 사실을 주장하게 된다.
+                raise ValueError("an IAC capability must not declare an expectation")
             return
         raise ValueError("an evidence capability must bind to IAC or AWS_ACTUAL")
+
+    def _require_expectation(self) -> None:
+        """`ALL_EQUAL`/`NONE_EQUAL`만 비교값을 갖는다. 나머지가 값을 들면 무시될 뿐이므로 거부한다."""
+        if self.expectation is None:
+            if self.expected_value is not None:
+                raise ValueError("expected_value requires an expectation")
+            if self.expectation_paths:
+                raise ValueError("expectation_paths requires an expectation")
+            return
+        unknown = [path for path in self.expectation_paths if path not in self.document_paths]
+        if unknown:
+            # 선언되지 않은 경로를 판정하면 pre-flight가 그 경로의 존재를 보장하지 않는다.
+            raise ValueError("expectation_paths must be a subset of document_paths")
+        if not isinstance(self.expectation, EvidenceExpectation):
+            raise TypeError("expectation must be an EvidenceExpectation")
+        needs_value = self.expectation in _VALUE_BEARING_EXPECTATIONS
+        if needs_value and not (
+            isinstance(self.expected_value, str) and self.expected_value.strip()
+        ):
+            raise ValueError(f"{self.expectation.value} requires a non-empty expected_value")
+        if not needs_value and self.expected_value is not None:
+            raise ValueError(f"{self.expectation.value} must not carry an expected_value")
+
+    @property
+    def is_decidable(self) -> bool:
+        """Whether Runtime may settle this capability from the document alone."""
+        return self.expectation is not None
+
+    @property
+    def judged_paths(self) -> tuple[str, ...]:
+        """The paths the declared predicate actually judges."""
+        return self.expectation_paths or self.document_paths
 
     @property
     def is_authoritative(self) -> bool:
@@ -188,6 +265,9 @@ class EvidenceCapabilityBinding:
             "document_paths": list(self.document_paths),
             "terraform_resource_types": list(self.terraform_resource_types),
             "terraform_attribute_names": list(self.terraform_attribute_names),
+            "expectation": None if self.expectation is None else self.expectation.value,
+            "expected_value": self.expected_value,
+            "expectation_paths": list(self.expectation_paths),
         }
 
 
