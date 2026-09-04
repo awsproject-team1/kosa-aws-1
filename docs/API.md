@@ -74,6 +74,7 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 | `GET` | `/policy-sources` | 배선됨 | 호출자 customer의 업로드 문서 목록(요약: `source_id, source_version, filename, status, source_format, byte_size, unit_count`). 원문·units·정규화 text는 반환하지 않는다 |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 배선됨 | 업로드 검증과 파싱·정규화 실행 |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 처리 상태, 형식 지원 여부와 검토 경고 조회 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/confirm-review` | 배선됨 | `REVIEW_REQUIRED`를 사람이 확인해 `READY`로 올린다. body 없음 — 확인 대상은 경로가, 확인한 사람은 토큰이 말한다. 응답은 갱신된 문서이며 `reviewed_by`/`reviewed_at`이 채워진다. 경고는 지우지 않는다(사람이 무엇을 보고 통과시켰는지가 기록이다). `REVIEW_REQUIRED`가 아니면 `400` |
 | `DELETE` | `/policy-sources/{sourceId}/versions/{version}` | 배선됨 | 미승인 문서 삭제(DynamoDB record를 먼저 지우고 S3 원본·정규화 아티팩트를 지운다). 승인 record가 있는 Source는 `409`로 거부 — Profile이 참조하는 evidence를 지우지 않는다. 호출자 partition에 그 판본이 없으면 `404` |
 | `POST` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 후보 추출 요청. `202`와 `{authoring_run_id, status}` |
 | `GET` | `/policy-sources/{sourceId}/versions/{version}/candidates` | 배선됨 | 실행 상태와 후보/미지원/거절 결과 페이지 |

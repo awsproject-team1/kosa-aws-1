@@ -10,11 +10,14 @@
 금지를 규율이 아니라 구조로 강제한다.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from packages.contracts._validation import (
     require_non_empty_string,
+    require_offset_aware_timestamp,
     require_optional_non_empty_string,
 )
 
@@ -177,6 +180,11 @@ class NormalizedPolicyDocument:
     units: tuple[NormalizedDocumentUnit, ...] = ()
     warnings: tuple[ExtractionWarningCode, ...] = ()
     failure_code: IngestionFailureCode | None = None
+    #: `REVIEW_REQUIRED`를 사람이 확인해 `READY`로 올린 기록. 게이트가 의미를 가지려면 **누가
+    #: 언제** 판단했는지가 남아야 한다 — 남기지 않으면 그 상태 전이는 자동화와 구별되지 않는다.
+    #: 둘은 함께 있거나 함께 없다. 파싱 직후 `READY`가 된 문서는 검토가 필요 없었으므로 비어 있다.
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
 
     # `FAILED`가 아닌 문서가 반드시 채워야 하는 정규화 결과 항목.
     _NORMALIZED_FIELDS = (
@@ -222,6 +230,7 @@ class NormalizedPolicyDocument:
             raise TypeError("failure_code must be an IngestionFailureCode")
         self._require_unique_locators()
         self._require_consistent_outcome()
+        self._require_review_provenance()
 
     def _require_unique_locators(self) -> None:
         """Locator는 문서 안에서 유일해야 한다. 중복이면 Evidence가 두 단위를 가리킨다."""
@@ -249,10 +258,53 @@ class NormalizedPolicyDocument:
         if not self.units:
             raise ValueError("a non-FAILED document must carry at least one unit")
 
+    def _require_review_provenance(self) -> None:
+        """검토 기록은 둘이 함께 있어야 하고, 검토가 성립하는 상태에만 붙는다."""
+        if (self.reviewed_by is None) != (self.reviewed_at is None):
+            raise ValueError("reviewed_by and reviewed_at must be provided together")
+        if self.reviewed_by is None:
+            return
+        require_non_empty_string(self.reviewed_by, "reviewed_by")
+        require_offset_aware_timestamp(self.reviewed_at, "reviewed_at")
+        if self.status is not IngestionStatus.READY:
+            # 검토 기록은 검토의 **결과**다. READY가 아닌 문서가 그것을 들고 있으면 "확인했는데
+            # 여전히 확인 대기"라는 모순된 상태가 저장된다.
+            raise ValueError("a reviewed document must be READY")
+        if not self.warnings:
+            # 경고가 없으면 자동으로 READY가 됐을 문서다. 거기에 검토 기록을 붙이면 사람이
+            # 판단해야 했던 문서와 그렇지 않은 문서를 더는 구별할 수 없다.
+            raise ValueError("only a document that required review may carry review provenance")
+
     @property
     def is_approvable(self) -> bool:
         """Whether a human approval may attach to this exact source version."""
         return self.status in APPROVABLE_STATUSES
+
+    @property
+    def needs_review(self) -> bool:
+        """Whether a person still has to confirm the extraction before anything may use it."""
+        return self.status is IngestionStatus.REVIEW_REQUIRED
+
+    def confirmed_by_review(self, *, reviewer: str, reviewed_at: str) -> NormalizedPolicyDocument:
+        """Return the READY copy of a `REVIEW_REQUIRED` document a person has confirmed.
+
+        **왜 이 전이가 필요한가.** 병합 셀·불규칙 행 같은 경고가 붙은 문서는 자동으로 `READY`가
+        되지 않는다(`REVIEW_REQUIRED_WARNINGS`) — locator가 근거로 쓸 만한지는 사람이 추출 결과를
+        보고 판단할 일이기 때문이다. 그런데 그 판단을 **입력할 문이 없으면** 게이트가 아니라
+        막다른 길이다. 라이브에서 ISMS-P 엑셀(334 unit, 병합 셀 경고)이 그 상태로 멈췄고,
+        authoring worker는 `SOURCE_NOT_READY`로 무한 재시도했다.
+
+        경고는 지운다고 없어지는 사실이 아니므로 **그대로 남긴다.** 남는 것은 "이 경고를 보고
+        사람이 진행을 결정했다"는 기록이며, 그것이 `reviewed_by`/`reviewed_at`이다.
+        """
+        if not self.needs_review:
+            raise ValueError("only a REVIEW_REQUIRED document can be confirmed by review")
+        return replace(
+            self,
+            status=IngestionStatus.READY,
+            reviewed_by=reviewer,
+            reviewed_at=reviewed_at,
+        )
 
     def unit(self, locator: str) -> NormalizedDocumentUnit | None:
         for unit in self.units:
@@ -280,6 +332,8 @@ class NormalizedPolicyDocument:
             "units": [unit.to_dict() for unit in self.units],
             "warnings": [warning.value for warning in self.warnings],
             "failure_code": None if self.failure_code is None else self.failure_code.value,
+            "reviewed_by": self.reviewed_by,
+            "reviewed_at": self.reviewed_at,
         }
 
 

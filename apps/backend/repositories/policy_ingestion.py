@@ -267,6 +267,49 @@ class DynamoDbPolicySourceUploadRepository:
         item = self._get_item(customer_id, source_id, source_version)
         return document_from_item(item)
 
+    def confirm_review(
+        self,
+        *,
+        customer_id: str,
+        source_id: str,
+        source_version: str,
+        reviewer: str,
+        reviewed_at: str,
+    ) -> NormalizedPolicyDocument:
+        """Move one `REVIEW_REQUIRED` document to `READY`, recording who confirmed it.
+
+        전이 조건은 write에 함께 건다. 상태를 읽고 나서 쓰는 사이에 다른 요청이 같은 문서를
+        올리면, 조건 없이 쓰는 쪽은 두 번째 검토 기록이 첫 번째를 덮어쓴다 — 조건부 write는 그
+        경우 두 번째를 거절한다. `FAILED`나 이미 `READY`인 문서도 같은 조건에서 걸린다.
+        """
+        document = document_from_item(
+            self._get_item(customer_id, source_id, source_version)
+        ).confirmed_by_review(reviewer=reviewer, reviewed_at=reviewed_at)
+        try:
+            self._table.update_item(
+                Key={
+                    "PK": f"CUSTOMER#{customer_id}",
+                    "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}",
+                },
+                UpdateExpression=(
+                    "SET #status = :ready, reviewed_by = :reviewer, reviewed_at = :reviewed_at"
+                ),
+                ConditionExpression="customer_id = :customer AND #status = :review_required",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":customer": customer_id,
+                    ":review_required": IngestionStatus.REVIEW_REQUIRED.value,
+                    ":ready": IngestionStatus.READY.value,
+                    ":reviewer": reviewer,
+                    ":reviewed_at": reviewed_at,
+                },
+            )
+        except Exception as error:
+            if _is_conditional_check_failure(error):
+                raise ValueError("policy source version is not awaiting review") from None
+            raise RuntimeError("policy review confirmation write failed") from error
+        return document
+
     def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]:
         """Return a summary of every policy source version the caller's customer owns.
 
@@ -513,6 +556,9 @@ def document_from_item(item: Mapping[str, object]) -> NormalizedPolicyDocument:
             ),
             warnings=tuple(ExtractionWarningCode(value) for value in _strings(item, "warnings")),
             failure_code=_optional_enum(item, "failure_code", IngestionFailureCode),
+            # 이 필드 이전에 저장된 문서는 검토 기록이 없다 — 그때는 전이 자체가 없었다.
+            reviewed_by=_optional_string(item, "reviewed_by"),
+            reviewed_at=_optional_string(item, "reviewed_at"),
         )
     except (TypeError, ValueError) as error:
         raise RuntimeError("policy ingestion record is invalid") from error

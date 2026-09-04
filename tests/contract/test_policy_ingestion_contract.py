@@ -113,10 +113,57 @@ class NormalizedDocumentContractTest(unittest.TestCase):
                 "units",
                 "warnings",
                 "failure_code",
+                "reviewed_by",
+                "reviewed_at",
             },
         )
         self.assertEqual(payload["warnings"], ["EMPTY_UNITS_SKIPPED"])
         self.assertEqual(payload["units"][0]["locator"], UNIT.locator)
+        # 검토가 필요 없었던 문서에는 검토 기록이 없다.
+        self.assertEqual((payload["reviewed_by"], payload["reviewed_at"]), (None, None))
+
+    def test_a_review_required_document_is_not_approvable_until_a_person_confirms(self) -> None:
+        """게이트가 있으면 그 게이트를 통과할 문이 있어야 한다 — 없으면 막다른 길이다."""
+        pending = _document(
+            status=IngestionStatus.REVIEW_REQUIRED,
+            warnings=(ExtractionWarningCode.MERGED_CELLS_EXPANDED,),
+        )
+
+        self.assertFalse(pending.is_approvable)
+        self.assertTrue(pending.needs_review)
+
+        confirmed = pending.confirmed_by_review(
+            reviewer="admin-1", reviewed_at="2026-09-05T03:00:00+00:00"
+        )
+
+        self.assertIs(confirmed.status, IngestionStatus.READY)
+        self.assertTrue(confirmed.is_approvable)
+        self.assertFalse(confirmed.needs_review)
+        self.assertEqual(confirmed.reviewed_by, "admin-1")
+        # 경고는 지워지지 않는다. 사람이 본 것이 무엇이었는지가 남아야 한다.
+        self.assertEqual(confirmed.warnings, (ExtractionWarningCode.MERGED_CELLS_EXPANDED,))
+
+    def test_only_a_review_required_document_can_be_confirmed(self) -> None:
+        for status in (IngestionStatus.READY, IngestionStatus.UPLOADED, IngestionStatus.PARSING):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "REVIEW_REQUIRED"):
+                _document(status=status).confirmed_by_review(
+                    reviewer="admin-1", reviewed_at="2026-09-05T03:00:00+00:00"
+                )
+
+    def test_review_provenance_is_paired_and_only_on_a_reviewed_document(self) -> None:
+        warned = {"warnings": (ExtractionWarningCode.MERGED_CELLS_EXPANDED,)}
+        with self.assertRaisesRegex(ValueError, "provided together"):
+            _document(**warned, reviewed_by="admin-1")
+        with self.assertRaisesRegex(ValueError, "must be READY"):
+            _document(
+                **warned,
+                status=IngestionStatus.REVIEW_REQUIRED,
+                reviewed_by="admin-1",
+                reviewed_at="2026-09-05T03:00:00+00:00",
+            )
+        # 경고가 없었던 문서는 애초에 사람 판단을 요구하지 않았다.
+        with self.assertRaisesRegex(ValueError, "required review"):
+            _document(reviewed_by="admin-1", reviewed_at="2026-09-05T03:00:00+00:00")
 
     def test_the_serialized_document_is_json_encodable(self) -> None:
         """Queue payload와 DynamoDB item이 이 형태를 그대로 나른다."""

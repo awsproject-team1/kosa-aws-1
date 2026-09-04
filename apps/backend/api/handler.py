@@ -238,6 +238,18 @@ class JobHttpHandler:
                         200,
                         {"deleted": True, "source_id": source_id, "source_version": source_version},
                     )
+                if method == "POST" and action == "confirm-review":
+                    # 경고가 붙어 `REVIEW_REQUIRED`에 멈춘 문서를 사람이 확인했다고 기록한다.
+                    # body는 없다 — 확인 대상은 경로가 이미 지목하고, 확인한 사람은 토큰이 말한다.
+                    if event.get("body") not in (None, "", "{}"):
+                        raise RequestValidationError("confirm-review takes no body")
+                    try:
+                        document = self._policy_sources.confirm_review(
+                            principal, source_id=source_id, source_version=source_version
+                        )
+                    except ValueError as error:
+                        raise RequestValidationError(str(error)) from error
+                    return _response(200, document.to_dict())
                 if method == "POST" and action == "process":
                     if self._policy_reader is None:
                         raise JobNotFoundError("policy process route not found")
@@ -631,7 +643,10 @@ def _policy_source_path(path: str) -> tuple[str, str, str | None] | None:
     if (
         not source_id
         or not source_version
-        or (len(parts) == 6 and parts[5] not in {"process", "approve", "candidates"})
+        or (
+            len(parts) == 6
+            and parts[5] not in {"process", "approve", "candidates", "confirm-review"}
+        )
     ):
         return None
     return source_id, source_version, parts[5] if len(parts) == 6 else None

@@ -1638,3 +1638,22 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     `TypeError`는 잡지 않는다(배선 오류이지 평가 실패가 아니다).
   - 부수 효과로 재시도-충돌 고리가 끊긴다: Lambda가 성공하므로 SQS가 메시지를 지우고, 같은 좌표에
     다른 답을 쓰려는 두 번째 실행 자체가 없어진다.
+
+- **`REVIEW_REQUIRED`를 통과할 문을 만들었다 (2026-09-05).** 라이브에서 ISMS-P 엑셀
+  (`isms-p-2023-10-31.xlsx`, 334 unit)을 업로드했더니 추출이 시작되지 않았다. 파싱은 성공했고
+  (`xlsx-parser 1.0.1`), 병합 셀·불규칙 행 경고 때문에 `REVIEW_REQUIRED`에 멈춘 것이었다 —
+  ISMS-P 인증기준 엑셀에는 그 두 가지가 당연히 있다.
+  - **게이트는 있는데 통과할 문이 없었다.** `APPROVABLE_STATUSES`는 `READY`뿐이라 authoring이
+    거부하고(`SOURCE_NOT_READY`), `IngestionStatus.READY`를 쓰는 곳은 파싱 직후 한 군데뿐이라
+    사람이 판단을 입력할 경로가 아예 없었다. 그 상태로 authoring worker가 16분마다 재시도하며
+    5시간 넘게 DLQ를 채웠다.
+  - `POST /policy-sources/{sourceId}/versions/{version}/confirm-review`를 추가했다. body 없음 —
+    대상은 경로가, 확인한 사람은 토큰이 말한다. 전이는 `#status = REVIEW_REQUIRED` 조건부
+    write이므로 이미 통과된 문서를 두 번째 검토자가 덮어쓰지 못한다.
+  - **경고는 지우지 않는다.** 남는 것은 "그 경고를 보고 사람이 진행을 결정했다"는 사실이고,
+    그 사람과 시각이 `reviewed_by`/`reviewed_at`으로 문서에 남는다. Contract가 그 둘을 쌍으로
+    묶고, `READY`가 아닌 문서나 애초에 경고가 없던 문서에는 붙지 못하게 한다 — 붙일 수 있으면
+    사람 판단이 필요했던 문서와 아니었던 문서를 더는 구별할 수 없다.
+  - Worker도 `needs_review` 요청을 지워진 문서와 같이 건너뛴다. 사람의 확인은 API로만 오고
+    재시도로는 오지 않으므로, 올리는 것은 큐를 막을 뿐이다(같은 이유로 이미 삭제 경로가 그렇게
+    돼 있었다).

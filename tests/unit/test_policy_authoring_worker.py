@@ -11,6 +11,7 @@ worker는 그것을 언젠가 집어 든다. 그때 예외를 올리면 SQS가 �
 
 import json
 import unittest
+from dataclasses import replace
 
 from apps.backend.policy.authoring import FakePolicyCandidateExtractor
 from apps.backend.policy.authoring.runtime import run_requests
@@ -19,6 +20,8 @@ from packages.common.errors import PolicySourceNotFound
 from packages.contracts import (
     AuthoringManifest,
     AuthoringRunStatus,
+    ExtractionWarningCode,
+    IngestionStatus,
     PolicyAuthoringResult,
 )
 from tests.authoring_fixtures import ready_document
@@ -119,6 +122,45 @@ class DeletedSourceTest(unittest.TestCase):
         self.assertEqual(len(repository.recorded), 1)
         self.assertEqual(repository.recorded[0].provenance.authoring_run_id, "run-2")
         self.assertEqual(documents.asked, ["gone", DOCUMENT.source_version])
+
+
+class AwaitingReviewTest(unittest.TestCase):
+    """`REVIEW_REQUIRED`도 재시도로는 바뀌지 않는다 — 사람의 확인은 API로만 온다.
+
+    라이브에서 ISMS-P 엑셀(334 unit, 병합 셀 경고)이 그 상태로 멈췄고, worker가 16분마다
+    `SOURCE_NOT_READY`로 실패하며 5시간 넘게 DLQ를 채웠다.
+    """
+
+    class PendingDocuments(Documents):
+        def get_document(self, *, customer_id: str, source_id: str, source_version: str):
+            self.asked.append(source_version)
+            return replace(
+                DOCUMENT,
+                status=IngestionStatus.REVIEW_REQUIRED,
+                warnings=(ExtractionWarningCode.MERGED_CELLS_EXPANDED,),
+            )
+
+    def test_a_document_awaiting_review_is_skipped_rather_than_retried(self) -> None:
+        documents = self.PendingDocuments(present=(DOCUMENT.source_version,))
+        repository = Repository()
+
+        manifests = _run(
+            documents, repository, [_record(DOCUMENT.source_id, DOCUMENT.source_version, "run-1")]
+        )
+
+        self.assertEqual(manifests, ())
+        self.assertEqual(repository.recorded, [])
+
+    def test_a_confirmed_document_is_extracted_normally(self) -> None:
+        """확인이 끝나면 같은 요청을 다시 보내 추출이 진행된다."""
+        documents = Documents(present=(DOCUMENT.source_version,))
+        repository = Repository()
+
+        manifests = _run(
+            documents, repository, [_record(DOCUMENT.source_id, DOCUMENT.source_version, "run-1")]
+        )
+
+        self.assertEqual(len(manifests), 1)
 
 
 if __name__ == "__main__":

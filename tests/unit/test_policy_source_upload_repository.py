@@ -1,6 +1,7 @@
 """Tenant-scope tests for A's Policy Source upload-session adapter."""
 
 import unittest
+from datetime import UTC, datetime
 from decimal import Decimal
 from io import BytesIO
 
@@ -14,7 +15,7 @@ from packages.common.errors import (
     PolicySourceDeleteForbidden,
     PolicySourceNotFound,
 )
-from packages.contracts import PolicySourceUploadRequest
+from packages.contracts import IngestionStatus, PolicySourceUploadRequest
 
 #: 목록 요약이 정책 원문을 실어 나르지 않는다는 것을 확인하기 위한 표식 문자열.
 POLICY_TEXT = "정책 원문 한 줄"
@@ -242,6 +243,139 @@ class PolicySourceUploadRepositoryTest(unittest.TestCase):
                 PolicySourceUploadRequest(
                     filename="policy.md", declared_media_type="text/markdown", byte_size=1
                 ),
+            )
+
+
+class ReviewTable(Table):
+    """A table fake that enforces the confirm-review ConditionExpression."""
+
+    def update_item(self, **kwargs):
+        values = kwargs["ExpressionAttributeValues"]
+        if ":review_required" not in values:
+            return super().update_item(**kwargs)
+        assert self.item is not None
+        if self.item.get("status") != values[":review_required"]:
+            raise ConditionalCheckFailed()
+        self.item.update(
+            {
+                "status": values[":ready"],
+                "reviewed_by": values[":reviewer"],
+                "reviewed_at": values[":reviewed_at"],
+            }
+        )
+
+
+ADMIN = Principal(
+    subject="admin-1", client_id="client", customer_id="cust-a", roles=frozenset({Role.ADMIN})
+)
+
+
+class ConfirmReviewTest(unittest.TestCase):
+    """`REVIEW_REQUIRED`를 사람이 통과시키는 문. 없으면 게이트가 막다른 길이 된다."""
+
+    def _service(self, table: ReviewTable) -> PolicySourceApiService:
+        return PolicySourceApiService(
+            repository=DynamoDbPolicySourceUploadRepository(
+                table=table, bucket="artifacts", presigner=S3()
+            ),
+            source_id_factory=lambda: "source-1",
+            source_version_factory=lambda: "v1",
+            now=lambda: datetime(2026, 9, 5, 3, 0, tzinfo=UTC),
+        )
+
+    def _pending(self) -> ReviewTable:
+        """A parsed document stopped at REVIEW_REQUIRED by a merged-cell warning."""
+        table = ReviewTable()
+        table.item = {
+            "PK": "CUSTOMER#cust-a",
+            "SK": "POLICY_INGESTION#source-1#VERSION#v1",
+            "customer_id": "cust-a",
+            "source_id": "source-1",
+            "source_version": "v1",
+            "artifact_id": "policy-original-source-1-v1",
+            "s3_version_id": "s3v1",
+            "content_sha256": "a" * 64,
+            "filename": "isms-p.xlsx",
+            "declared_media_type": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            "byte_size": Decimal(53885),
+            "status": "REVIEW_REQUIRED",
+            "detected_media_type": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            "source_format": "XLSX",
+            "parser_id": "xlsx-parser",
+            "parser_version": "1.0.1",
+            "normalized_artifact_id": "policy-original-source-1-v1",
+            "normalized_sha256": "b" * 64,
+            "units": [
+                {
+                    "locator": "sheet/1/row/2",
+                    "kind": "TABLE_ROW",
+                    "text_sha256": "c" * 64,
+                    "text_length": Decimal(40),
+                    "origin": "xlsx-parser",
+                }
+            ],
+            "warnings": ["MERGED_CELLS_EXPANDED", "RAGGED_ROWS"],
+            "failure_code": None,
+        }
+        return table
+
+    def test_a_confirmed_document_becomes_ready_and_records_who_confirmed_it(self) -> None:
+        table = self._pending()
+
+        document = self._service(table).confirm_review(
+            ADMIN, source_id="source-1", source_version="v1"
+        )
+
+        self.assertIs(document.status, IngestionStatus.READY)
+        self.assertTrue(document.is_approvable)
+        self.assertEqual(document.reviewed_by, "admin-1")
+        self.assertEqual(document.reviewed_at, "2026-09-05T03:00:00Z")
+        self.assertEqual(table.item["status"], "READY")
+        self.assertEqual(table.item["reviewed_by"], "admin-1")
+        # 경고는 남는다 — 사람이 무엇을 보고 통과시켰는지가 기록이다.
+        self.assertEqual(table.item["warnings"], ["MERGED_CELLS_EXPANDED", "RAGGED_ROWS"])
+
+    def test_confirming_twice_is_refused_rather_than_overwriting_the_first_reviewer(self) -> None:
+        table = self._pending()
+        service = self._service(table)
+        service.confirm_review(ADMIN, source_id="source-1", source_version="v1")
+
+        other = Principal(
+            subject="admin-2",
+            client_id="client",
+            customer_id="cust-a",
+            roles=frozenset({Role.ADMIN}),
+        )
+        with self.assertRaises(ValueError):
+            service.confirm_review(other, source_id="source-1", source_version="v1")
+        self.assertEqual(table.item["reviewed_by"], "admin-1")
+
+    def test_a_document_that_moved_after_the_read_is_refused_by_the_write(self) -> None:
+        """읽고 나서 쓰는 사이에 다른 요청이 통과시켰다면, 두 번째 검토 기록은 첫 번째를 덮지 않는다."""
+        table = self._pending()
+
+        original_update = table.update_item
+
+        def racing_update(**kwargs):
+            table.item["status"] = "READY"  # another confirm landed first
+            return original_update(**kwargs)
+
+        table.update_item = racing_update  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ValueError, "not awaiting review"):
+            self._service(table).confirm_review(ADMIN, source_id="source-1", source_version="v1")
+
+    def test_only_an_admin_may_confirm(self) -> None:
+        user = Principal(
+            subject="user", client_id="client", customer_id="cust-a", roles=frozenset({Role.USER})
+        )
+        with self.assertRaises(AuthorizationDenied):
+            self._service(self._pending()).confirm_review(
+                user, source_id="source-1", source_version="v1"
             )
 
 

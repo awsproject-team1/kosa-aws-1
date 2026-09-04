@@ -112,6 +112,19 @@ S3 versioning만으로는 같은 key에 이후 object version이 추가되는 �
   조건부 write로 수행한다. 값이 하나라도 다르면 전이는 실패한다.
 - **승인은 검증된 그 판본에만 붙는다.** 승인 record는 위 tuple을 그대로 인용하며, 다른 판본으로
   승인을 옮겨 붙일 수 없다.
+- **`REVIEW_REQUIRED → READY`는 사람이 만든다 (2026-09-05).** 병합 셀·불규칙 행·구조 없는 문서·
+  추론된 구분자 경고가 붙으면 파싱은 성공해도 자동으로 `READY`가 되지 않는다
+  (`REVIEW_REQUIRED_WARNINGS`) — locator가 근거로 쓸 만한지는 추출 결과를 보고 판단할 일이기
+  때문이다. 그 판단을 입력하는 문이
+  `POST /policy-sources/{sourceId}/versions/{version}/confirm-review`이며, 전이는 상태를 조건으로
+  건 write다. **경고는 지우지 않는다** — 남는 것은 "그 경고를 보고 사람이 진행을 결정했다"는
+  사실이고, 그 사람과 시각이 `reviewed_by`/`reviewed_at`으로 문서에 남는다. 경고가 없어 자동으로
+  `READY`가 된 문서는 이 두 필드가 비어 있으므로, 사람 판단이 필요했던 문서와 구별된다.
+
+  이 문이 없던 동안 라이브에서 ISMS-P 엑셀(334 unit, 병합 셀·불규칙 행 경고)이 `REVIEW_REQUIRED`에
+  멈췄고, authoring worker가 `SOURCE_NOT_READY`로 16분마다 재시도하며 DLQ를 채웠다. 게이트는
+  만들었는데 통과할 문이 없으면 게이트가 아니라 막다른 길이다. Worker도 이제 그 상태의 요청을
+  지워진 문서와 같이 **건너뛴다** — 사람의 확인은 재시도로 오지 않는다.
 
 ## Format policy
 

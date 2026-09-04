@@ -85,6 +85,17 @@ def run_requests(
             continue
         if not isinstance(document, NormalizedPolicyDocument):
             raise PolicyAuthoringRuntimeError("policy ingestion record is invalid")
+        if document.needs_review:
+            # 사람의 확인을 기다리는 문서다. 그 확인은 API(`POST .../confirm-review`)로만 오고,
+            # 재시도로는 절대 오지 않는다 — 그런데도 올리면 SQS가 16분마다 다시 보내며 DLQ를
+            # 채운다(라이브에서 ISMS-P 엑셀이 5시간 넘게 그랬다). 확인이 끝나면 그때 다시
+            # 요청하면 되므로, 지금은 할 일이 없는 것으로 본다. 지워진 문서와 같은 취급이다.
+            logging.getLogger("governance.policy.authoring").info(
+                "skipping authoring request for a policy source version awaiting review: %s %s",
+                request.source_id,
+                request.source_version,
+            )
+            continue
         result = extract_policy_candidates(
             customer_id=request.customer_id,
             document=document,

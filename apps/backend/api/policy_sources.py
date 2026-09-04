@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from apps.backend.auth import Action, Principal, authorize
@@ -60,6 +61,16 @@ class PolicySourceUploadRepository(Protocol):
         self, *, customer_id: str, source_id: str, source_version: str
     ) -> NormalizedPolicyDocument: ...
 
+    def confirm_review(
+        self,
+        *,
+        customer_id: str,
+        source_id: str,
+        source_version: str,
+        reviewer: str,
+        reviewed_at: str,
+    ) -> NormalizedPolicyDocument: ...
+
     def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]: ...
 
     def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None: ...
@@ -74,6 +85,7 @@ class PolicySourceApiService:
         repository: PolicySourceUploadRepository,
         source_id_factory: Callable[[], str],
         source_version_factory: Callable[[], str],
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         if (
             repository is None
@@ -84,6 +96,8 @@ class PolicySourceApiService:
         self._repository = repository
         self._source_id_factory = source_id_factory
         self._source_version_factory = source_version_factory
+        # 검토 기록의 시각. `PolicyApprovalApiService`와 같은 규약을 쓴다.
+        self._now = now or (lambda: datetime.now(UTC))
 
     def create_upload_session(
         self, principal: Principal, request: PolicySourceUploadRequest
@@ -146,6 +160,32 @@ class PolicySourceApiService:
             customer_id=principal.customer_id,
             source_id=source_id,
             source_version=source_version,
+        )
+
+    def confirm_review(
+        self, principal: Principal, *, source_id: str, source_version: str
+    ) -> NormalizedPolicyDocument:
+        """Record that a person looked at a `REVIEW_REQUIRED` extraction and let it proceed.
+
+        병합 셀·불규칙 행 경고가 붙은 문서는 자동으로 `READY`가 되지 않는다 — locator가 근거로
+        쓸 만한지는 사람이 판단할 일이기 때문이다(`REVIEW_REQUIRED_WARNINGS`). 이 엔드포인트가
+        그 판단을 입력하는 문이다. 문이 없으면 게이트가 아니라 막다른 길이고, 라이브에서 실제로
+        ISMS-P 엑셀이 그 상태로 멈춰 authoring worker가 `SOURCE_NOT_READY`로 무한 재시도했다.
+
+        경고는 지우지 않는다. 남는 것은 "그 경고를 보고 사람이 진행을 결정했다"는 사실이며,
+        그 사람의 신원과 시각이 문서에 기록된다.
+        """
+        if not isinstance(principal, Principal):
+            raise TypeError("principal must be a Principal")
+        _non_empty(source_id, "source_id")
+        _non_empty(source_version, "source_version")
+        authorize(principal, Action.MANAGE_POLICY_SOURCES)
+        return self._repository.confirm_review(
+            customer_id=principal.customer_id,
+            source_id=source_id,
+            source_version=source_version,
+            reviewer=principal.subject,
+            reviewed_at=self._now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
         )
 
     def list_sources(self, principal: Principal) -> tuple[dict[str, object], ...]:
