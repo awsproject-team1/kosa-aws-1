@@ -859,5 +859,61 @@ class HttpApiCorsTest(unittest.TestCase):
             self.assertNotIn("*", branch)
 
 
+class CloudFormationTemplateDeliveryTest(unittest.TestCase):
+    """The template has to reach CloudFormation by a route that fits its size.
+
+    `aws cloudformation deploy` refuses an inline body over 51,200 bytes, and this template carries
+    the reasoning behind its own security decisions, so it grows with every boundary it documents.
+    It crossed the limit mid-review and took a deploy down at the CLI, before any changeset existed
+    — nothing in the repository had a reason to notice. Staging through S3 raises the ceiling to
+    1 MB; this pins whichever route is in force against the size the template actually is.
+    """
+
+    INLINE_TEMPLATE_LIMIT = 51_200
+    S3_TEMPLATE_LIMIT = 1_048_576
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        workflow_path = Path(__file__).parents[2] / ".github/workflows/deploy-m0-foundation.yml"
+        workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        if not isinstance(workflow, dict):
+            raise TypeError("Deployment workflow must be a mapping")
+        steps = workflow["jobs"]["deploy"]["steps"]
+        cls.deploy_command = next(
+            step["run"]
+            for step in steps
+            if step.get("name") == "Deploy approved CloudFormation artifact"
+        )
+        cls.template_bytes = len(TEMPLATE_PATH.read_bytes())
+
+    def test_the_template_fits_the_route_the_workflow_uses(self) -> None:
+        staged = "--s3-bucket" in self.deploy_command
+        limit = self.S3_TEMPLATE_LIMIT if staged else self.INLINE_TEMPLATE_LIMIT
+        self.assertLessEqual(
+            self.template_bytes,
+            limit,
+            f"m0-foundation.yaml is {self.template_bytes} bytes; the deploy "
+            f"{'stages it through S3' if staged else 'sends it inline'}, limit {limit}",
+        )
+
+    def test_a_staged_template_is_written_where_the_deploy_role_may_write(self) -> None:
+        """The role's `s3:PutObject` is scoped to one prefix, so the wrong prefix is a 403.
+
+        Widening the role means the customer admin has to update the bootstrap stack by hand,
+        which is its own multi-day gate — the prefix stays inside what is already granted.
+        """
+        if "--s3-bucket" not in self.deploy_command:
+            self.skipTest("the deploy sends the template inline")
+        self.assertIn('--s3-bucket "${LAMBDA_CODE_S3_BUCKET}"', self.deploy_command)
+        self.assertIn("--s3-prefix lambda/m0", self.deploy_command)
+
+        roles_path = (
+            Path(__file__).parents[2]
+            / "infrastructure/cloudformation/m1-customer-bootstrap-roles.yaml"
+        )
+        granted = roles_path.read_text(encoding="utf-8")
+        self.assertIn("${ExistingLambdaCodeBucketName}/lambda/m0/*", granted)
+
+
 if __name__ == "__main__":
     unittest.main()
