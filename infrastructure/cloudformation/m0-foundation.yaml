@@ -1240,6 +1240,15 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Profile retire. current pointer만 지우고 판본 이력은 남긴다 — Assessment가 판본을 고정한다.
+  DeletePolicyProfileRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "DELETE /policy-profiles/{profileId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
   PostPolicyProfilesRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:

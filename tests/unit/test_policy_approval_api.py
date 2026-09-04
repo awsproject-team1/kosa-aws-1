@@ -103,6 +103,7 @@ class Repository:
         self.profile = None
         self.baseline_reads: list[tuple[str, str, str]] = []
         self.listed: str | None = None
+        self.retired: tuple[str, str, str] | None = None
 
     def load_review(self, **kwargs):
         # 두 후보를 돌려줘 부분 승인(하나만 고르기)을 검증할 수 있게 한다.
@@ -139,6 +140,9 @@ class Repository:
             rules=(BASELINE_RULE,),
             sources=(ISMS_SOURCE,),
         )
+
+    def retire_profile(self, *, customer_id, policy_profile_id, retired_by):
+        self.retired = (customer_id, policy_profile_id, retired_by)
 
     def list_profiles(self, *, customer_id):
         self.listed = customer_id
@@ -317,3 +321,58 @@ class CombinedPublicationTest(unittest.TestCase):
             self.service.list_profiles(user)
         self.assertEqual(len(self.service.list_profiles(self.admin)), 1)
         self.assertEqual(self.repository.listed, "cust-a")
+
+
+class RuleSubsetAndRetireTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repository = Repository()
+        self.service = PolicyApprovalApiService(self.repository)
+        self.admin = Principal(
+            subject="admin", client_id="client", customer_id="cust-a", roles=frozenset({Role.ADMIN})
+        )
+        self.service.approve(
+            self.admin,
+            source_id="source-1",
+            source_version="v1",
+            approved_rules=(
+                PolicyRuleReference(rule_id="RULE-1", version="v1"),
+                PolicyRuleReference(rule_id="RULE-2", version="v1"),
+            ),
+        )
+
+    def test_only_the_selected_rules_enter_the_profile(self) -> None:
+        """승인은 더해지므로 한 문서의 승인 집합은 커지기만 한다. 장바구니가 보여준 것을 게시한다."""
+        profile = self.service.publish(
+            self.admin,
+            sources=(("source-1", "v1"),),
+            rules=(PolicyRuleReference(rule_id="RULE-2", version="v1"),),
+            policy_profile_id="profile-2",
+            version="v1",
+        )
+
+        self.assertEqual([r.rule_id for r in profile.rule_references], ["RULE-2"])
+
+    def test_selecting_an_unapproved_rule_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.service.publish(
+                self.admin,
+                sources=(("source-1", "v1"),),
+                rules=(PolicyRuleReference(rule_id="RULE-9", version="v1"),),
+                policy_profile_id="profile-2",
+                version="v1",
+            )
+
+    def test_without_a_selection_every_approved_rule_is_published(self) -> None:
+        profile = self.service.publish(
+            self.admin, sources=(("source-1", "v1"),), policy_profile_id="profile-2", version="v1"
+        )
+        self.assertEqual({r.rule_id for r in profile.rule_references}, {"RULE-1", "RULE-2"})
+
+    def test_retire_needs_the_publish_action_and_names_the_actor(self) -> None:
+        user = Principal(
+            subject="user", client_id="client", customer_id="cust-a", roles=frozenset({Role.USER})
+        )
+        with self.assertRaises(AuthorizationDenied):
+            self.service.retire(user, policy_profile_id="profile-1")
+        self.service.retire(self.admin, policy_profile_id="profile-1")
+        self.assertEqual(self.repository.retired, ("cust-a", "profile-1", "admin"))

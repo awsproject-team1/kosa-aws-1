@@ -21,6 +21,7 @@ class AuditEventTypeContractTest(unittest.TestCase):
                 "DEPLOYMENT_REJECTED",
                 "POLICY_SOURCE_APPROVED",
                 "POLICY_PROFILE_PUBLISHED",
+                "POLICY_PROFILE_RETIRED",
                 "REMEDIATION_DECIDED",
                 "REMEDIATION_EXCEPTION_APPROVED",
                 "APPLY_DISPATCHED",

@@ -15,7 +15,7 @@ from apps.backend.repositories.policy_approval import (
     MAX_RULES_PER_APPROVAL,
     DynamoDbPolicyApprovalRepository,
 )
-from packages.common.errors import StoredDataError
+from packages.common.errors import ApprovalConflictError, StoredDataError
 from packages.contracts import (
     AuthoringRunStatus,
     RuleEvaluationType,
@@ -232,6 +232,145 @@ class RuntimeIsolationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(StoredDataError, "is not approved"):
             catalog.get_rule(rule_ids[0], DOCUMENT.source_version)
+
+
+class AdditiveApprovalTest(unittest.TestCase):
+    """한 판본에 대한 승인은 더해진다.
+
+    예전에는 두 번째 승인이 첫 번째와 다르면 조건부 write가 실패해 503으로 새어 나갔다 — 한
+    문서에서 두 번째 Profile을 만드는 순간 게시가 막혔다. 빼는 것은 허용하지 않는다: 이미 승인된
+    Rule은 게시된 Profile이 인용한다.
+    """
+
+    def setUp(self) -> None:
+        self.table = FakeTable()
+        self.repository = _repository(self.table)
+        store_ingestion_item(self.table)
+        self.repository.record_authoring_result(customer_id=CUSTOMER, result=_result())
+        self.candidates = _result().candidates
+        assert len(self.candidates) >= 2
+
+    def _approve(self, subset, *, approved_at: str = "2026-09-03T00:00:00Z") -> None:
+        approval, approved = approve_source(
+            DOCUMENT, subset, approved_by="reviewer@example.com", approved_at=approved_at
+        )
+        self.repository.record_approval(
+            customer_id=CUSTOMER, approval=approval, candidates=approved
+        )
+
+    def _stored_rule_ids(self) -> set[str]:
+        item = self.table.items[
+            (
+                f"CUSTOMER#{CUSTOMER}",
+                f"POLICY_SOURCE#{DOCUMENT.source_id}#VERSION#{DOCUMENT.source_version}#APPROVAL",
+            )
+        ]
+        return {r["rule_id"] for r in item["approved_rules"]}  # type: ignore[index]
+
+    def test_a_second_approval_adds_rules_instead_of_failing(self) -> None:
+        first, second = self.candidates[0], self.candidates[1]
+        self._approve((first,))
+
+        self._approve((second,), approved_at="2026-09-04T00:00:00Z")
+
+        self.assertEqual(self._stored_rule_ids(), {first.rule.rule_id, second.rule.rule_id})
+        rule_keys = {sk for (_pk, sk) in self.table.items if sk.startswith("RULE#")}
+        self.assertEqual(len(rule_keys), 2)
+
+    def test_the_earlier_rules_are_never_removed(self) -> None:
+        """부분집합을 다시 승인해도 앞서 승인된 Rule은 그대로다."""
+        first, second = self.candidates[0], self.candidates[1]
+        self._approve((first, second))
+
+        self._approve((first,), approved_at="2026-09-04T00:00:00Z")
+
+        self.assertEqual(self._stored_rule_ids(), {first.rule.rule_id, second.rule.rule_id})
+
+    def test_publication_sees_the_union(self) -> None:
+        first, second = self.candidates[0], self.candidates[1]
+        self._approve((first,))
+        self._approve((second,), approved_at="2026-09-04T00:00:00Z")
+
+        candidates, (approval,), _ = self.repository.load_publication(
+            customer_id=CUSTOMER,
+            source_id=DOCUMENT.source_id,
+            source_version=DOCUMENT.source_version,
+        )
+
+        self.assertEqual(
+            {c.rule.rule_id for c in candidates}, {first.rule.rule_id, second.rule.rule_id}
+        )
+        self.assertEqual(len(approval.approved_rules), 2)
+
+    def test_an_approval_bound_to_a_different_original_is_refused(self) -> None:
+        """binding이 다르면 같은 판본이 아니다. 다른 문서에 대한 승인을 보탤 수는 없다."""
+        from dataclasses import replace
+
+        first, second = self.candidates[0], self.candidates[1]
+        self._approve((first,))
+        approval, approved = approve_source(
+            DOCUMENT,
+            (second,),
+            approved_by="reviewer@example.com",
+            approved_at="2026-09-04T00:00:00Z",
+        )
+        relabelled = replace(approval, content_sha256="somebody-elses-bytes")
+
+        with self.assertRaises(ApprovalConflictError):
+            self.repository.record_approval(
+                customer_id=CUSTOMER, approval=relabelled, candidates=approved
+            )
+
+
+class RetireProfileTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.table = FakeTable()
+        self.repository, _ = _approve(self.table)
+        candidates, approvals, sources = self.repository.load_publication(
+            customer_id=CUSTOMER,
+            source_id=DOCUMENT.source_id,
+            source_version=DOCUMENT.source_version,
+        )
+        from apps.backend.policy.ingestion import publish_profile
+
+        profile = publish_profile(
+            policy_profile_id="profile-1",
+            version="v1",
+            candidates=candidates,
+            approvals=approvals,
+            sources=sources,
+        )
+        self.repository.record_profile(
+            customer_id=CUSTOMER,
+            profile=profile,
+            published_by="admin",
+            published_at="2026-09-03T00:00:00Z",
+        )
+
+    def test_retiring_removes_the_pointer_and_keeps_the_version(self) -> None:
+        """Assessment가 판본을 고정하고 보고서가 그것을 읽는다. 사라지는 것은 "현재" 자리뿐이다."""
+        self.repository.retire_profile(
+            customer_id=CUSTOMER, policy_profile_id="profile-1", retired_by="admin"
+        )
+
+        keys = {sk for (_pk, sk) in self.table.items}
+        self.assertNotIn("POLICY_PROFILE#profile-1", keys)
+        self.assertIn("POLICY_PROFILE#profile-1#VERSION#v1", keys)
+        events = [
+            item
+            for (_pk, sk), item in self.table.items.items()
+            if sk.startswith("AUDIT#") and item.get("event_type") == "POLICY_PROFILE_RETIRED"
+        ]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(self.repository.list_profiles(customer_id=CUSTOMER), ())
+
+    def test_retiring_an_unknown_profile_is_not_found(self) -> None:
+        from packages.common.errors import PolicyProfileNotFound
+
+        with self.assertRaises(PolicyProfileNotFound):
+            self.repository.retire_profile(
+                customer_id=CUSTOMER, policy_profile_id="nope", retired_by="admin"
+            )
 
 
 if __name__ == "__main__":

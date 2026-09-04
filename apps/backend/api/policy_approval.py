@@ -40,6 +40,10 @@ class PolicyApprovalRepository(Protocol):
 
     def list_profiles(self, *, customer_id: str) -> tuple[dict[str, object], ...]: ...
 
+    def retire_profile(
+        self, *, customer_id: str, policy_profile_id: str, retired_by: str
+    ) -> None: ...
+
     def record_profile(
         self,
         *,
@@ -132,6 +136,19 @@ class PolicyApprovalApiService:
         authorize(principal, Action.PUBLISH_POLICY_PROFILE)
         return self._repository.list_profiles(customer_id=principal.customer_id)
 
+    def retire(self, principal: Principal, *, policy_profile_id: str) -> None:
+        """Take a Profile out of the current set. Its versions stay for the reports that pin them."""
+        if not isinstance(principal, Principal):
+            raise TypeError("principal must be a Principal")
+        if not isinstance(policy_profile_id, str) or not policy_profile_id.strip():
+            raise ValueError("policy_profile_id must be a non-empty string")
+        authorize(principal, Action.PUBLISH_POLICY_PROFILE)
+        self._repository.retire_profile(
+            customer_id=principal.customer_id,
+            policy_profile_id=policy_profile_id,
+            retired_by=principal.subject,
+        )
+
     def publish(
         self,
         principal: Principal,
@@ -140,6 +157,7 @@ class PolicyApprovalApiService:
         policy_profile_id: str,
         version: str,
         baseline: tuple[str, str] | None = None,
+        rules: tuple[PolicyRuleReference, ...] | None = None,
         expected_current_version: str | None = None,
     ) -> PolicyProfile:
         """Publish one Profile from every selected policy source, plus an optional baseline.
@@ -152,6 +170,11 @@ class PolicyApprovalApiService:
         `baseline`은 ISMS-P 같은 운영자 게시 기준선의 `(policy_profile_id, version)`이다. 그
         Rule에는 고객 승인 record가 없다 — 고객이 올린 문서가 아니기 때문이다. 그래서 이미 이
         고객 파티션에 게시된 Profile에서만 가져온다(`ProfileBaseline` 참조).
+
+        `rules`는 이번 Profile에 넣을 승인 Rule의 부분집합이다. 승인은 판본마다 더해지므로
+        (`record_approval`), 한 문서의 승인 집합은 시간이 갈수록 커진다. 그것을 전부 넣으면
+        콘솔 장바구니가 보여준 것과 다른 Profile이 게시된다. 없으면 승인된 Rule 전부를 넣는다
+        (예전 동작). 승인되지 않은 Rule을 고르면 거부한다.
 
         `expected_current_version`이 없으면 최초 게시로 본다. 값이 있으면 그 판본을 가리키고
         있을 때만 pointer가 움직인다 — 동시에 게시된 두 Profile 중 나중 것이 앞의 것을 조용히
@@ -185,6 +208,16 @@ class PolicyApprovalApiService:
             candidates.extend(loaded_candidates)
             approvals.extend(loaded_approvals)
             published_sources.extend(loaded_sources)
+        if rules is not None:
+            wanted = {(reference.rule_id, reference.version) for reference in rules}
+            available = {(c.rule.rule_id, c.rule.version) for c in candidates}
+            unknown = sorted(wanted - available)
+            if unknown:
+                raise ValueError(
+                    "rules not approved for the selected sources: "
+                    + ", ".join(f"{rule_id}@{version}" for rule_id, version in unknown)
+                )
+            candidates = [c for c in candidates if (c.rule.rule_id, c.rule.version) in wanted]
         resolved_baseline = (
             None
             if baseline is None

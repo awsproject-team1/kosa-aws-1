@@ -517,8 +517,10 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       await refresh();
     } catch (e) {
       const msg = (e as Error).message;
-      const friendly = msg.includes("CONFLICT") ? "승인된 문서는 삭제할 수 없습니다(Profile이 참조 중)." : `삭제 실패: ${msg}`;
-      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "failed", meta: msg.includes("CONFLICT") ? "승인됨" : "실패" });
+      // 409는 "게시된 Profile이 아직 이 문서의 Rule을 인용한다"는 뜻이다. 아래 Profile 목록에서
+      // 그 Profile을 retire하면 참조가 풀리고 문서를 지울 수 있다.
+      const friendly = msg.includes("CONFLICT") ? "게시된 Profile이 이 문서의 Rule을 참조하고 있습니다. 아래 'Profile 목록'에서 해당 Profile을 삭제(retire)한 뒤 다시 시도하세요." : `삭제 실패: ${msg}`;
+      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "failed", meta: msg.includes("CONFLICT") ? "Profile 참조 중" : "실패" });
       setError(friendly);
     }
   }
@@ -630,10 +632,13 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       }
       // 한 Profile은 여러 사내 문서의 승인 Rule과 ISMS-P 같은 운영자 기준선을 함께 담는다.
       // 승인된 Rule 전체가 문서별로 들어가며, 기준선은 이미 게시된 Profile에서 가져온다.
+      // 승인은 판본마다 더해지므로 한 문서의 승인 집합은 커지기만 한다. 장바구니에 담긴 Rule만
+      // 이 Profile에 넣으라고 명시해야, 화면이 보여준 것과 같은 Profile이 게시된다.
       const body: Record<string, unknown> = {
         policy_profile_id: profileId.trim(),
         version: "v1",
         sources: [...bySource.entries()].map(([source_id, e]) => ({ source_id, source_version: e.source_version })),
+        rules: cart.map(i => ({ rule_id: i.rule_id, version: i.rule_version })),
       };
       if (baseline) body.baseline = { policy_profile_id: baseline.policy_profile_id, version: baseline.version };
       await api("/policy-profiles", session.accessToken, { method: "POST", body: JSON.stringify(body) });
@@ -645,7 +650,23 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       setNotice(`Profile '${profileId.trim()}' 게시 완료 — ${parts.join(" + ")}. 준비도는 정책 원본별로 따로 표시됩니다. '사용자 관리'에서 지정하세요.`);
       setCart([]);
       await refreshProfiles();
-    } catch (e) { setError(`게시 실패: ${(e as Error).message}`); }
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg.includes("409")
+        ? `게시 실패: 같은 ID의 Profile이 이미 있습니다(${profileId.trim()}). 다른 ID를 쓰거나 아래 목록에서 기존 Profile을 삭제하세요.`
+        : `게시 실패: ${msg}`);
+    }
+  }
+
+  async function retireProfile(p: PublishedProfile) {
+    setError(null); setNotice(null);
+    if (!confirm(`Profile '${p.policy_profile_id}'를 삭제(retire)할까요? 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다.`)) return;
+    try {
+      await api(`/policy-profiles/${enc(p.policy_profile_id)}`, session.accessToken, { method: "DELETE" });
+      setNotice(`Profile 삭제됨: ${p.policy_profile_id}`);
+      if (baselineId === p.policy_profile_id) setBaselineId("");
+      await refreshProfiles();
+    } catch (e) { setError(`Profile 삭제 실패: ${(e as Error).message}`); }
   }
 
   return <div className="panel">
@@ -741,6 +762,19 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         <button disabled={cart.length === 0 && !baselineId} onClick={() => void publishCart()}>Profile 게시</button>
       </div>
       {published.length === 0 && <p className="hint">게시된 기준선 Profile이 없습니다. 운영자 bootstrap이 Registry를 이 고객 파티션에 게시하면 여기에 나타납니다.</p>}
+    </div>
+
+    <div className="card">
+      <h2>Profile 목록 ({published.length})</h2>
+      <p className="hint">삭제는 retire입니다 — 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다. 문서를 지우려면 그 문서를 참조하는 Profile을 먼저 여기서 삭제하세요.</p>
+      {published.length === 0 ? <p className="obs-empty">게시된 Profile이 없습니다.</p>
+        : <table><thead><tr><th>Profile</th><th>버전</th><th>Rule</th><th>원본</th><th>게시</th><th></th></tr></thead>
+          <tbody>{published.map(p => <tr key={p.policy_profile_id}>
+            <td><code>{p.policy_profile_id}</code></td><td>{p.version}</td><td>{p.rule_count}</td>
+            <td>{p.source_kinds.length ? p.source_kinds.map(k => SEGMENT_LABELS[k] ?? k).join(" + ") : "구분 없음"}</td>
+            <td>{p.published_at ? String(p.published_at).slice(0, 16) : "-"}</td>
+            <td><button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} onClick={() => void retireProfile(p)}>삭제</button></td>
+          </tr>)}</tbody></table>}
     </div>
     {notice && <p className="status">{notice}</p>}
     {error && <p className="alert">{error}</p>}

@@ -52,6 +52,23 @@ class AuthoringRunNotFound(LookupError):
     """
 
 
+class ApprovalConflictError(ValueError):
+    """A later approval of the same source version disagrees with the one already recorded.
+
+    승인은 판본마다 하나의 record로 쌓인다. 나중 승인은 Rule을 **더할** 수만 있다 — 이미 승인된
+    Rule은 게시된 Profile이 인용하므로 빼거나 다른 원본에 다시 붙일 수 없다. 저장소 오류가
+    아니라 요청과 현재 상태의 충돌이므로 409다.
+    """
+
+
+class PolicyProfileInUse(ValueError):
+    """A policy source cannot be deleted while a published Profile still references it.
+
+    삭제를 막는 것은 승인 record의 존재가 아니라 **현재 게시된 Profile의 참조**다. Profile을
+    먼저 retire하면 그 문서는 지울 수 있다. 409다.
+    """
+
+
 class PolicyProfileNotFound(LookupError):
     """The requested policy profile version does not exist in the caller's partition.
 

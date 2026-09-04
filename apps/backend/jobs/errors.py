@@ -13,7 +13,9 @@ from apps.backend.repositories.ports import (
     RevisionConflictError,
 )
 from packages.common.errors import (
+    ApprovalConflictError,
     AuthoringRunNotFound,
+    PolicyProfileInUse,
     PolicyProfileNotFound,
     PolicySourceDeleteForbidden,
     PolicySourceNotFound,
@@ -79,8 +81,10 @@ def sanitize_public_failure(error: BaseException) -> PublicFailure:
     if isinstance(
         error,
         (
+            ApprovalConflictError,
             DeploymentApprovalError,
             DeploymentConflictError,
+            PolicyProfileInUse,
             PolicySourceDeleteForbidden,
             RemediationNotAutomatableError,
         ),

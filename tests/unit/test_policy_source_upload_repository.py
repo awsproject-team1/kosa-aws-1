@@ -9,7 +9,11 @@ from apps.backend.auth import AuthorizationDenied, Principal, Role
 from apps.backend.jobs.errors import sanitize_public_failure
 from apps.backend.policy.ingestion import normalize_upload
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
-from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
+from packages.common.errors import (
+    PolicyProfileInUse,
+    PolicySourceDeleteForbidden,
+    PolicySourceNotFound,
+)
 from packages.contracts import PolicySourceUploadRequest
 
 #: 목록 요약이 정책 원문을 실어 나르지 않는다는 것을 확인하기 위한 표식 문자열.
@@ -407,18 +411,75 @@ class PolicySourceDeleteTest(unittest.TestCase):
             ],
         )
 
-    def test_an_approved_source_is_refused_and_nothing_is_deleted(self) -> None:
+    def test_an_approval_alone_no_longer_blocks_deletion(self) -> None:
+        """막는 것은 승인 record가 아니라 현재 게시된 Profile의 참조다.
+
+        예전에는 승인된 문서는 영영 지울 수 없어 sandbox를 다시 시작할 방법이 없었다. 승인과
+        그 문서는 함께 지워진다.
+        """
         table = self._one_source()
         table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL")] = {
-            "entity_type": "POLICY_SOURCE_APPROVAL"
+            "entity_type": "POLICY_SOURCE_APPROVAL",
+            "customer_id": "cust-a",
         }
         s3 = DeletingS3()
-        with self.assertRaises(PolicySourceDeleteForbidden):
+
+        self._repository(table, s3).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+
+        self.assertEqual(table.items, {})
+
+    def test_a_published_profile_referencing_the_source_blocks_deletion(self) -> None:
+        table = self._one_source()
+        table.items[("CUSTOMER#cust-a", "POLICY_PROFILE#profile-1")] = {
+            "customer_id": "cust-a",
+            "policy_profile_id": "profile-1",
+            "rule_references": [{"rule_id": "CUST-X", "version": "v1"}],
+        }
+        s3 = DeletingS3()
+        with self.assertRaises(PolicyProfileInUse) as raised:
             self._repository(table, s3).delete_source(
                 customer_id="cust-a", source_id="source-1", source_version="v1"
             )
+        self.assertIn("profile-1", str(raised.exception))
         self.assertEqual(table.deleted, [])
         self.assertEqual(s3.deleted, [])
+
+    def test_a_segmented_profile_is_matched_by_its_recorded_source(self) -> None:
+        table = self._one_source()
+        table.items[("CUSTOMER#cust-a", "POLICY_PROFILE#profile-1")] = {
+            "customer_id": "cust-a",
+            "policy_profile_id": "profile-1",
+            "rule_references": [{"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"}],
+            "segments": [
+                {
+                    "kind": "INTERNAL_POLICY",
+                    "source_id": "source-1",
+                    "source_version": "v1",
+                    "rule_references": [{"rule_id": "S3-PUBLIC-001", "version": "2026-08-31"}],
+                }
+            ],
+        }
+        with self.assertRaises(PolicyProfileInUse):
+            self._repository(table, DeletingS3()).delete_source(
+                customer_id="cust-a", source_id="source-1", source_version="v1"
+            )
+
+    def test_a_retired_profile_version_does_not_block_deletion(self) -> None:
+        """판본 item만 남은 Profile은 현재 Profile이 아니다. 참조는 풀렸다."""
+        table = self._one_source()
+        table.items[("CUSTOMER#cust-a", "POLICY_PROFILE#profile-1#VERSION#v1")] = {
+            "customer_id": "cust-a",
+            "policy_profile_id": "profile-1",
+            "rule_references": [{"rule_id": "CUST-X", "version": "v1"}],
+        }
+        self._repository(table, DeletingS3()).delete_source(
+            customer_id="cust-a", source_id="source-1", source_version="v1"
+        )
+        self.assertEqual(
+            list(table.items), [("CUSTOMER#cust-a", "POLICY_PROFILE#profile-1#VERSION#v1")]
+        )
 
     def test_a_missing_source_is_not_found_rather_than_a_server_fault(self) -> None:
         table, s3 = DeleteTable(), DeletingS3()
@@ -496,16 +557,18 @@ class PolicySourceDeleteTest(unittest.TestCase):
         )
         self.assertEqual(table.deleted[0][1], "POLICY_INGESTION#source-1#VERSION#v1")
 
-    def test_an_approved_source_keeps_its_authoring_items_too(self) -> None:
+    def test_a_referenced_source_keeps_its_authoring_items_too(self) -> None:
         table = self._one_source()
-        table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#APPROVAL")] = {
-            "entity_type": "POLICY_SOURCE_APPROVAL"
+        table.items[("CUSTOMER#cust-a", "POLICY_PROFILE#profile-1")] = {
+            "customer_id": "cust-a",
+            "policy_profile_id": "profile-1",
+            "rule_references": [{"rule_id": "CUST-X", "version": "v1"}],
         }
         table.items[("CUSTOMER#cust-a", "POLICY_SOURCE#source-1#VERSION#v1#CANDIDATE#001")] = {
             "customer_id": "cust-a"
         }
         s3 = DeletingS3()
-        with self.assertRaises(PolicySourceDeleteForbidden):
+        with self.assertRaises(PolicyProfileInUse):
             self._repository(table, s3).delete_source(
                 customer_id="cust-a", source_id="source-1", source_version="v1"
             )

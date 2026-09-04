@@ -50,10 +50,19 @@ class FakeTable:
         """
         entries = list(kwargs["TransactItems"])  # type: ignore[arg-type]
         staged: dict[tuple[str, str], dict[str, object]] = {}
+        removed: list[tuple[str, str]] = []
         for entry in entries:
             check = entry.get("ConditionCheck")
             if check is not None:
                 self._require_condition(check)
+                continue
+            delete = entry.get("Delete")
+            if delete is not None:
+                # Profile retire가 쓰는 조건부 Delete. 조건을 무시하는 fake는 다른 고객의 pointer를
+                # 지우는 회귀를 잡지 못한다.
+                self._require_condition(delete)
+                key = _unmarshal(delete["Key"])
+                removed.append((str(key["PK"]), str(key["SK"])))
                 continue
             put = entry.get("Put")
             if put is None:
@@ -65,6 +74,8 @@ class FakeTable:
                 self._require_put_condition(key, put, str(expression))
             staged[key] = item
         self.items.update(staged)
+        for key in removed:
+            self.items.pop(key, None)
 
     def _require_put_condition(
         self, key: tuple[str, str], put: Mapping[str, object], expression: str
@@ -100,7 +111,9 @@ class FakeTable:
     def query(self, **kwargs: object) -> dict[str, object]:
         self.query_calls += 1
         values = kwargs["ExpressionAttributeValues"]
-        pk, prefix = str(values[":pk"]), str(values[":prefix"])  # type: ignore[index]
+        # 두 production 경로가 접두사 placeholder를 다른 이름으로 쓴다(`:prefix`, `:sk`).
+        pk = str(values[":pk"])  # type: ignore[index]
+        prefix = str(values.get(":prefix", values.get(":sk")))  # type: ignore[union-attr]
         matched = [
             dict(item)
             for (item_pk, sk), item in sorted(self.items.items())

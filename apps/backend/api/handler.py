@@ -293,6 +293,16 @@ class JobHttpHandler:
                         ) from error
                     return _response(200, response.to_dict())
             if (
+                method == "DELETE"
+                and path.startswith("/policy-profiles/")
+                and self._policy_approvals is not None
+            ):
+                policy_profile_id = path.removeprefix("/policy-profiles/")
+                if not policy_profile_id or "/" in policy_profile_id:
+                    raise JobNotFoundError("policy profile not found")
+                self._policy_approvals.retire(principal, policy_profile_id=policy_profile_id)
+                return _response(200, {"retired": True, "policy_profile_id": policy_profile_id})
+            if (
                 method == "GET"
                 and path == "/policy-profiles"
                 and self._policy_approvals is not None
@@ -671,6 +681,7 @@ def _policy_profile_request(raw_body: object) -> dict[str, object]:
         "source_id",
         "source_version",
         "baseline",
+        "rules",
         "expected_current_version",
     }
     if set(body) - allowed:
@@ -704,6 +715,18 @@ def _policy_profile_request(raw_body: object) -> dict[str, object]:
             _body_string(entry, "policy_profile_id"),
             _body_string(entry, "version"),
         )
+    raw_rules = body.get("rules")
+    rules = None
+    if raw_rules is not None:
+        if not isinstance(raw_rules, list):
+            raise ValueError("rules must be a list")
+        rules = tuple(
+            PolicyRuleReference(
+                rule_id=_body_string(_mapping(entry), "rule_id"),
+                version=_body_string(_mapping(entry), "version"),
+            )
+            for entry in raw_rules
+        )
     expected_current_version = body.get("expected_current_version")
     if expected_current_version is not None and (
         not isinstance(expected_current_version, str) or not expected_current_version
@@ -714,6 +737,7 @@ def _policy_profile_request(raw_body: object) -> dict[str, object]:
         "version": body["version"],
         "sources": sources,
         "baseline": baseline,
+        "rules": rules,
         "expected_current_version": expected_current_version,
     }
 

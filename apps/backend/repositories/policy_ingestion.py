@@ -11,7 +11,10 @@ from apps.backend.policy.ingestion.storage_keys import (
     normalized_object_key,
     original_object_key,
 )
-from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
+from packages.common.errors import (
+    PolicyProfileInUse,
+    PolicySourceNotFound,
+)
 from packages.contracts import (
     DocumentUnitKind,
     ExtractionWarningCode,
@@ -325,13 +328,16 @@ class DynamoDbPolicySourceUploadRepository:
         고아 정리는 운영 작업으로 남는다.
         """
         pk = f"CUSTOMER#{customer_id}"
-        approval_sk = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#APPROVAL"
-        try:
-            approved = self._table.get_item(Key={"PK": pk, "SK": approval_sk}).get("Item")
-        except Exception as error:
-            raise RuntimeError("policy source delete precheck failed") from error
-        if approved is not None:
-            raise PolicySourceDeleteForbidden("an approved policy source cannot be deleted")
+        referencing = self._profiles_referencing(customer_id, source_id, source_version)
+        if referencing:
+            # 막는 것은 승인 record의 존재가 아니라 **현재 게시된 Profile의 참조**다. 예전에는
+            # 승인된 문서는 영영 지울 수 없어 sandbox를 다시 시작할 방법이 없었다. Profile을
+            # retire하면 참조가 풀리고 문서는 지울 수 있다. 판본 item과 그것을 고정한 Assessment는
+            # 그대로 남는다 — 지우는 것은 문서와 그 승인이지 이미 만들어진 보고서가 아니다.
+            raise PolicyProfileInUse(
+                "published profiles still reference this policy source: "
+                + ", ".join(sorted(referencing))
+            )
         try:
             self._table.delete_item(
                 Key={"PK": pk, "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}"},
@@ -355,6 +361,52 @@ class DynamoDbPolicySourceUploadRepository:
                 self._presigner.delete_object(Bucket=self._bucket, Key=key)  # type: ignore[union-attr]
             except Exception as error:
                 raise RuntimeError("policy artifact delete failed") from error
+
+    def _profiles_referencing(
+        self, customer_id: str, source_id: str, source_version: str
+    ) -> tuple[str, ...]:
+        """Current Profiles whose rules come from this source version.
+
+        Segment가 기록된 Profile은 그것으로 판정한다. 그 이전에 게시된 Profile은 Rule 판본으로
+        판정한다 — authoring이 만든 Rule의 version은 곧 그 Source version이다.
+        """
+        kwargs: dict[str, object] = {
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk)",
+            "ExpressionAttributeValues": {
+                ":pk": f"CUSTOMER#{customer_id}",
+                ":sk": "POLICY_PROFILE#",
+            },
+        }
+        found: list[str] = []
+        while True:
+            try:
+                page = self._table.query(**kwargs)
+            except Exception as error:
+                raise RuntimeError("policy source delete precheck failed") from error
+            for item in page.get("Items", []):
+                if not isinstance(item, Mapping) or "#VERSION#" in str(item.get("SK", "")):
+                    continue
+                segments = item.get("segments")
+                if isinstance(segments, list) and segments:
+                    hit = any(
+                        isinstance(s, Mapping)
+                        and s.get("source_id") == source_id
+                        and s.get("source_version") == source_version
+                        for s in segments
+                    )
+                else:
+                    references = item.get("rule_references")
+                    hit = isinstance(references, list) and any(
+                        isinstance(r, Mapping) and r.get("version") == source_version
+                        for r in references
+                    )
+                if hit:
+                    found.append(str(item.get("policy_profile_id")))
+            token = page.get("LastEvaluatedKey")
+            if not token:
+                break
+            kwargs["ExclusiveStartKey"] = token
+        return tuple(found)
 
     def _delete_version_children(
         self, customer_id: str, source_id: str, source_version: str

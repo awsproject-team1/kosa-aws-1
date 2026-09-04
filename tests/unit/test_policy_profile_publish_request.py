@@ -80,5 +80,28 @@ class PolicyProfileRequestTest(unittest.TestCase):
         self.assertEqual(request["expected_current_version"], "v1")
 
 
+class RuleSelectionTest(unittest.TestCase):
+    def test_selected_rules_become_references(self) -> None:
+        request = _policy_profile_request(
+            _body(
+                source_id="src-1",
+                source_version="ver-1",
+                rules=[{"rule_id": "CUST-1", "version": "ver-1"}],
+            )
+        )
+        assert request["rules"] is not None
+        self.assertEqual([(r.rule_id, r.version) for r in request["rules"]], [("CUST-1", "ver-1")])
+
+    def test_an_absent_selection_stays_none(self) -> None:
+        request = _policy_profile_request(_body(source_id="src-1", source_version="ver-1"))
+        self.assertIsNone(request["rules"])
+
+    def test_a_malformed_rule_entry_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            _policy_profile_request(
+                _body(source_id="src-1", source_version="ver-1", rules=[{"rule_id": "CUST-1"}])
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

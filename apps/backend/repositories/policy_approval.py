@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
@@ -10,7 +11,11 @@ from apps.backend.policy.ingestion import ProfileBaseline
 from apps.backend.policy.serialization import profile_from_dict, rule_from_dict
 from apps.backend.repositories.dynamodb_values import marshal_item
 from apps.backend.repositories.errors import RepositoryError
-from packages.common.errors import AuthoringRunNotFound, PolicyProfileNotFound
+from packages.common.errors import (
+    ApprovalConflictError,
+    AuthoringRunNotFound,
+    PolicyProfileNotFound,
+)
 from packages.contracts import (
     ApprovalRejectionCode,
     ArtifactReadFailureCode,
@@ -112,6 +117,12 @@ class DynamoDbPolicyApprovalRepository:
 
         `candidates`는 사람이 고른 부분집합이며 전부 APPROVED여야 한다. 미승인 후보가 섞이면
         검토 게이트를 통과하지 않은 Rule이 Registry에 들어간다.
+
+        **승인은 더해진다.** 같은 판본에 이미 승인 record가 있으면 새 승인은 그 record에 Rule을
+        보태고, 이미 승인된 Rule은 그대로 남는다. 예전에는 두 번째 승인이 첫 번째와 다르면
+        조건부 write가 실패해 503으로 새어 나갔다 — 한 문서에서 두 번째 Profile을 만드는 순간
+        게시가 막혔다. 빼는 것은 허용하지 않는다: 이미 승인된 Rule은 게시된 Profile이 인용한다.
+        원본 binding이 다르면 같은 판본이 아니므로 거부한다.
         """
         _non_empty(customer_id, "customer_id")
         if not isinstance(approval, PolicySourceApproval) or not all(
@@ -122,6 +133,34 @@ class DynamoDbPolicyApprovalRepository:
             # DynamoDB transaction의 item 상한 안에 머문다. 넘으면 승인이 원자적이지 않게 된다.
             raise RepositoryError(
                 f"one approval must not record more than {MAX_RULES_PER_APPROVAL} rules"
+            )
+        stored = self._stored_approval(customer_id, approval)
+        if stored is not None:
+            already = {(r.rule_id, r.version) for r in stored.approved_rules}
+            added = tuple(
+                reference
+                for reference in approval.approved_rules
+                if (reference.rule_id, reference.version) not in already
+            )
+            if not added:
+                # 보탤 것이 없다. 같은 승인의 재시도이거나 이미 승인된 부분집합이다. 그래도 저장된
+                # Rule item이 지금 승인하려는 내용과 같은지는 확인한다 — 같은 key에 다른 내용이
+                # 있다면 승인된 Rule이 바뀐 것이고, 그것을 "성공"으로 답하면 사실이 사라진다.
+                if self._table is not None and not all(
+                    self._stored_matches(
+                        customer_id,
+                        _rule_item(customer_id, candidate, "unused"),
+                        ignoring=_WRITE_TIME_FIELDS | {"recorded_at"},
+                    )
+                    for candidate in candidates
+                ):
+                    raise RepositoryError("an approved rule differs from the stored registry item")
+                return
+            approval = replace(approval, approved_rules=(*stored.approved_rules, *added))
+            candidates = tuple(
+                candidate
+                for candidate in candidates
+                if (candidate.rule.rule_id, candidate.rule.version) not in already
             )
         occurred_at, event_id = self._now_iso(), self._new_id("audit")
         pk = f"CUSTOMER#{customer_id}"
@@ -173,11 +212,18 @@ class DynamoDbPolicyApprovalRepository:
             }
         }
         rule_items = [_rule_item(customer_id, candidate, occurred_at) for candidate in candidates]
+        approval_entry = (
+            self._put(approval_item)
+            if stored is None
+            # 이미 있는 record를 보탠 record로 바꾼다. 그 사이에 누가 먼저 보탰으면 조건이
+            # 실패하고 호출자가 다시 읽는다 — 두 승인이 서로를 덮어쓰지 않게 한다.
+            else self._replace(approval_item, "approved_at = :seen", {":seen": stored.approved_at})
+        )
         entries = [
             condition,
             *self._authoring_condition(customer_id, approval),
             *(self._put(item) for item in rule_items),
-            self._put(approval_item),
+            approval_entry,
             self._put(audit_item),
         ]
         try:
@@ -196,6 +242,92 @@ class DynamoDbPolicyApprovalRepository:
                 for item in (*rule_items, approval_item)
             ):
                 raise
+
+    def _stored_approval(
+        self, customer_id: str, approval: PolicySourceApproval
+    ) -> PolicySourceApproval | None:
+        """The approval already recorded for this exact source version, if any.
+
+        같은 판본인지는 원본 binding으로 판정한다. binding이 다른 승인은 다른 문서에 대한
+        승인이므로 보탤 수 없다.
+        """
+        if self._table is None:
+            return None
+        item = self._find_item(
+            customer_id,
+            f"POLICY_SOURCE#{approval.source_id}#VERSION#{approval.source_version}#APPROVAL",
+        )
+        if item is None:
+            return None
+        stored = _approval_from_item(item)
+        same_binding = (
+            stored.original_binding == approval.original_binding
+            and stored.normalized_artifact_id == approval.normalized_artifact_id
+            and stored.normalized_sha256 == approval.normalized_sha256
+        )
+        if not same_binding:
+            raise ApprovalConflictError(
+                "this source version already carries an approval bound to a different original"
+            )
+        return stored
+
+    def retire_profile(self, *, customer_id: str, policy_profile_id: str, retired_by: str) -> None:
+        """Remove a Profile's current pointer so nothing new can select it.
+
+        판본 item(`#VERSION#`)은 남긴다. Assessment가 그 판본을 고정해 두었고 보고서가 그것을
+        읽어 준비도를 원본별로 나누므로, 지우면 이미 만들어진 보고서가 깨진다. 사라지는 것은
+        "현재 Profile"이라는 자리뿐이다 — 목록에서 빠지고, 사용자에게 지정할 수 없게 되고,
+        문서 삭제를 막던 참조가 풀린다.
+        """
+        _non_empty(customer_id, "customer_id")
+        _non_empty(policy_profile_id, "policy_profile_id")
+        _non_empty(retired_by, "retired_by")
+        pk = f"CUSTOMER#{customer_id}"
+        pointer_sk = f"POLICY_PROFILE#{policy_profile_id}"
+        pointer = self._find_item(customer_id, pointer_sk)
+        if pointer is None:
+            raise PolicyProfileNotFound("policy profile not found")
+        occurred_at, event_id = self._now_iso(), self._new_id("audit")
+        audit_item = {
+            "PK": pk,
+            "SK": f"AUDIT#{occurred_at}#{event_id}",
+            "entity_type": "AUDIT_EVENT",
+            "customer_id": customer_id,
+            "event_id": event_id,
+            "occurred_at": occurred_at,
+            "version": 1,
+            "event_type": AuditEventType.POLICY_PROFILE_RETIRED.value,
+            "policy_profile_id": policy_profile_id,
+            "policy_profile_version": pointer.get("current_version"),
+            "retired_by": retired_by,
+        }
+        self._write(
+            [
+                {
+                    "Delete": {
+                        "TableName": self._table_name,
+                        "Key": marshal_item({"PK": pk, "SK": pointer_sk}),
+                        "ConditionExpression": "attribute_exists(SK) AND customer_id = :customer",
+                        "ExpressionAttributeValues": marshal_item({":customer": customer_id}),
+                    }
+                },
+                self._put(audit_item),
+            ],
+            "policy profile retirement",
+        )
+
+    def _replace(
+        self, item: dict[str, object], condition: str, values: dict[str, object]
+    ) -> dict[str, object]:
+        """Overwrite one item only while the stored one still looks as the caller last read it."""
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(item),
+                "ConditionExpression": f"attribute_exists(SK) AND {condition}",
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _authoring_condition(
         self, customer_id: str, approval: PolicySourceApproval
