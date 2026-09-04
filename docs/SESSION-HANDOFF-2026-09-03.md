@@ -268,6 +268,16 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   입력값과 그때 넣은 `M1_ASSESSMENT_RUNTIME_JSON`은 모두 옛 형식이라 **둘 다** 새 검증기에 걸린다(로컬에서 세 조합을
   돌려 확인: 새 target+새 scope만 통과). 고칠 것:
   - dispatch 입력 `assessment_scope_json`에서 `policy_profile_id` 제거(위 명령은 수정본).
+  - **2026-09-04 재배포 결과(run 33828388203, `dev` `68d4f98`, UPDATE_COMPLETE).** 앞선 세 번은 각각
+    다른 층에서 막혔다: scope selector 검증(#74) → API Gateway CORS 중복(#75) → CLI 템플릿 51,200B
+    상한(#76). 네 번째는 **손으로 만든 route 6개**(`/scope`, `/policy-sources` 목록·삭제, `/admin/users`
+    3종)가 스택 밖에 있어 `CREATE_FAILED AlreadyExists`로 죽었다. 복구: `list-stack-resources`의
+    Route PhysicalResourceId와 `apigatewayv2 get-routes`를 대조해 고아를 산출 → 전체 route JSON 백업 →
+    고아만 `delete-route` → 재디스패치. **CloudFormation이 관리하는 API에 route를 손으로 만들지 말 것.**
+    급하면 템플릿을 고쳐 배포한다. 배포 후 CORS가 `http://localhost:5173`만 허용해 CloudFront SPA가
+    전부 차단됐다 — deploy Environment 변수 `FRONTEND_CALLBACK_URL`/`FRONTEND_LOGOUT_URL`이 비어
+    기본값이 들어간 것. 둘 다 `https://dfur2d0d1329n.cloudfront.net`로 설정했고(이제 필수값으로
+    취급), 라이브 API는 `update-api`로 즉시 패치했다(다음 배포가 같은 값으로 덮어쓴다).
   - `github_repository`·`aws_account_id`는 콘솔의 "연결된 고객사 리소스"(`GET /scope`)가 읽는
     표시값이다. 배포 gate가 이 둘을 받도록 넓혔으므로 dispatch로 넣을 수 있다 — 빼고 배포하면
     라이브 Lambda에 손으로 넣어둔 값을 덮어써 화면에서 사라진다. 두 값은 같은 selector의

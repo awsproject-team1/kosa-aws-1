@@ -129,6 +129,11 @@ Conditions:
   LocalDevelopmentOriginAllowed: !And
     - !Equals [!Ref Environment, "sandbox"]
     - !Not [!Equals [!Ref FrontendCallbackUrl, "http://localhost:5173"]]
+  # Same rule for the Hosted UI logout list, guarded by its own parameter: the two URLs are
+  # configured independently, so one may already be localhost while the other is not.
+  LocalDevelopmentLogoutAllowed: !And
+    - !Equals [!Ref Environment, "sandbox"]
+    - !Not [!Equals [!Ref FrontendLogoutUrl, "http://localhost:5173"]]
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
   DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
   PolicyAuthoringEnabled: !Not [!Equals [!Ref PolicyAuthoringModelProfileJson, ""]]
@@ -665,8 +670,20 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email]
-      CallbackURLs: [!Ref FrontendCallbackUrl]
-      LogoutURLs: [!Ref FrontendLogoutUrl]
+      # The Hosted UI only redirects to a listed URL, so the callback list must agree with the
+      # API's CORS origins: a sandbox that serves the SPA from CloudFront still signs in from
+      # the Vite dev server. Both lists are built from the one parameter plus the local origin,
+      # under the same condition that keeps them distinct — Cognito rejects a repeated entry the
+      # way API Gateway does. Before this, the local entry was added by hand and every redeploy
+      # was one parameter change away from dropping it.
+      CallbackURLs: !If
+        - LocalDevelopmentOriginAllowed
+        - [!Ref FrontendCallbackUrl, "http://localhost:5173"]
+        - [!Ref FrontendCallbackUrl]
+      LogoutURLs: !If
+        - LocalDevelopmentLogoutAllowed
+        - [!Ref FrontendLogoutUrl, "http://localhost:5173"]
+        - [!Ref FrontendLogoutUrl]
       SupportedIdentityProviders: [COGNITO]
 
   # Cognito Pre-Token-Generation V2 트리거: 저장된 custom:customer_id를 access token에
