@@ -20,6 +20,7 @@ from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
 from apps.backend.api.remediations import RemediationApiService
+from apps.backend.api.scope import SCOPE_ENTRY_FIELDS
 from apps.backend.assessment import DynamoDbAssessmentReportStore
 from apps.backend.auth import Principal
 from apps.backend.deployment import DeploymentApprovalService
@@ -619,12 +620,12 @@ def _metadata_table() -> object:
 def _repository_ids(value: object) -> frozenset[str]:
     """Read the repositories one customer may assess.
 
-    항목에 `policy_profile_id`가 남아 있으면 거부한다. 조용히 무시하면, 운영자는 Profile 경계가
-    아직 환경변수로 강제된다고 믿은 채 배포한다. `repository_id` 외에 콘솔 표시용 비밀 아닌
-    연결 정보(`github_repository`, `aws_account_id`)는 허용하되, 그 밖의 알 수 없는 필드는
-    fail-closed로 거부한다 — 비밀 참조(role ARN, secret id)를 이 환경변수에 넣지 않게 강제한다.
+    허용 필드는 `SCOPE_ENTRY_FIELDS`가 정한다. 여기 다시 나열하지 않는 이유는 그 목록이 늘었을
+    때 설명만 낡기 때문이다. 목록 밖 필드는 fail-closed로 거부한다 — 그래야 폐기된
+    `policy_profile_id`가 조용히 무시된 채 운영자가 "Profile 경계가 아직 환경변수로 강제된다"고
+    믿는 일이 없고, 비밀 참조(role ARN, secret id)도 이 환경변수에 들어오지 못한다.
     """
-    allowed = {"repository_id", "github_repository", "aws_account_id"}
+    allowed = SCOPE_ENTRY_FIELDS
     if not isinstance(value, list):
         raise ValueError
     repositories: set[str] = set()

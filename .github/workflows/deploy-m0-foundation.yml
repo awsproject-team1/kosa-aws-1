@@ -42,7 +42,7 @@ on:
         required: true
         type: string
       assessment_scope_json:
-        description: Approved M0 customer/repository/profile selector map
+        description: Approved customer/repository selector map, with the console connection facts
         required: true
         default: '{}'
         type: string

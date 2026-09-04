@@ -21,6 +21,11 @@ from pathlib import Path
 
 from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
 from agent.runtime.github_tool import require_github_repository_full_name
+from apps.backend.api.scope import (
+    SCOPE_CONNECTION_FIELDS,
+    SCOPE_CONNECTION_RULES,
+    SCOPE_SELECTOR_FIELDS,
+)
 
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
 COMMON_TARGET_FIELDS = frozenset(
@@ -44,9 +49,13 @@ RESOURCE_FIELDS = frozenset({"resource_type", "resource_id"})
 #: Resource types the Worker has an Actual read adapter for. Imported, not restated: a
 #: hand-copied list would let this gate accept a type the Worker cannot read.
 SUPPORTED_RESOURCE_TYPES = frozenset(ACTUAL_READ_RESOURCE_TYPES)
-#: Assessment scope는 Repository 경계만 선언한다. Policy Profile은 고객 partition의 Catalog가
-#: 정하므로, 여기 남아 있으면 두 경계가 서로 다른 것을 말하게 된다.
-SCOPE_FIELDS = frozenset({"repository_id"})
+#: Scope 항목의 평가 경계 필드와, 콘솔이 표시하는 선택적 연결 정보. Imported, not restated —
+#: 위 리소스 유형과 같은 이유다. 이 gate가 runtime보다 좁으면 화면이 읽을 값을 배포할 방법이
+#: 없어 재배포가 라이브 표시값을 지우고, 넓으면 배포는 통과했는데 API Lambda가 콜드 스타트에
+#: 실패한다. 목록 밖 필드는 계속 fail-closed로 거부해 secret 참조(role ARN·secret id)가 이
+#: 환경변수에 들어오지 못하게 한다.
+SCOPE_FIELDS = SCOPE_SELECTOR_FIELDS
+SCOPE_DISPLAY_FIELDS = SCOPE_CONNECTION_FIELDS
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 
@@ -101,8 +110,10 @@ def validate_environment(environment: Mapping[str, str]) -> str:
         )
 
     targets = _targets(runtime_raw)
-    target_scope = {(target["customer_id"], target["repository_id"]) for target in targets}
-    if target_scope != scope:
+    targets_by_selector = {
+        (target["customer_id"], target["repository_id"]): target for target in targets
+    }
+    if set(targets_by_selector) != set(scope):
         raise DeploymentConfigurationError(
             "assessment scope and M1 runtime selector sets must match exactly"
         )
@@ -154,6 +165,17 @@ def validate_environment(environment: Mapping[str, str]) -> str:
         raise DeploymentConfigurationError(
             "M1_ASSESSMENT_READ_ROLE_ARNS must match runtime read roles exactly"
         )
+
+    # 표시값은 평가 대상과 같은 것을 가리켜야 한다. 화면이 repository A를 "연결됨"으로 보여주는데
+    # Worker가 B를 평가하면, 운영자는 확인한 적 없는 대상에 대해 승인하게 된다. 대조는 target 값이
+    # 위에서 이미 검증된 뒤에 한다.
+    for selector, declared_facts in scope.items():
+        target = targets_by_selector[selector]
+        for field_name, declared in declared_facts.items():
+            if declared != target[field_name]:
+                raise DeploymentConfigurationError(
+                    f"assessment scope {field_name} must match the M1 runtime target"
+                )
     return mode
 
 
@@ -169,25 +191,51 @@ def _approved_model_profile_region() -> str:
     return _required(profile.get("region"), "approved M1 Model Profile region")
 
 
-def _scope(raw: object) -> set[tuple[str, str, str]]:
+def _scope(raw: object) -> dict[tuple[str, str], dict[str, str]]:
+    """Selector → 콘솔 표시용 연결 정보. 평가 경계는 selector가 정하고, 값은 표시만 한다."""
     parsed = _json(raw, "ASSESSMENT_SCOPE_JSON")
     if not isinstance(parsed, dict):
         raise DeploymentConfigurationError("ASSESSMENT_SCOPE_JSON must be an object")
-    selectors: set[tuple[str, str]] = set()
+    selectors: dict[tuple[str, str], dict[str, str]] = {}
     count = 0
     for customer_id, entries in parsed.items():
         customer = _required(customer_id, "assessment scope customer_id")
         if not isinstance(entries, list):
             raise DeploymentConfigurationError("assessment scope customer entries must be arrays")
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != SCOPE_FIELDS:
+            if not isinstance(entry, dict):
+                raise DeploymentConfigurationError("assessment scope selector fields are invalid")
+            present = set(entry)
+            if not SCOPE_FIELDS <= present or not present <= (SCOPE_FIELDS | SCOPE_DISPLAY_FIELDS):
                 raise DeploymentConfigurationError("assessment scope selector fields are invalid")
             selector = (customer, _required(entry.get("repository_id"), "repository_id"))
-            selectors.add(selector)
+            selectors[selector] = _connection_facts(entry)
             count += 1
     if len(selectors) != count:
         raise DeploymentConfigurationError("assessment scope selectors must be unique")
     return selectors
+
+
+def _connection_facts(entry: Mapping[str, object]) -> dict[str, str]:
+    """Shape-check the console's connection facts.
+
+    규칙은 값을 내보내는 서비스 모듈이 소유한다 — 필드가 늘면 검사가 함께 온다.
+    fixture 모드에는 대조할 M1 target이 없으므로 여기까지가 이 값들에 대한 유일한 검증이다.
+    live 모드는 `validate_environment`가 같은 selector의 target 값과 한 번 더 대조한다.
+    """
+    facts: dict[str, str] = {}
+    # 선언 여부는 키의 존재로 본다. `entry.get(...) is not None`으로 보면 `null`을 쓴 오타가
+    # 조용히 무시돼, 배포는 통과하는데 화면에서 그 값만 사라진다.
+    for field_name, rule in sorted(SCOPE_CONNECTION_RULES.items()):
+        if field_name not in entry:
+            continue
+        value = _required(entry[field_name], field_name)
+        if not rule.is_valid(value):
+            raise DeploymentConfigurationError(
+                f"assessment scope {field_name} must be {rule.requirement}"
+            )
+        facts[field_name] = value
+    return facts
 
 
 def _targets(raw: str) -> tuple[dict[str, str], ...]:

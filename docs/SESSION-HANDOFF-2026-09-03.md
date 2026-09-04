@@ -259,7 +259,7 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
     -f role_to_assume=arn:aws:iam::369676914736:role/kosa-governance-sandbox-github-deploy \
     -f cloudformation_execution_role_arn=arn:aws:iam::369676914736:role/kosa-governance-sandbox-foundation-cfn \
     -f lambda_code_s3_bucket=kosa-governance-sandbox-lambda-code-369676914736 \
-    -f assessment_scope_json='{"kosa-sandbox":[{"repository_id":"test-s3-sandbox"}]}'
+    -f assessment_scope_json='{"kosa-sandbox":[{"repository_id":"test-s3-sandbox","github_repository":"awsproject-team1/test","aws_account_id":"369676914736"}]}'
   ```
   두 Environment 게이트를 순서대로 승인한다.
 - **첫 dispatch(run 33763473589)는 `Validate assessment deployment configuration`에서 멈췄다:**
@@ -268,6 +268,10 @@ patch 생성. **안 되는 것**: (2/3) 업로드로 정책/Profile 만들기, (
   입력값과 그때 넣은 `M1_ASSESSMENT_RUNTIME_JSON`은 모두 옛 형식이라 **둘 다** 새 검증기에 걸린다(로컬에서 세 조합을
   돌려 확인: 새 target+새 scope만 통과). 고칠 것:
   - dispatch 입력 `assessment_scope_json`에서 `policy_profile_id` 제거(위 명령은 수정본).
+  - `github_repository`·`aws_account_id`는 콘솔의 "연결된 고객사 리소스"(`GET /scope`)가 읽는
+    표시값이다. 배포 gate가 이 둘을 받도록 넓혔으므로 dispatch로 넣을 수 있다 — 빼고 배포하면
+    라이브 Lambda에 손으로 넣어둔 값을 덮어써 화면에서 사라진다. 두 값은 같은 selector의
+    `M1_ASSESSMENT_RUNTIME_JSON` target과 정확히 일치해야 하며, 어긋나면 gate가 거부한다.
   - Secret `M1_ASSESSMENT_RUNTIME_JSON`을 `policy_profile_id` 없는 형식으로 다시 넣는다. 필드는
     `customer_id, repository_id, commit_sha, github_repository, github_token_secret_id, aws_account_id,
     aws_read_role_arn, aws_external_id_secret_id, s3_bucket_id`. secret 참조는 exact ARN이어야 하고
