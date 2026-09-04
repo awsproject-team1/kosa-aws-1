@@ -420,6 +420,7 @@ class CloudFormationSecurityTest(unittest.TestCase):
         expected = {
             "PostFindingRemediationsRoute": "POST /findings/{findingId}/remediations",
             "PostRemediationDeploymentsRoute": "POST /remediations/{remediationId}/deployments",
+            "GetRemediationRoute": "GET /remediations/{remediationId}",
             "GetDeploymentRoute": "GET /deployments/{deploymentId}",
             "GetDeploymentVerificationRoute": "GET /deployments/{deploymentId}/verification",
             "PostDeploymentApproveRoute": "POST /deployments/{deploymentId}/approve",

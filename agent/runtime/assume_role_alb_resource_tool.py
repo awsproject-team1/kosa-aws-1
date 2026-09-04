@@ -173,7 +173,10 @@ class AssumeRoleAlbResourceTool(AwsResourceTool):
             attributes={
                 "load_balancer": projected(balancer, _LOAD_BALANCER_FIELDS),
                 "listeners": [projected(listener, _LISTENER_FIELDS) for listener in listeners],
-                "attributes": _selected_attributes(attributes),
+                # `attributes.attributes`라는 중첩 이름은 모델을 오도했다: 라이브 A/B(3회씩)에서
+                # HTTPS 리스너가 있는 ALB를 `access_logs.s3.enabled=false`만 보고 FAIL로 판정했고,
+                # 이 key를 `load_balancer_attributes`로 바꾸자 같은 문서가 3/3 PASS였다.
+                "load_balancer_attributes": _selected_attributes(attributes),
             },
         )
 

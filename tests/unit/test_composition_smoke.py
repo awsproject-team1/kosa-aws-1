@@ -90,6 +90,7 @@ class CompositionSmokeTest(unittest.TestCase):
             "_policy_approvals",
             "_policy_candidates",
             "_remediation_exceptions",
+            "_remediation_reads",
             "_audit_events",
         ):
             with self.subTest(attribute=attribute):

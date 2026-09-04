@@ -80,6 +80,23 @@ def actual_evidence_reference(resource_type: str, resource_id: str) -> str:
     return f"{scope.evidence_prefix}{identifier}#read-resource"
 
 
+def resource_type_for_evidence_reference(reference: object) -> str | None:
+    """Return the resource type whose Actual read produced this `aws:` locator, if any.
+
+    `actual_evidence_reference()`의 역함수다. Actual 결과의 evidence는 이 함수가 만든 locator
+    하나뿐이므로, 그 접두사가 어떤 resource type의 read였는지 결정적으로 되돌릴 수 있다.
+    remediation은 결과 item에 resource type이 저장되지 않는 M1 스키마에서 대상 유형을 알아야
+    하는데, 이 locator가 그 유일한 근거다. 접두사가 어느 scope와도 맞지 않으면 `None`이다 —
+    추측하지 않는다.
+    """
+    if not isinstance(reference, str):
+        return None
+    for resource_type, scope in _ACTUAL_RESOURCE_SCOPES.items():
+        if reference.startswith(scope.evidence_prefix) and reference.endswith("#read-resource"):
+            return resource_type
+    return None
+
+
 def _arn_resource(arn: str) -> str:
     """Return the `resource` part of an ARN (`arn:partition:service:region:account:resource`)."""
     parts = arn.split(":", 5)

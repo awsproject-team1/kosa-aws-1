@@ -25,6 +25,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Protocol
 
+from apps.backend.assessment.actual import resource_type_for_evidence_reference
 from apps.backend.remediation.context import build_remediation_context
 from apps.backend.repositories.ports import RepositoryError, StoredDataError
 from packages.contracts import (
@@ -47,11 +48,12 @@ class DynamoTable(Protocol):
     def query(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
-# M1은 S3 버킷 하나를 평가 대상으로 삼으므로 resource type이 결과 item에 저장되지 않는다.
-# `RemediationTarget`은 resource_type을 요구하지만 B의 `decide()`는 그것을 조치 판정에 쓰지
-# 않는다(정책은 `terraform_managed`와 rule identity로 판정). resource type이 결과에 저장되기
-# 전까지 M1의 유일한 대상 유형을 명시적으로 되돌린다.
-_M1_RESOURCE_TYPE = "AWS::S3::Bucket"
+# 결과 item에는 resource type이 저장되지 않는다(M1 스키마). 대상 유형은 AWS_ACTUAL 결과의
+# `aws:` read locator에서 되돌린다 — 그 locator는 `actual_evidence_reference()`가 resource type별
+# 접두사로 만든 값이라 결정적으로 역산된다. locator가 없거나 어느 접두사와도 맞지 않는 옛 record는
+# M1의 유일한 대상 유형이었던 S3로 본다. B의 `decide()`는 resource_type을 판정에 쓰지 않으므로
+# 이 값은 표시·감사용이지만, RDS Finding에 S3라고 적힌 target을 남기지는 않는다.
+_LEGACY_RESOURCE_TYPE = "AWS::S3::Bucket"
 
 
 class DynamoDbRemediationContextReader:
@@ -86,10 +88,13 @@ class DynamoDbRemediationContextReader:
     def get_target(self, *, customer_id: str, finding_id: str) -> RemediationTarget:
         finding, assessment_id = self._load_finding(customer_id, finding_id)
         iac_result = self._result(customer_id, assessment_id, finding, EvaluationPerspective.IAC)
+        actual_result = self._result(
+            customer_id, assessment_id, finding, EvaluationPerspective.AWS_ACTUAL
+        )
         try:
             return RemediationTarget(
                 resource_id=finding.resource_id,
-                resource_type=_M1_RESOURCE_TYPE,
+                resource_type=_resource_type(actual_result),
                 rule_id=finding.rule_id,
                 rule_version=finding.rule_version,
                 # IAC 관점이 평가됐다는 것은 이 리소스가 Terraform으로 관리된다는 뜻이다.
@@ -199,6 +204,15 @@ class DynamoDbRemediationContextReader:
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("remediation snapshot is invalid") from error
+
+
+def _resource_type(actual_result: EvaluationResult) -> str:
+    """The resource type the Actual read observed, restored from its evidence locator."""
+    for reference in actual_result.evidence_references:
+        resource_type = resource_type_for_evidence_reference(reference)
+        if resource_type is not None:
+            return resource_type
+    return _LEGACY_RESOURCE_TYPE
 
 
 def _snapshot_digest(*, customer_id: str, repository_id: str, commit_sha: str) -> str:

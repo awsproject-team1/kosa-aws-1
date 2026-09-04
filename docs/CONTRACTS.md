@@ -38,6 +38,17 @@
 `scoring_mode`의 기본값은 `CONTINUOUS`다. 신뢰성 Gate가 Anchor 전환을 승인하면
 `ANCHORED`를 명시하고 score는 `{0, 15, 30, 50, 70, 85, 100}`만 허용한다.
 
+**판정이 아닌 status의 score는 Runtime이 0으로 고정한다 (2026-09-04).** `MANUAL_REVIEW`,
+`INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE`는 준수 수준 판정이 아니므로 모델이 어떤 숫자를 내더라도
+`BedrockStructuredEvaluator`가 `NON_JUDGMENT_SCORE`(0.0)로 정규화해 저장한다. Code가 만드는 같은
+status(`actual_evaluator.INSUFFICIENT_EVIDENCE_SCORE`, `manual_review.MANUAL_REVIEW_SCORE`)와 같은
+값이며, 새 Anchor가 아니라 이미 있던 Code 쪽 규약을 모델 응답에도 적용한 것이다. 이유는 셋이다 —
+같은 입력이 실행마다 다른 점수를 갖지 않게 하고, readiness 가중 평균에 판정 아닌 숫자가 섞이지
+않게 하며, `INSUFFICIENT_EVIDENCE`+높은 점수 같은 계약 모순을 저장 계층에서 만들 수 없게 한다.
+score 필드 자체는 Contract대로 항상 존재한다(범위·유한성 검증은 파서에서: NaN·±inf·문자열·bool 거부).
+PASS/FAIL의 연속 점수는 그대로 모델이 정하며, 반복 평가의 실제 편차는
+`scripts/measure_score_consistency.py`로 측정해 보고한다(허용 오차는 이 스크립트가 정하지 않는다).
+
 ## Natural-language and Model Profile boundary
 
 명시적 UI/API 요청은 대응 Workflow로 직접 진입한다. 자연어 요청은 Parent Orchestrator가
@@ -587,6 +598,21 @@ branch 이름으로 merge commit을 다시 찾는다(ADR-0019 §3·§4).
 Worker 순서는 `generate → put_result_if_absent → open → put_pull_request_if_absent`이며, PR port가
 구성되지 않았으면(`DEPLOYMENT_RUNTIME_JSON` 없음) TERRAFORM_PATCH task는 patch를 생성하기 **전에**
 `RemediationWorkerError`로 실패한다 — Bedrock 비용도, PR 없는 고아 patch도 만들지 않는다.
+
+**patch는 snapshot의 Terraform 본문에 묶인다 (2026-09-04).** 이전 생성기는 모델에 Finding과 commit
+id만 주고 "파일 전체의 새 내용"을 요구했다 — 원본을 보지 못한 모델이 파일을 지어내므로 기존 설정
+보존도 최소 변경도 검증할 근거가 없었다. 이제 `BedrockPatchGenerator`는 평가가 IaC를 읽는 것과 같은
+read-only `IaCDocumentReader`(`GitHubRestSnapshotTool`, 같은 token secret)로 `base_commit_sha`의 본문을
+읽어 prompt에 넣고, 응답을 `apps/backend/remediation/terraform_change.py`로 검증한다: 변경 경로는
+snapshot에 있는 `.tf` 파일이어야 하고, 내용이 실제로 달라야 하며, 원본의 모든 `resource "type" "name"`
+블록이 남아 있어야 한다(삭제·이름 변경은 거부 — apply가 리소스를 파괴·재생성한다). 임계값 규칙은
+두지 않는다. `PatchPullRequestAction`은 같은 reader로 원본 대비 unified diff를 만들어 PR 본문에
+싣는다(`open_pull_request(patch, changes, description=...)`). reader가 없으면 생성기는 생성 전에
+fail-closed한다. 저장·digest·branch 규칙은 위와 같다.
+
+`GET /remediations/{remediationId}`는 이 item의 읽기 projection이다(`docs/API.md`). resource type은
+결과 item에 저장되지 않으므로 `RemediationTarget.resource_type`은 AWS_ACTUAL 결과의 `aws:` read
+locator에서 되돌린다(`assessment.actual.resource_type_for_evidence_reference`, S3로 하드코딩하지 않는다).
 
 ### Rule item writer invariant
 

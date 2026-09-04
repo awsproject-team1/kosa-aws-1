@@ -6,6 +6,7 @@ from apps.backend.assessment.actual import (
     ActualEvidenceError,
     ActualEvidenceLoader,
     actual_evidence_reference,
+    resource_type_for_evidence_reference,
 )
 from apps.backend.assessment.actual_evaluator import ActualBedrockEvaluator
 from apps.backend.assessment.bedrock import BedrockEvaluationError, BedrockStructuredEvaluator
@@ -79,6 +80,7 @@ __all__ = [
     "ActualEvidenceError",
     "ActualEvidenceLoader",
     "actual_evidence_reference",
+    "resource_type_for_evidence_reference",
     "Assessment",
     "AssessmentCoverage",
     "AssessmentEvaluationPlan",

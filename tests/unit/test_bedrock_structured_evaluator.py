@@ -193,6 +193,135 @@ class BedrockStructuredEvaluatorTest(unittest.TestCase):
         self.assertIn("whether the rule even applies", _SYSTEM_PROMPT)
 
 
+class ScoreContractGuardTest(unittest.TestCase):
+    """Runtime guards between the model's number and the stored Evaluation Result.
+
+    연속 0–100 점수 계약에서 Runtime이 지켜야 하는 것 두 가지다. (1) 점수는 유한한 숫자여야 한다 —
+    NaN·무한대·문자열·bool은 계약 위반이다. (2) 판정이 아닌 status(MANUAL_REVIEW,
+    INSUFFICIENT_EVIDENCE, OUT_OF_SCOPE)에는 모델의 숫자가 남지 않는다. Code가 만드는 같은
+    status(`actual_evaluator`, `manual_review`)와 같은 0.0으로 고정해야 같은 좌표가 실행마다 다른
+    점수를 갖지 않고, readiness 평균에 판정 아닌 숫자가 섞이지 않는다.
+    """
+
+    def _evaluate(self, client: Client):
+        return BedrockStructuredEvaluator(
+            client=client,
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            resource_document={"bucket": "bucket-public-001"},
+            evidence_references=("aws:s3:GetPublicAccessBlock",),
+        ).evaluate(
+            resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+
+    def _body(self, **overrides: object) -> dict[str, object]:
+        body: dict[str, object] = {
+            "status": "FAIL",
+            "score": 21,
+            "rationale": "Public access block is disabled.",
+            "evidence_references": ["aws:s3:GetPublicAccessBlock"],
+        }
+        body.update(overrides)
+        return body
+
+    def test_non_judgment_statuses_never_keep_the_model_score(self) -> None:
+        from apps.backend.assessment.actual_evaluator import INSUFFICIENT_EVIDENCE_SCORE
+        from apps.backend.assessment.bedrock import NON_JUDGMENT_SCORE
+        from apps.backend.assessment.manual_review import MANUAL_REVIEW_SCORE
+
+        # Code 쪽 규약과 같은 값이어야 한다. 셋이 갈라지면 같은 status가 다른 점수를 갖는다.
+        self.assertEqual(NON_JUDGMENT_SCORE, INSUFFICIENT_EVIDENCE_SCORE)
+        self.assertEqual(NON_JUDGMENT_SCORE, MANUAL_REVIEW_SCORE)
+        for status in ("INSUFFICIENT_EVIDENCE", "MANUAL_REVIEW", "OUT_OF_SCOPE"):
+            with self.subTest(status=status):
+                result = self._evaluate(Client(response(self._body(status=status, score=57))))
+                self.assertEqual(result.status, EvaluationStatus(status))
+                self.assertEqual(result.score, NON_JUDGMENT_SCORE)
+
+    def test_judgment_statuses_keep_the_continuous_score(self) -> None:
+        for status, score in (("FAIL", 12.5), ("PASS", 88)):
+            with self.subTest(status=status):
+                result = self._evaluate(Client(response(self._body(status=status, score=score))))
+                self.assertEqual(result.score, score)
+
+    def test_non_numeric_or_non_finite_scores_are_contract_errors(self) -> None:
+        for score in ("80", True, None, float("nan"), float("inf"), -1, 100.5):
+            with self.subTest(score=repr(score)):
+                body = self._body(score=score)
+                text = json.dumps(body, allow_nan=True)
+                client = Client({"output": {"message": {"content": [{"text": text}]}}})
+                with self.assertRaisesRegex(BedrockEvaluationError, "score must be a number"):
+                    self._evaluate(client)
+
+    def test_a_resource_anchor_inside_an_approved_file_is_accepted(self) -> None:
+        """Golden IaC evidence is `terraform:{path}#{resource address}`; the allow-list holds
+        `terraform:{path}`. Rejecting the anchored form failed every IAC PASS run live."""
+        client = Client(
+            response(
+                {
+                    "status": "PASS",
+                    "score": 100,
+                    "rationale": "All four flags are true.",
+                    "evidence_references": [
+                        "terraform:storage.tf#aws_s3_bucket_public_access_block.media",
+                        "isms-p@2023-10-31#control/5.2.1",
+                    ],
+                }
+            )
+        )
+        result = BedrockStructuredEvaluator(
+            client=client,
+            perspective=EvaluationPerspective.IAC,
+            resource_document={"files": [{"path": "storage.tf", "content": "..."}]},
+            evidence_references=("terraform:storage.tf",),
+        ).evaluate(
+            resource_id="bucket-public-001", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+        self.assertEqual(
+            result.evidence_references,
+            (
+                "terraform:storage.tf#aws_s3_bucket_public_access_block.media",
+                "isms-p@2023-10-31#control/5.2.1",
+            ),
+        )
+
+    def test_an_anchor_on_an_unapproved_file_or_policy_locator_is_still_refused(self) -> None:
+        for reference in (
+            "terraform:other.tf#aws_s3_bucket.x",  # file not in the snapshot
+            "isms-p@2023-10-31#control/9.9.9",  # policy locator the rule does not cite
+            "terraform:storage.tf#",  # empty anchor
+        ):
+            with self.subTest(reference=reference):
+                client = Client(
+                    response(
+                        {
+                            "status": "PASS",
+                            "score": 100,
+                            "rationale": "ok",
+                            "evidence_references": [reference],
+                        }
+                    )
+                )
+                evaluator = BedrockStructuredEvaluator(
+                    client=client,
+                    perspective=EvaluationPerspective.IAC,
+                    resource_document={"files": []},
+                    evidence_references=("terraform:storage.tf",),
+                )
+                with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
+                    evaluator.evaluate(
+                        resource_id="bucket-public-001",
+                        rule=RULE,
+                        context=CONTEXT,
+                        model_profile=PROFILE,
+                    )
+
+    def test_system_prompt_pins_non_judgment_scores_to_zero(self) -> None:
+        from apps.backend.assessment.bedrock import _SYSTEM_PROMPT
+
+        self.assertIn("return score 0 because no judgment was made", _SYSTEM_PROMPT)
+        self.assertIn("must agree with the status", _SYSTEM_PROMPT)
+
+
 AUTHORED_RULE = PolicyRule(
     rule_id="S3-PUBLIC-AUTHORED",
     version="2026-09-03",

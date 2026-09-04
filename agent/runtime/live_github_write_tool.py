@@ -77,9 +77,17 @@ class LiveGitHubWriteTool:
         return _proposal(patch, self._repository_id)
 
     def open_pull_request(
-        self, patch: RemediationPatch, changes: Mapping[str, str]
+        self,
+        patch: RemediationPatch,
+        changes: Mapping[str, str],
+        *,
+        description: str | None = None,
     ) -> OpenedPullRequest:
-        """Create the branch, commit the changed files, and open (or reuse) the pull request."""
+        """Create the branch, commit the changed files, and open (or reuse) the pull request.
+
+        `description`은 PR 본문에 덧붙는 검토용 요약(Finding 근거와 unified diff)이다. branch
+        이름과 commit 내용에는 영향을 주지 않으므로 재전달의 수렴성은 그대로다.
+        """
         patch = require_remediation_patch(patch)
         self._require_scope(patch)
         if not isinstance(changes, Mapping) or not changes:
@@ -87,7 +95,9 @@ class LiveGitHubWriteTool:
         if tuple(sorted(changes)) != tuple(sorted(patch.changed_paths)):
             # patch가 선언한 파일 집합과 다른 내용을 올리면 저장된 identity와 PR이 어긋난다.
             raise GitHubWriteToolError("changes do not match the patch's changed paths")
-        proposal = _proposal(patch, self._repository_id)
+        if description is not None and not isinstance(description, str):
+            raise GitHubWriteToolError("description must be a string or None")
+        proposal = _proposal(patch, self._repository_id, description)
         headers = _headers(self._token_provider())
 
         default_branch = _text(_mapping(self._get(self._repo_url(), headers)), "default_branch")
@@ -216,7 +226,19 @@ class LiveGitHubWriteTool:
         require_patch_scope(patch, customer_id=self._customer_id, repository_id=self._repository_id)
 
 
-def _proposal(patch: RemediationPatch, repository_id: str) -> ProposedPullRequest:
+def _proposal(
+    patch: RemediationPatch, repository_id: str, description: str | None = None
+) -> ProposedPullRequest:
+    body = (
+        f"Automated remediation proposal for finding {patch.finding_id}.\n"
+        f"Base commit: {patch.base_commit_sha}\n"
+        f"Patch digest: {patch.artifact.content_sha256}\n"
+        f"Changed paths: {', '.join(patch.changed_paths)}\n\n"
+        "Review and merge to make this commit the deployment target; nothing is applied "
+        "until a person approves the refreshed plan."
+    )
+    if description:
+        body = f"{body}\n\n{description}"
     return ProposedPullRequest(
         customer_id=patch.artifact.customer_id,
         repository_id=repository_id,
@@ -224,14 +246,7 @@ def _proposal(patch: RemediationPatch, repository_id: str) -> ProposedPullReques
         base_commit_sha=patch.base_commit_sha,
         head_branch=derive_head_branch(patch),
         title=f"Remediation for {patch.finding_id}",
-        body=(
-            f"Automated remediation proposal for finding {patch.finding_id}.\n"
-            f"Base commit: {patch.base_commit_sha}\n"
-            f"Patch digest: {patch.artifact.content_sha256}\n"
-            f"Changed paths: {', '.join(patch.changed_paths)}\n\n"
-            "Review and merge to make this commit the deployment target; nothing is applied "
-            "until a person approves the refreshed plan."
-        ),
+        body=body,
         changed_paths=patch.changed_paths,
     )
 

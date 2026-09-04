@@ -139,3 +139,30 @@ class ActualEvidenceLoaderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvidenceReferenceInverseTest(unittest.TestCase):
+    """`resource_type_for_evidence_reference` is the inverse of `actual_evidence_reference`."""
+
+    def test_round_trips_every_supported_resource_type(self) -> None:
+        from apps.backend.assessment.actual import (
+            SUPPORTED_ACTUAL_RESOURCE_TYPES,
+            actual_evidence_reference,
+            resource_type_for_evidence_reference,
+        )
+
+        for resource_type in SUPPORTED_ACTUAL_RESOURCE_TYPES:
+            resource_id = (
+                "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/x/1"
+                if resource_type == "AWS::ElasticLoadBalancingV2::LoadBalancer"
+                else "resource-1"
+            )
+            with self.subTest(resource_type=resource_type):
+                reference = actual_evidence_reference(resource_type, resource_id)
+                self.assertEqual(resource_type_for_evidence_reference(reference), resource_type)
+
+    def test_policy_and_terraform_locators_have_no_resource_type(self) -> None:
+        from apps.backend.assessment.actual import resource_type_for_evidence_reference
+
+        for reference in ("isms-p-2023@2023-10-31#control/2.6.2", "terraform:main.tf", 5, None):
+            self.assertIsNone(resource_type_for_evidence_reference(reference))

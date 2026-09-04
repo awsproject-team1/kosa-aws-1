@@ -2,6 +2,48 @@
 
 ## Current
 
+- **서비스 전체 정상화·E2E·평가 일관성 측정 (2026-09-04, branch
+  `fix/e2e-normalization-and-score-consistency`, base `dev` 578d20e).** 라이브 AWS 자격 증명이 만료돼
+  Bedrock 반복 평가는 실행하지 못했고, 오프라인에서 재현·수정·측정 도구까지 완료했다.
+  - P1: #89가 계획 단계에서만 건너뛴 "적용 Rule 없는 리소스 work"가 평가 루프에서 여전히
+    `NoApplicablePolicyRulesError`로 죽어 SQS 재시도→DLQ로 가던 경로를 막았다(`_evaluable_works`).
+  - P2: 모델의 `MANUAL_REVIEW`/`INSUFFICIENT_EVIDENCE`/`OUT_OF_SCOPE` 점수를 Code 규약과 같은 0.0으로
+    고정(status–score 모순·readiness 오염·실행 간 변동 제거), NaN/inf/문자열 거부 회귀 테스트.
+    `scripts/measure_score_consistency.py`(Runtime 평가기 그대로, 20 Case, 반복·전이·표현 불변·속성
+    순서 불변, 통계·계약 위반·Severe Overestimation 후보; 허용 오차는 정하지 않음) + dry-run 검증.
+  - P3: Remediation 생성기가 원본 Terraform을 보지 않고 파일 전체를 지어내던 결함 — snapshot 본문을
+    읽어 prompt에 넣고 `terraform_change`로 검증(snapshot 파일만, 실제 변경만, 리소스 블록 삭제 금지),
+    PR 본문에 unified diff. `RemediationTarget.resource_type` S3 하드코딩 제거(locator 역산).
+  - P4: `GET /remediations/{id}` 신설. 콘솔이 coverage 완료까지 폴링, 집계·Evidence·조치 요청·patch/PR
+    조회, Readiness 준비도 면책 문구, 다중 문서 장바구니 게시 거부(백엔드는 문서 하나만 게시).
+  - Markdown parser 1.1.0: tight list를 항목별 unit으로(요구사항 여러 개가 locator 하나를 공유하던 문제).
+  - 오프라인 E2E `tests/integration/test_customer_policy_e2e_offline.py`: 합성 사내 표준 업로드 →
+    실제 파서 → 후보 → 승인 → 게시 → Assessment 판본 고정 → 4 리소스 유형 + governance 평가 →
+    Finding → 조치 판정; fixture Profile 경로에서 RDS-PUBLIC-001 → snapshot-bound patch → PR diff.
+    patch를 적용한 고객 fixture는 `terraform fmt -check`/`validate` 통과.
+  - **라이브 반복 측정 (kosa28 MFA 세션, Nova Lite, 20 Case × 5회, 2회 실행):**
+    `docs/evaluations/data/score-consistency-20260904.md`. 1차: IAC PASS Case 19/25 run이
+    `evidence reference is outside approved evidence`로 계약 오류 — 모델이 `terraform:{path}#{anchor}`
+    형태(Golden fixture가 기대하는 형태)로 인용하는데 허용 목록은 파일 단위라 통째로 거부됐고, 라이브
+    Worker에서는 이것이 평가 실패→재시도→DLQ다. 허용 파일/리소스 안의 anchor는 수용하도록 고쳤다.
+    HTTPS ALB Actual이 5/5 FAIL — 문서의 중첩 key `attributes.attributes`(LB attribute)가 모델을
+    오도함을 A/B(3회씩)로 확인해 `load_balancer_attributes`로 개명(catalog 경로 동기화). 2차: 계약
+    오류 0, 20 Case 모두 status 일치율 1.0·range 0·표준편차 0, 전이 9/9 방향 정상, 표현 불변 Δ0.
+    **점수는 전부 0 또는 100** — 연속 점수를 요구해도 이 모델·prompt는 이진으로 답한다. 안정성은
+    완벽하지만 등급 정보가 없다는 뜻이며 Anchor 전환 판단의 핵심 입력이다. EC2 Actual 2 Case는
+    5/5 OUT_OF_SCOPE: adapter가 subnet의 public 여부(`MapPublicIpOnLaunch`)를 읽지 않아 "프라이빗
+    서브넷" 조건을 판단할 근거가 없다(`ec2:DescribeSubnets` read 추가 필요, 고객 read role 변경).
+  - **라이브 sandbox 현황(읽기 전용 조회):** assessment 큐 in-flight 373/DLQ 108, remediation
+    in-flight 96/DLQ 48. 원인 두 가지 — (1) GitHub App installation token 만료(01:20 KST 갱신, 1h
+    유효)로 모든 IaC read·PR write 실패, private key가 로컬에 없어 갱신 불가; (2) pin 없는 legacy
+    Assessment 5건(총 9건 중)이 `policy_profile_version pin is missing`으로 3회 재시도 후 DLQ.
+    큐/DLQ는 비우지 않았다(운영 결정).
+  - 남은 문제: authored Rule(`CUST-*`)은 remediation
+    eligibility가 fixture rule id 기준이라 항상 MANUAL_REVIEW(정책 결정 필요), S3 Actual adapter가
+    ACL/TLS/Logging을 읽지 않아 legacy Rule 3개는 모델 판단에만 의존, Assessment Job 상태가 완료로
+    전이되지 않음(콘솔은 coverage로 완료 판단), Source-level(Customer/ISMS-P 분리) 점수는 Profile 단위로만
+    존재. 검증: unit/contract/security/integration 전체, Ruff, frontend build.
+
 - **정책 후보 추출이 부분 성공을 완전한 결과로 표시하지 않는다.** 로컬 보관 사내 체크리스트의
   선언 항목 128개와 Markdown parser 결과 128개가 정확히 일치하고 누락·중복·경고가 없음을 다시
   검증했다(전체 정규화 unit 193개). Bedrock 응답은 이제 모든 청크 locator를 Requirement 또는

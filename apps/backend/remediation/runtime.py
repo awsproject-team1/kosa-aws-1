@@ -25,8 +25,13 @@ import json
 import os
 from collections.abc import Mapping
 
+from agent.runtime.github_rest_snapshot_tool import GitHubRestSnapshotTool
+from agent.runtime.github_tool import IaCDocumentReader
 from agent.runtime.live_github_write_tool import LiveGitHubWriteTool
-from apps.backend.deployment.runtime_config import DeploymentRuntimeConfiguration
+from apps.backend.deployment.runtime_config import (
+    DeploymentRuntimeConfiguration,
+    DeploymentTarget,
+)
 from apps.backend.remediation.patch_content import PatchContentStore
 from apps.backend.remediation.pull_request import PatchPullRequestAction
 from apps.backend.remediation.sync import SnapshotSyncAction
@@ -97,25 +102,35 @@ def _live_worker() -> RemediationWorker:
     boto3 = _boto3()
     table = boto3.resource("dynamodb").Table(table_name)
     content_store = DynamoDbPatchContentStore(table)
+    target = _approved_target(os.environ.get("DEPLOYMENT_RUNTIME_JSON"))
+    # 평가가 IaC를 읽은 것과 같은 read-only GitHub 경계로 같은 commit의 본문을 읽는다. patch
+    # 생성과 PR 본문의 diff가 같은 원본을 본다.
+    iac_documents = None if target is None else _iac_document_reader(boto3, target)
     return RemediationWorker(
         work_repository=DynamoDbRemediationWorkRepository(table),
-        patch_action=_patch_action(boto3, content_store),
+        patch_action=_patch_action(boto3, content_store, iac_documents),
         sync_action=SnapshotSyncAction(),
         result_store=DynamoDbRemediationResultStore(
             table_name=table_name, transaction_client=boto3.client("dynamodb")
         ),
-        pull_request_action=_pull_request_action(
-            boto3, content_store, os.environ.get("DEPLOYMENT_RUNTIME_JSON")
+        pull_request_action=(
+            None
+            if target is None
+            else _pull_request_action_for(boto3, content_store, target, iac_documents)
         ),
     )
 
 
-def _patch_action(boto3: object, content_store: PatchContentStore) -> object:
+def _patch_action(
+    boto3: object, content_store: PatchContentStore, iac_documents: IaCDocumentReader | None
+) -> object:
     """Build the C Remediation Agent that generates the Terraform patch (ADR-0018).
 
     TERRAFORM_PATCH produces a real, snapshot-bound patch from the approved remediation
     Model Profile via Bedrock, and the generator stores the patch bytes under their
-    digest so the pull request writer can read exactly what was digested.
+    digest so the pull request writer can read exactly what was digested. `iac_documents`
+    is the read-only Terraform body reader; without it the generator refuses to run (the
+    Worker already refuses TERRAFORM_PATCH when no pull request port exists).
     """
     from apps.backend.remediation.bedrock import BedrockPatchGenerator
 
@@ -124,18 +139,17 @@ def _patch_action(boto3: object, content_store: PatchContentStore) -> object:
         client=boto3.client("bedrock-runtime", region_name=profile.region),
         model_profile=profile,
         content_store=content_store,
+        iac_documents=iac_documents,
     )
 
 
-def _pull_request_action(
-    boto3: object, content_store: PatchContentStore, raw_configuration: object
-) -> PatchPullRequestAction | None:
-    """Build D's pull request writer for the one approved repository, or None if unconfigured.
+def _approved_target(raw_configuration: object) -> DeploymentTarget | None:
+    """The single approved repository this Worker may read from and open PRs against.
 
-    `None`은 Worker가 TERRAFORM_PATCH를 생성 전에 거부하게 만드는 값이다(patch는 만들었는데 올릴
-    곳이 없는 상태를 만들지 않는다). 설정은 Deployment와 같은 `DEPLOYMENT_RUNTIME_JSON`이며
-    단일 승인 target을 요구한다 — 어댑터가 (customer_id, repository_id) scope로 고정 생성되기
-    때문이다(deployment runtime과 같은 규칙).
+    `None`은 "구성되지 않았다"는 값이고, Worker는 그 상태에서 TERRAFORM_PATCH를 생성 전에
+    거부한다(patch는 만들었는데 올릴 곳이 없는 상태를 만들지 않는다). 설정은 Deployment와 같은
+    `DEPLOYMENT_RUNTIME_JSON`이며 단일 승인 target을 요구한다 — 어댑터가 (customer_id,
+    repository_id) scope로 고정 생성되기 때문이다(deployment runtime과 같은 규칙).
     """
     if not isinstance(raw_configuration, str) or not raw_configuration.strip():
         return None
@@ -143,7 +157,38 @@ def _pull_request_action(
     targets = configuration.targets
     if len(targets) != 1:
         raise RemediationRuntimeError("pull request write requires exactly one approved target")
-    target = targets[0]
+    return targets[0]
+
+
+def _iac_document_reader(boto3: object, target: DeploymentTarget) -> IaCDocumentReader:
+    """The same GET-only GitHub reader the Assessment Worker uses for the IAC perspective."""
+    secrets = boto3.client("secretsmanager")
+    return GitHubRestSnapshotTool(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.repository_full_name,
+        token_provider=lambda: _secret_string(secrets, target.github_token_secret_id),
+    )
+
+
+def _pull_request_action(
+    boto3: object, content_store: PatchContentStore, raw_configuration: object
+) -> PatchPullRequestAction | None:
+    """Build D's pull request writer for the one approved repository, or None if unconfigured."""
+    target = _approved_target(raw_configuration)
+    if target is None:
+        return None
+    return _pull_request_action_for(
+        boto3, content_store, target, _iac_document_reader(boto3, target)
+    )
+
+
+def _pull_request_action_for(
+    boto3: object,
+    content_store: PatchContentStore,
+    target: DeploymentTarget,
+    iac_documents: IaCDocumentReader | None,
+) -> PatchPullRequestAction:
     secrets = boto3.client("secretsmanager")
     writer = LiveGitHubWriteTool(
         customer_id=target.customer_id,
@@ -151,7 +196,9 @@ def _pull_request_action(
         repository_full_name=target.repository_full_name,
         token_provider=lambda: _secret_string(secrets, target.github_token_secret_id),
     )
-    return PatchPullRequestAction(writer=writer, content_store=content_store)
+    return PatchPullRequestAction(
+        writer=writer, content_store=content_store, iac_documents=iac_documents
+    )
 
 
 def _secret_string(client: object, secret_id: str) -> str:

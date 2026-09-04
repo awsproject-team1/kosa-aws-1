@@ -447,6 +447,11 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
         works = _with_governance_work(works, context_resolver, repository_id=target.repository_id)
         works = _with_complete_evaluation_plan(works, context_resolver)
         _ensure_evaluation_plan(report_store, works[0])
+        # 계획에 좌표가 하나도 없는 resource work는 여기서 빠진다. 남겨 두면 아래 루프가 그
+        # 리소스의 AWS/GitHub read를 하고 `AssessmentWorker.handle`이 같은 resource type을 다시
+        # resolve해 `NoApplicablePolicyRulesError`로 죽는다 — #89가 계획 단계에서만 막았던
+        # 바로 그 재시도·DLQ 경로다.
+        works = _evaluable_works(works)
         secrets = boto3.client("secretsmanager")
         github = GitHubRestSnapshotTool(
             customer_id=target.customer_id,
@@ -579,6 +584,29 @@ def _with_complete_evaluation_plan(
     if len(set(planned)) != len(planned):
         raise RuntimeError("multi-resource assessment plan contains duplicate coordinates")
     return tuple(replace(work, planned_coordinates=planned) for work in works)
+
+
+def _evaluable_works(
+    works: tuple[AssessmentResourceWork, ...],
+) -> tuple[AssessmentResourceWork, ...]:
+    """Keep only the resource works the immutable plan actually names.
+
+    `_with_complete_evaluation_plan`은 적용 Rule이 없는 리소스를 계획에서 건너뛰지만 work 목록에는
+    그대로 남긴다. 그 work를 평가 루프에 넘기면 두 가지가 잘못된다: 읽을 이유가 없는 리소스를
+    AWS/GitHub에서 읽고, `AssessmentWorker.handle`이 그 resource type을 다시 resolve해
+    `NoApplicablePolicyRulesError`를 올린다. SQS는 그 예외를 재시도하므로 메시지가 DLQ까지
+    간다. 계획이 좌표를 갖지 않는 리소스는 "이 Profile은 이 리소스를 평가하지 않는다"는
+    답이지 오류가 아니므로 조용히 빠진다. 계획은 이미 저장됐고 coverage 분모도 그 계획이므로,
+    빠진 리소스가 coverage를 미완으로 만들지도 않는다.
+    """
+    kept: list[AssessmentResourceWork] = []
+    for work in works:
+        planned = work.planned_coordinates or ()
+        if any(coordinate.resource_id == work.resource_id for coordinate in planned):
+            kept.append(work)
+    if not kept:
+        raise NoApplicablePolicyRulesError("assessment plan names no evaluable resource")
+    return tuple(kept)
 
 
 def _with_governance_work(

@@ -19,6 +19,7 @@ from apps.backend.api.policy_approval import PolicyApprovalApiService
 from apps.backend.api.policy_candidates import PolicyCandidateApiService
 from apps.backend.api.policy_sources import PolicySourceApiService
 from apps.backend.api.remediation_exceptions import RemediationExceptionApiService
+from apps.backend.api.remediation_reads import RemediationReadApiService
 from apps.backend.api.remediations import RemediationApiService
 from apps.backend.api.scope import SCOPE_ENTRY_FIELDS
 from apps.backend.assessment import DynamoDbAssessmentReportStore
@@ -59,6 +60,7 @@ from apps.backend.repositories.deployment_facts import DynamoDbDeploymentFactsRe
 from apps.backend.repositories.deployment_plan import DynamoDbDeploymentPlanReader
 from apps.backend.repositories.deployment_source import DynamoDbDeploymentSourceReader
 from apps.backend.repositories.policy_ingestion import DynamoDbPolicySourceUploadRepository
+from apps.backend.repositories.remediation_read import DynamoDbRemediationReadRepository
 from packages.contracts import WorkflowCommand
 
 
@@ -231,6 +233,11 @@ def _http_handler() -> JobHttpHandler:
         orchestrations=_orchestration_components(),
         users=_user_management_components(),
         scope=_scope_components(),
+        # 조치 요청 뒤 Worker가 만든 patch와 PR 좌표를 화면이 읽는 유일한 경로.
+        remediation_reads=RemediationReadApiService(
+            jobs=repository,
+            remediations=DynamoDbRemediationReadRepository(metadata_table),
+        ),
     )
 
 
