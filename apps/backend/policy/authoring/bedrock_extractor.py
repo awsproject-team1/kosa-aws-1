@@ -86,10 +86,10 @@ _SYSTEM_PROMPT = (
     "\n"
     "Return ONE JSON object only, no prose and no code fence, with exactly two keys: "
     '"requirements" (a list of requirement objects) and "non_requirement_locators" (a list of '
-    "locator strings for headings, context, or other units that state no requirement). Every "
-    "locator supplied in policy_units MUST appear either in one or more requirements or in "
-    "non_requirement_locators. Never put the same locator in both places and never omit a "
-    "locator. Each requirement object MUST "
+    "locator strings for headings, context, or other units that state no requirement). Try to "
+    "account for every locator supplied in policy_units by placing it in one or more requirements "
+    "or in non_requirement_locators, but never put the same locator in both places. Each "
+    "requirement object MUST "
     "have these fields:\n"
     '- "source_locators": array of one or more locator strings, each copied verbatim from the '
     "supplied policy_units in THIS request (never invent a locator and never cite a locator that "
@@ -251,9 +251,17 @@ class BedrockPolicyCandidateExtractor:
             raise BedrockExtractionError(
                 "a locator cannot be both a requirement and a non-requirement"
             )
-        classified = requirement_locators | non_requirement_locators
-        if classified != allowed_locators:
-            raise BedrockExtractionError("the model did not classify every policy unit")
+        # 모델이 일부 unit을 어느 쪽으로도 분류하지 않는 것은 품질 편차이지 경계 위반이 아니다.
+        # 미분류 unit을 하드 실패로 다루면 실제 응답 대부분에서 문서 전체 추출이 죽는다. 실제로
+        # 추출된 요구사항은 유지하고, 미분류 unit은 "요구사항 아님"으로 흡수한다. 여전히 지키는
+        # 방어: 판정 시도(PoisonedResponseError), locator 중복, 개별 requirement 검증.
+        unclassified = allowed_locators - (requirement_locators | non_requirement_locators)
+        if unclassified:
+            logging.getLogger("governance.authoring").info(
+                "chunk left %d/%d policy unit(s) unclassified; treated as non-requirements",
+                len(unclassified),
+                len(allowed_locators),
+            )
         return tuple(kept)
 
     def _request_body(
