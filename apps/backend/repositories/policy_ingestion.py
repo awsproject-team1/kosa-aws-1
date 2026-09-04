@@ -1,6 +1,7 @@
 """A-owned tenant-scoped Policy Source upload-session persistence."""
 
 from collections.abc import Mapping
+from decimal import Decimal
 from hashlib import sha256
 from typing import Protocol
 
@@ -10,6 +11,7 @@ from apps.backend.policy.ingestion.storage_keys import (
     normalized_object_key,
     original_object_key,
 )
+from packages.common.errors import PolicySourceDeleteForbidden, PolicySourceNotFound
 from packages.contracts import (
     DocumentUnitKind,
     ExtractionWarningCode,
@@ -29,11 +31,17 @@ class DynamoTable(Protocol):
 
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
 
+    def query(self, **kwargs: object) -> Mapping[str, object]: ...
+
+    def delete_item(self, **kwargs: object) -> object: ...
+
 
 class S3Presigner(Protocol):
     def generate_presigned_url(
         self, ClientMethod: str, Params: dict[str, str], ExpiresIn: int
     ) -> str: ...
+
+    def delete_object(self, *, Bucket: str, Key: str) -> object: ...
 
 
 class S3ObjectReader(Protocol):
@@ -113,11 +121,18 @@ class DynamoDbPolicySourceUploadRepository:
         declared_media_type = item.get("declared_media_type")
         declared_size = item.get("byte_size")
         artifact_id = item.get("artifact_id")
+        # DynamoDB returns Number attributes as Decimal through the resource API, so byte_size is a
+        # Decimal here, not an int (and Decimal is numbers.Number, not numbers.Integral). Accept a
+        # non-bool int or Decimal, require an integral value, and normalize to int; a fractional
+        # Decimal (never written by this code) is rejected rather than silently truncated.
+        if isinstance(declared_size, bool) or not isinstance(declared_size, (int, Decimal)):
+            raise RuntimeError("policy upload metadata is invalid")
+        if int(declared_size) != declared_size:
+            raise RuntimeError("policy upload metadata is invalid")
+        declared_size = int(declared_size)
         if (
             not isinstance(filename, str)
             or not isinstance(declared_media_type, str)
-            or isinstance(declared_size, bool)
-            or not isinstance(declared_size, int)
             or not isinstance(artifact_id, str)
         ):
             raise RuntimeError("policy upload metadata is invalid")
@@ -249,6 +264,89 @@ class DynamoDbPolicySourceUploadRepository:
         item = self._get_item(customer_id, source_id, source_version)
         return document_from_item(item)
 
+    def list_sources(self, *, customer_id: str) -> tuple[dict[str, object], ...]:
+        """Return a summary of every policy source version the caller's customer owns.
+
+        Tenant-scoped by construction: the query key is the caller's own partition, and the
+        caller never chooses it (docs/POLICY_INGESTION.md security boundary). Only summary
+        metadata is returned — never units, normalized text, or the original bytes.
+        """
+        items: list[dict[str, object]] = []
+        kwargs: dict[str, object] = {
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk)",
+            "ExpressionAttributeValues": {
+                ":pk": f"CUSTOMER#{customer_id}",
+                ":sk": "POLICY_INGESTION#",
+            },
+        }
+        while True:
+            page = self._table.query(**kwargs)
+            for item in page.get("Items", []):
+                size = item.get("byte_size")
+                units = item.get("units")
+                items.append(
+                    {
+                        "source_id": item.get("source_id"),
+                        "source_version": item.get("source_version"),
+                        "filename": item.get("filename"),
+                        "status": item.get("status"),
+                        "source_format": item.get("source_format"),
+                        "byte_size": int(size)
+                        if isinstance(size, (int, Decimal)) and not isinstance(size, bool)
+                        else None,
+                        "unit_count": len(units) if isinstance(units, list) else 0,
+                    }
+                )
+            token = page.get("LastEvaluatedKey")
+            if not token:
+                break
+            kwargs["ExclusiveStartKey"] = token
+        return tuple(items)
+
+    def delete_source(self, *, customer_id: str, source_id: str, source_version: str) -> None:
+        """Delete one unapproved policy source: the DynamoDB record, then its S3 artifacts.
+
+        Refuses if the source has an approval record — an approved source may back a published
+        Profile's Rules, and deleting it would break evidence traceability. Tenant-scoped: the
+        keys are built from the caller's own customer_id, and the record delete additionally
+        asserts the stored `customer_id` so a key collision cannot cross the partition.
+
+        The record goes first. A delete is only observable once that write lands, so if the S3
+        cleanup then fails the leftovers are unreferenced objects (invisible to every read path,
+        collectable by a lifecycle rule) rather than a live record pointing at bytes that are
+        already gone. Ordering it the other way turns one failure into a broken document.
+        """
+        pk = f"CUSTOMER#{customer_id}"
+        approval_sk = f"POLICY_SOURCE#{source_id}#VERSION#{source_version}#APPROVAL"
+        try:
+            approved = self._table.get_item(Key={"PK": pk, "SK": approval_sk}).get("Item")
+        except Exception as error:
+            raise RuntimeError("policy source delete precheck failed") from error
+        if approved is not None:
+            raise PolicySourceDeleteForbidden("an approved policy source cannot be deleted")
+        try:
+            self._table.delete_item(
+                Key={"PK": pk, "SK": f"POLICY_INGESTION#{source_id}#VERSION#{source_version}"},
+                ConditionExpression="attribute_exists(SK) AND customer_id = :customer",
+                ExpressionAttributeValues={":customer": customer_id},
+            )
+        except Exception as error:
+            # 조건 실패는 "이 고객 파티션에 그 문서가 없다"는 뜻이다. 서버 오류(500)가 아니라
+            # 404로 보여야 콘솔이 이미 지워진 항목을 정상 처리한다.
+            if _is_conditional_check_failure(error):
+                raise PolicySourceNotFound("policy source version not found") from None
+            raise RuntimeError("policy source record delete failed") from error
+        # 없는 객체 삭제는 S3에서 성공으로 취급되므로 UPLOAD_PENDING(원본 미업로드) 문서도
+        # 안전하게 지운다.
+        for key_fn in (original_object_key, normalized_object_key):
+            key = key_fn(
+                customer_id=customer_id, source_id=source_id, source_version=source_version
+            )
+            try:
+                self._presigner.delete_object(Bucket=self._bucket, Key=key)  # type: ignore[union-attr]
+            except Exception as error:
+                raise RuntimeError("policy artifact delete failed") from error
+
     def _get_item(
         self, customer_id: str, source_id: str, source_version: str
     ) -> Mapping[str, object]:
@@ -265,6 +363,19 @@ class DynamoDbPolicySourceUploadRepository:
         if not isinstance(item, Mapping) or item.get("customer_id") != customer_id:
             raise LookupError("policy source version not found")
         return item
+
+
+def _is_conditional_check_failure(error: BaseException) -> bool:
+    """True when a DynamoDB write was refused by its ConditionExpression.
+
+    The botocore error shape is read defensively so a fake/mocked client that raises a plain
+    exception simply reads as "not a conditional failure" instead of masking the real fault.
+    """
+    response = getattr(error, "response", None)
+    if not isinstance(response, Mapping):
+        return False
+    detail = response.get("Error")
+    return isinstance(detail, Mapping) and detail.get("Code") == "ConditionalCheckFailedException"
 
 
 def document_from_item(item: Mapping[str, object]) -> NormalizedPolicyDocument:
@@ -323,9 +434,14 @@ def _optional_string(item: Mapping[str, object], name: str) -> str | None:
 
 def _integer(item: Mapping[str, object], name: str) -> int:
     value = item.get(name)
-    if isinstance(value, bool) or not isinstance(value, int):
+    # DynamoDB Number attributes come back as Decimal through the resource API, so an int stored
+    # here is read as Decimal. Accept a non-bool int or Decimal with an integral value and
+    # normalize to int; a fractional value (never written by this code) is rejected.
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
         raise ValueError(f"{name} is invalid")
-    return value
+    if int(value) != value:
+        raise ValueError(f"{name} is invalid")
+    return int(value)
 
 
 def _strings(item: Mapping[str, object], name: str) -> tuple[str, ...]:

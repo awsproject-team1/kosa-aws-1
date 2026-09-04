@@ -22,6 +22,8 @@ IaC 관련 Catalog hint는 prompt 경계로만 쓴다. 이 단계에서 HCL을 �
 from __future__ import annotations
 
 import json
+import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -46,9 +48,11 @@ from packages.contracts.policy_authoring import (
 )
 
 #: 한 chunk가 담는 unit 수와 인접 chunk가 겹치는 unit 수. 구조 기반 고정 크기라 같은 문서는
-#: 항상 같은 경계로 나뉜다.
-UNITS_PER_CHUNK = 40
-CHUNK_OVERLAP_UNITS = 4
+#: 항상 같은 경계로 나뉜다. 한 chunk의 출력(requirement마다 원문·요약·근거 문자열)이 모델의
+#: maxTokens 안에 들어가도록 작게 잡는다. 40이면 한국어 정책 문서에서 응답이 잘려
+#: (`Unterminated string`) JSON 파싱이 실패한다.
+UNITS_PER_CHUNK = 6
+CHUNK_OVERLAP_UNITS = 1
 
 #: 한 문서 전체가 만들 수 있는 후보 수의 상한. 모델이 문장마다 후보를 만들어도 저장 계층의
 #: 상한 안에 머문다.
@@ -77,18 +81,69 @@ _OPTIONAL_FIELDS = frozenset(
 PROMPT_VERSION = "policy-authoring/2026-09-03"
 
 _SYSTEM_PROMPT = (
-    "Extract the requirements the supplied policy units state, and map each one to the "
-    "supplied governance control catalog. Return one JSON object only, with exactly the key "
-    "requirements, holding a list of requirement objects. Each requirement must cite only "
-    "locators from the supplied units. Classify a requirement AUTOMATABLE only when the "
-    "catalog declares a control that can evaluate it, MANUAL when the catalog's manual "
-    "control applies, and UNSUPPORTED otherwise. Never output a judgment, severity, score, "
-    "source_score, or anchor: you propose rules, you do not evaluate anything."
+    "You extract compliance requirements from policy text and map each to a governance control "
+    "catalog. You propose rules; you never evaluate anything.\n"
+    "\n"
+    "Return ONE JSON object only, no prose and no code fence, with exactly one key "
+    '"requirements" whose value is a list of requirement objects. Each requirement object MUST '
+    "have these fields:\n"
+    '- "source_locators": array of one or more locator strings, each copied verbatim from the '
+    "supplied policy_units in THIS request (never invent a locator and never cite a locator that "
+    "is not in the policy_units list you were given).\n"
+    '- "requirement": the full requirement text, in the policy\'s own words.\n'
+    '- "requirement_summary": one concise sentence restating the requirement.\n'
+    '- "mapping_reason": one sentence explaining the classification and any control mapping.\n'
+    '- "classification": exactly one of "AUTOMATABLE", "MANUAL", or "UNSUPPORTED".\n'
+    "\n"
+    'Keep "requirement" under 200 characters and "requirement_summary" and "mapping_reason" '
+    "under 120 characters each. Be concise so the JSON stays small.\n"
+    "\n"
+    "Classification rules — follow exactly, or the requirement is rejected:\n"
+    '- "AUTOMATABLE": the requirement maps to a control whose automation_support is AVAILABLE. '
+    'You MUST set "mapped_control_key" to that control_key AND set "evaluation_type" to one of '
+    '"IAC", "AWS", or "HYBRID". Set "resource_types" using only the control\'s '
+    "supported_resource_types.\n"
+    '- "MANUAL": the requirement needs human review. You MUST set "mapped_control_key" to the '
+    'catalog control whose automation_support is MANUAL, and set "evaluation_type" to "MANUAL".\n'
+    '- "UNSUPPORTED": no catalog control applies. Omit "mapped_control_key" and '
+    '"evaluation_type".\n'
+    "Use only values the mapped control declares; never invent a control_key, resource_type, or "
+    "evidence key. Never output judgment, severity, score, source_score, or anchor.\n"
+    "\n"
+    "Examples:\n"
+    'AUTOMATABLE: {"source_locators":["heading/access-control/item/3"],'
+    '"requirement":"S3 buckets must block all public access.",'
+    '"requirement_summary":"S3 buckets block public access.",'
+    '"mapping_reason":"Maps to the S3 public access block control.",'
+    '"classification":"AUTOMATABLE","mapped_control_key":"S3_BLOCK_PUBLIC_ACCESS",'
+    '"evaluation_type":"AWS","resource_types":["AWS::S3::Bucket"]}\n'
+    'MANUAL: {"source_locators":["heading/policy/item/1"],'
+    '"requirement":"A security officer must approve external AI service adoption.",'
+    '"requirement_summary":"Officer approves external AI adoption.",'
+    '"mapping_reason":"An organizational control requiring human review.",'
+    '"classification":"MANUAL","mapped_control_key":"ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",'
+    '"evaluation_type":"MANUAL"}\n'
+    'UNSUPPORTED: {"source_locators":["heading/misc/item/9"],'
+    '"requirement":"Vendor contracts must be retained for five years.",'
+    '"requirement_summary":"Retain vendor contracts five years.",'
+    '"mapping_reason":"No cloud-resource control evaluates contract retention.",'
+    '"classification":"UNSUPPORTED"}'
 )
 
 
 class BedrockExtractionError(ValueError):
     """Raised when a model response is not a safe structured extraction."""
+
+
+class PoisonedResponseError(BedrockExtractionError):
+    """A response the whole chunk must be rejected for, not just one requirement.
+
+    Skipping a single malformed requirement is safe (fail-soft): the run keeps the good ones and
+    records the bad ones. But some failures poison the entire response — the model attempted an
+    evaluation outcome (`judgment`/`severity`/`score`/...), which means it stopped proposing and
+    started deciding. That is a boundary violation, not a quality glitch, so the chunk is refused
+    whole rather than silently keeping its other entries.
+    """
 
 
 class BedrockConverseClient(Protocol):
@@ -146,8 +201,21 @@ class BedrockPolicyCandidateExtractor:
             raise ValueError("units must not be empty")
 
         merged: dict[str, ExtractedRequirement] = {}
-        for chunk in _chunks(units, self._units_per_chunk, self._chunk_overlap):
-            for requirement in self._extract_chunk(chunk, catalog):
+        chunks = list(_chunks(units, self._units_per_chunk, self._chunk_overlap))
+        failed_chunks = 0
+        for chunk in chunks:
+            try:
+                chunk_requirements = self._extract_chunk(chunk, catalog)
+            except PoisonedResponseError:
+                # 모델이 판정을 시도한 경계 위반은 청크를 건너뛰는 대신 run 전체를 실패시킨다.
+                raise
+            except BedrockExtractionError as error:
+                # 청크 단위 실패(응답 truncation, 비-JSON, 청크 상한 초과 등)는 그 청크만 버리고
+                # 나머지 청크로 계속한다. 큰 문서에서 한 청크가 잘려도 전체 추출이 죽지 않는다.
+                failed_chunks += 1
+                logging.getLogger("governance.authoring").warning("chunk skipped: %s", error)
+                continue
+            for requirement in chunk_requirements:
                 # deterministic merge: 겹치는 unit에서 같은 Requirement가 두 번 나올 수 있다.
                 # digest가 같으면 같은 것이므로 먼저 본 것을 유지한다.
                 merged.setdefault(requirement.digest, requirement)
@@ -155,6 +223,17 @@ class BedrockPolicyCandidateExtractor:
                     raise BedrockExtractionError(
                         "the model proposed more requirements than one document may carry"
                     )
+        if failed_chunks:
+            logging.getLogger("governance.authoring").info(
+                "extraction kept %d requirement(s); %d/%d chunk(s) skipped",
+                len(merged),
+                failed_chunks,
+                len(chunks),
+            )
+        if not merged and failed_chunks == len(chunks) and chunks:
+            # 모든 청크가 실패했다면 추출 자체가 신뢰할 수 없다. 빈 결과를 "후보 없음"으로
+            # 잘못 표시하지 않도록 실패시킨다.
+            raise BedrockExtractionError("every chunk failed to extract")
         # canonical order: digest 순. 모델의 출력 순서에 의존하지 않는다.
         return tuple(merged[digest] for digest in sorted(merged))
 
@@ -165,7 +244,7 @@ class BedrockPolicyCandidateExtractor:
             modelId=self._model_profile.model_id,
             system=[{"text": _SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": self._request_body(chunk, catalog)}]}],
-            inferenceConfig={"temperature": 0, "maxTokens": 4096},
+            inferenceConfig={"temperature": 0, "maxTokens": 8192},
         )
         payload = _response_object(response)
         entries = payload["requirements"]
@@ -174,9 +253,24 @@ class BedrockPolicyCandidateExtractor:
         if len(entries) > MAX_REQUIREMENTS_PER_CHUNK:
             raise BedrockExtractionError("the model proposed more requirements than one chunk may")
         allowed_locators = frozenset(unit.locator for unit in chunk)
-        return tuple(
-            _requirement_from_response(entry, allowed_locators, catalog) for entry in entries
-        )
+        # fail-soft: 후보 하나가 검증에 걸려도 청크 전체를 버리지 않는다. 그 항목만 건너뛰고
+        # (사유를 로그에 남기고) 나머지 좋은 후보는 유지한다. 다만 PoisonedResponseError(모델이
+        # 판정 필드를 낸 경계 위반)는 청크 전체를 거부하도록 그대로 올린다.
+        kept: list[ExtractedRequirement] = []
+        skipped = 0
+        for entry in entries:
+            try:
+                kept.append(_requirement_from_response(entry, allowed_locators, catalog))
+            except PoisonedResponseError:
+                raise
+            except BedrockExtractionError as error:
+                skipped += 1
+                logging.getLogger("governance.authoring").warning("requirement skipped: %s", error)
+        if skipped:
+            logging.getLogger("governance.authoring").info(
+                "chunk kept %d requirement(s), skipped %d", len(kept), skipped
+            )
+        return tuple(kept)
 
     def _request_body(
         self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
@@ -269,13 +363,42 @@ def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(text, str):
         raise BedrockExtractionError("Bedrock response text is missing")
     try:
-        value = json.loads(text)
+        value = json.loads(_strip_json_code_fence(text))
     except json.JSONDecodeError as error:
         # 자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다.
         raise BedrockExtractionError("Bedrock response is not JSON") from error
     if not isinstance(value, dict) or set(value) != _RESPONSE_KEYS:
         raise BedrockExtractionError("Bedrock response fields are invalid")
     return value
+
+
+#: 따옴표로 감싼 구간. Contract의 불변식 메시지는 대부분 규칙 문구지만, 일부는 위반한 값을
+#: `!r`로 끼워 넣는다(예: 중복 locator). locator는 고객 문서의 heading에서 파생되므로 정책 문구
+#: 조각이 로그로 새어 나갈 수 있다. 규칙 문구만 남기고 값은 지운다.
+_QUOTED_SPAN = re.compile("'[^']*'|\"[^\"]*\"", re.DOTALL)
+
+
+def _redacted(message: str) -> str:
+    """Drop quoted spans from a validation message so only its rule text is logged."""
+    return _QUOTED_SPAN.sub("'<redacted>'", message)
+
+
+def _strip_json_code_fence(text: str) -> str:
+    """Remove a Markdown code fence that fully wraps the JSON, if present.
+
+    Some models (e.g. Nova) return the JSON inside a ```json ... ``` fence. Only a fence that
+    encloses the entire response is removed; any other surrounding prose still makes json.loads
+    fail, so this does not mine values out of free text — it only undoes the one formatting the
+    model reliably applies to an otherwise-complete JSON object.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return text
+    lines = stripped.splitlines()
+    # Drop the opening fence line (``` or ```json) and a trailing closing fence line.
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1])
+    return text
 
 
 def _requirement_from_response(
@@ -286,8 +409,9 @@ def _requirement_from_response(
     present = set(entry)
     forbidden = sorted(present & FORBIDDEN_EXTRACTION_FIELDS)
     if forbidden:
-        # 조용히 버리지 않는다. 버리면 모델이 판정을 시도했다는 사실 자체가 사라진다.
-        raise BedrockExtractionError(
+        # 조용히 버리지 않는다. 버리면 모델이 판정을 시도했다는 사실 자체가 사라진다. 이건
+        # 품질 문제가 아니라 경계 위반이므로 응답(청크) 전체를 거부한다 (fail-soft 대상 아님).
+        raise PoisonedResponseError(
             "the model returned an evaluation outcome field: " + ", ".join(forbidden)
         )
     if not _REQUIRED_FIELDS <= present or not present <= (_REQUIRED_FIELDS | _OPTIONAL_FIELDS):
@@ -356,7 +480,12 @@ def _requirement_from_response(
         raise
     except (TypeError, ValueError) as error:
         # Contract의 분류 불변식을 만족하지 못하는 응답도 여기서 거부한다. 메시지에 정책 문장을
-        # 넣지 않기 위해 원인 텍스트는 그대로 전달하지 않는다.
+        # 넣지 않기 위해 원인 텍스트는 그대로 전달하지 않는다. 불변식 위반의 사유(필드명·규칙
+        # 문구)는 진단을 위해 로그에 남기되, 값을 끼워 넣는 메시지가 섞여 있으므로 인용 구간은
+        # 지우고 남긴다.
+        logging.getLogger("governance.authoring").warning(
+            "requirement rejected: %s: %s", type(error).__name__, _redacted(str(error))
+        )
         raise BedrockExtractionError("the model returned an invalid requirement shape") from error
 
 

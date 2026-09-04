@@ -41,3 +41,15 @@ class ArtifactCollisionError(ArtifactStoreError):
 
 class ArtifactIntegrityError(ArtifactStoreError):
     """Raised when stored bytes do not match their content digest."""
+
+
+class PolicySourceNotFound(LookupError):
+    """Raised when a policy source version does not exist in the caller's partition."""
+
+
+class PolicySourceDeleteForbidden(ValueError):
+    """Raised when deleting a policy source is not allowed (e.g. it is approved).
+
+    Not a `RepositoryError`: the write did not fail, it was refused by a domain rule, and the
+    public mapping owes the caller a 409 rather than a 503.
+    """

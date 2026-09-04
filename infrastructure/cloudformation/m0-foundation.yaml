@@ -121,6 +121,9 @@ Rules:
           Live M1 deployment Region must match the approved Assessment Model Profile Region.
 
 Conditions:
+  # The Vite dev server origin is a development convenience; a deployed non-sandbox API must not
+  # accept a browser origin nobody operates.
+  LocalDevelopmentOriginAllowed: !Equals [!Ref Environment, "sandbox"]
   M1LiveAssessmentEnabled: !Not [!Equals [!Ref M1AssessmentRuntimeJson, ""]]
   DeploymentCommitResolutionEnabled: !Not [!Equals [!Ref DeploymentRuntimeJson, ""]]
   PolicyAuthoringEnabled: !Not [!Equals [!Ref PolicyAuthoringModelProfileJson, ""]]
@@ -439,7 +442,9 @@ Resources:
                     "dynamodb:PutItem",
                     "dynamodb:Query",
                     "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
                     "dynamodb:TransactWriteItems",
+                    "dynamodb:ConditionCheckItem",
                   ]
                 Resource:
                   - !GetAtt MetadataTable.Arn
@@ -458,6 +463,29 @@ Resources:
               - Effect: Allow
                 Action: ["s3:PutObject", "s3:GetObject"]
                 Resource: !Sub "${ArtifactBucket.Arn}/customers/*"
+              # 미승인 정책 문서 삭제(DELETE /policy-sources/{id}/versions/{ver}). 정책 원문
+              # prefix로만 제한한다.
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub "${ArtifactBucket.Arn}/customers/*/policy-sources/*"
+              # Admin 사용자 관리(POST/GET /admin/users, profile 지정)와 Parent orchestrate가
+              # 쓰는 Bedrock. 사용자 관리는 이 UserPool로만, Bedrock은 승인된 Parent 모델로만.
+              - Effect: Allow
+                Action:
+                  [
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminAddUserToGroup",
+                    "cognito-idp:AdminSetUserPassword",
+                    "cognito-idp:AdminUpdateUserAttributes",
+                    # 쓰기 전에 대상 사용자의 custom:customer_id를 읽어 호출자 customer 소속인지
+                    # 확인한다. 이 권한이 없으면 그 확인이 통째로 실패한다.
+                    "cognito-idp:AdminGetUser",
+                    "cognito-idp:ListUsers",
+                  ]
+                Resource: !GetAtt UserPool.Arn
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
               - Effect: Allow
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: "*"
@@ -715,6 +743,8 @@ Resources:
           ASSESSMENT_SCOPE_JSON: !Ref AssessmentScopeJson
           POLICY_SOURCE_BUCKET_NAME: !Ref ArtifactBucket
           POLICY_AUTHORING_QUEUE_URL: !Ref PolicyAuthoringQueue
+          # Admin 사용자 관리(POST/GET /admin/users, profile 지정)가 대상으로 삼는 UserPool.
+          USER_POOL_ID: !Ref UserPool
           # 승인된 배포 대상의 GitHub 좌표. Deployment 생성이 TERRAFORM_PATCH의 merge commit을
           # 해석하려면 필요하다(ADR-0019 §3·§4). 비어 있으면 그 경로만 fail-closed되고,
           # ACTUAL_SYNC 배포는 GitHub read 없이 그대로 동작한다.
@@ -915,6 +945,20 @@ Resources:
     Properties:
       Name: !Sub "${ProjectName}-${Environment}-api"
       ProtocolType: HTTP
+      # Browser calls come from the SPA origin, which is cross-origin to this API. Without CORS the
+      # browser blocks every request at the preflight (OPTIONS) with no response. The allowed origin
+      # is the SPA callback URL, which must therefore be a bare origin (scheme + host, no path) or
+      # no browser request will match it. The Vite dev origin is added only in sandbox. Credentials
+      # are not used because the SPA sends a Bearer token, not cookies.
+      CorsConfiguration:
+        AllowOrigins: !If
+          - LocalDevelopmentOriginAllowed
+          - [!Ref FrontendCallbackUrl, "http://localhost:5173"]
+          - [!Ref FrontendCallbackUrl]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        AllowCredentials: false
+        MaxAge: 300
   HttpApiAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
     Properties:
@@ -947,6 +991,55 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "POST /orchestrate"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  # Admin console: policy document list/delete, assessment scope, and user management.
+  GetPolicySourcesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /policy-sources"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  DeletePolicySourceRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "DELETE /policy-sources/{sourceId}/versions/{version}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetScopeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /scope"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  GetAdminUsersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /admin/users"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  PostAdminUsersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /admin/users"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]
+  PostAdminUserProfileRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /admin/users/profile"
       AuthorizationType: JWT
       AuthorizerId: !Ref HttpApiAuthorizer
       Target: !Join ["/", [integrations, !Ref HttpApiIntegration]]

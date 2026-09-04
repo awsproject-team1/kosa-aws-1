@@ -228,6 +228,8 @@ def _http_handler() -> JobHttpHandler:
         policy_reader=policy_reader,
         remediation_exceptions=_remediation_exception_components(),
         orchestrations=_orchestration_components(),
+        users=_user_management_components(),
+        scope=_scope_components(),
     )
 
 
@@ -418,6 +420,31 @@ def _remediation_exception_reader() -> DynamoDbRemediationExceptionRepository:
     )
 
 
+def _scope_components() -> object:
+    """Read-only assessment scope view from ASSESSMENT_SCOPE_JSON (deployment config)."""
+    from apps.backend.api.scope import ScopeApiService
+
+    return ScopeApiService(scope_json=os.environ.get("ASSESSMENT_SCOPE_JSON"))
+
+
+def _user_management_components() -> object | None:
+    """Construct the Admin user-management service. Needs USER_POOL_ID and Cognito access.
+
+    Returns None when the pool id is not configured so the route stays closed rather than
+    exposing an endpoint that always fails.
+    """
+    pool = os.environ.get("USER_POOL_ID")
+    if not pool or not pool.strip():
+        return None
+    try:
+        import boto3
+    except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
+        raise RuntimeError("AWS Lambda boto3 runtime is required") from error
+    from apps.backend.api.users import UserManagementService
+
+    return UserManagementService(client=boto3.client("cognito-idp"), user_pool_id=pool.strip())
+
+
 def _policy_source_components() -> tuple[PolicySourceApiService, object]:
     """고객 정책 원문 업로드 세션 서비스와 정규화 처리용 S3 reader를 구성한다.
 
@@ -593,13 +620,20 @@ def _repository_ids(value: object) -> frozenset[str]:
     """Read the repositories one customer may assess.
 
     항목에 `policy_profile_id`가 남아 있으면 거부한다. 조용히 무시하면, 운영자는 Profile 경계가
-    아직 환경변수로 강제된다고 믿은 채 배포한다.
+    아직 환경변수로 강제된다고 믿은 채 배포한다. `repository_id` 외에 콘솔 표시용 비밀 아닌
+    연결 정보(`github_repository`, `aws_account_id`)는 허용하되, 그 밖의 알 수 없는 필드는
+    fail-closed로 거부한다 — 비밀 참조(role ARN, secret id)를 이 환경변수에 넣지 않게 강제한다.
     """
+    allowed = {"repository_id", "github_repository", "aws_account_id"}
     if not isinstance(value, list):
         raise ValueError
     repositories: set[str] = set()
     for entry in value:
-        if not isinstance(entry, Mapping) or set(entry) != {"repository_id"}:
+        if (
+            not isinstance(entry, Mapping)
+            or not set(entry) <= allowed
+            or "repository_id" not in entry
+        ):
             raise ValueError
         repositories.add(_required_string(entry.get("repository_id"), "repository_id"))
     return frozenset(repositories)

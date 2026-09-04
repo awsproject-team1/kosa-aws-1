@@ -18,6 +18,7 @@ from apps.backend.policy.authoring.bedrock_extractor import (
     MAX_REQUIREMENTS_PER_CHUNK,
     _catalog_prompt_view,
     _chunks,
+    _redacted,
 )
 from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
 from packages.contracts import ModelProfile, ModelProfileRole
@@ -123,7 +124,7 @@ class RequestTest(unittest.TestCase):
         _requirements, client = _extract({"requirements": []})
 
         request = client.calls[0]
-        self.assertEqual(request["inferenceConfig"], {"temperature": 0, "maxTokens": 4096})
+        self.assertEqual(request["inferenceConfig"], {"temperature": 0, "maxTokens": 8192})
         self.assertEqual(request["modelId"], "anthropic.claude")
 
     def test_known_unsupported_controls_are_not_offered_to_the_model(self) -> None:
@@ -152,13 +153,22 @@ class ResponseGateTest(unittest.TestCase):
         self.assertEqual(len(requirements), 1)
         self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
 
+    def test_a_json_response_wrapped_in_a_code_fence_is_accepted(self) -> None:
+        """Nova는 완결된 JSON을 ```json ... ``` 펜스로 감싸 반환한다. 감싼 펜스만 벗겨 파싱한다."""
+        body = json.dumps({"requirements": [VALID_REQUIREMENT]})
+        fenced = f"```json\n{body}\n```"
+        requirements, _client = _extract(fenced)
+
+        self.assertEqual(len(requirements), 1)
+        self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
+
     def test_a_non_json_response_is_refused(self) -> None:
         """자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다."""
-        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract("Here are the requirements I found: ...")
 
     def test_an_unexpected_top_level_key_is_refused(self) -> None:
-        with self.assertRaisesRegex(BedrockExtractionError, "response fields are invalid"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract({"requirements": [], "notes": "extra"})
 
     def test_an_evaluation_outcome_field_rejects_the_whole_response(self) -> None:
@@ -171,60 +181,71 @@ class ResponseGateTest(unittest.TestCase):
                 ):
                     _extract({"requirements": [entry]})
 
-    def test_an_unknown_requirement_field_is_refused(self) -> None:
-        entry = {**VALID_REQUIREMENT, "confidence": 0.9}
-        with self.assertRaisesRegex(BedrockExtractionError, "requirement fields are invalid"):
-            _extract({"requirements": [entry]})
+    def test_an_unknown_requirement_field_is_skipped_not_fatal(self) -> None:
+        # fail-soft: 한 후보의 알 수 없는 필드는 그 후보만 건너뛰고, 같은 응답의 정상 후보는 남는다.
+        bad = {**VALID_REQUIREMENT, "confidence": 0.9, "source_locators": [DATABASE_LOCATOR]}
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
-    def test_an_invented_locator_is_refused(self) -> None:
-        """모델이 지어낸 locator는 문서에 없다. Evidence가 모델의 주장이 되게 두지 않는다."""
-        entry = {**VALID_REQUIREMENT, "source_locators": ["heading/invented/item/1"]}
-        with self.assertRaisesRegex(BedrockExtractionError, "outside this chunk"):
-            _extract({"requirements": [entry]})
+    def test_an_invented_locator_is_skipped_not_fatal(self) -> None:
+        """모델이 지어낸 locator를 가진 후보만 버린다. 정상 후보는 유지한다."""
+        bad = {**VALID_REQUIREMENT, "source_locators": ["heading/invented/item/1"]}
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
-    def test_a_control_key_outside_the_catalog_is_refused(self) -> None:
-        entry = {**VALID_REQUIREMENT, "mapped_control_key": "NOT_A_CONTROL"}
-        with self.assertRaisesRegex(BedrockExtractionError, "outside the control catalog"):
-            _extract({"requirements": [entry]})
+    def test_a_control_key_outside_the_catalog_is_skipped_not_fatal(self) -> None:
+        bad = {
+            **VALID_REQUIREMENT,
+            "mapped_control_key": "NOT_A_CONTROL",
+            "source_locators": [DATABASE_LOCATOR],
+        }
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
-    def test_evidence_outside_the_control_boundary_is_refused_not_dropped(self) -> None:
-        entry = {
+    def test_evidence_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
+        bad = {
             **VALID_REQUIREMENT,
             "required_evidence": ["S3.PUBLIC_ACCESS_BLOCK", "S3.INVENTED"],
+            "source_locators": [DATABASE_LOCATOR],
         }
-        with self.assertRaisesRegex(
-            BedrockExtractionError, "required_evidence is outside the control catalog"
-        ):
-            _extract({"requirements": [entry]})
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
-    def test_a_resource_type_outside_the_control_boundary_is_refused(self) -> None:
-        entry = {**VALID_REQUIREMENT, "resource_types": ["AWS::RDS::DBInstance"]}
-        with self.assertRaisesRegex(
-            BedrockExtractionError, "resource_types is outside the control catalog"
-        ):
-            _extract({"requirements": [entry]})
+    def test_a_resource_type_outside_the_control_boundary_is_skipped_not_fatal(self) -> None:
+        bad = {
+            **VALID_REQUIREMENT,
+            "resource_types": ["AWS::RDS::DBInstance"],
+            "source_locators": [DATABASE_LOCATOR],
+        }
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
-    def test_an_overlong_field_is_refused(self) -> None:
-        entry = {**VALID_REQUIREMENT, "requirement": "x" * 5000}
-        with self.assertRaisesRegex(BedrockExtractionError, "longer than the allowed limit"):
-            _extract({"requirements": [entry]})
+    def test_an_overlong_field_is_skipped_not_fatal(self) -> None:
+        bad = {
+            **VALID_REQUIREMENT,
+            "requirement": "x" * 5000,
+            "source_locators": [DATABASE_LOCATOR],
+        }
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
     def test_too_many_requirements_in_one_chunk_are_refused(self) -> None:
         entries = [
             {**VALID_REQUIREMENT, "requirement": f"Requirement number {index}."}
             for index in range(MAX_REQUIREMENTS_PER_CHUNK + 1)
         ]
-        with self.assertRaisesRegex(BedrockExtractionError, "more requirements than one chunk"):
+        with self.assertRaisesRegex(BedrockExtractionError, "every chunk failed"):
             _extract({"requirements": entries})
 
     def test_a_shape_the_classification_invariants_reject_is_refused(self) -> None:
-        """분류가 말하는 것과 채워진 필드가 어긋나면 후보로 만들지 않는다."""
-        entry = {
+        """분류가 말하는 것과 채워진 필드가 어긋나는 후보만 건너뛰고, 정상 후보는 남는다."""
+        bad = {
             **VALID_REQUIREMENT,
             "classification": "UNSUPPORTED",
+            "source_locators": [DATABASE_LOCATOR],
         }
-        with self.assertRaisesRegex(BedrockExtractionError, "invalid requirement shape"):
-            _extract({"requirements": [entry]})
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
+        self.assertEqual(len(requirements), 1)
 
 
 class ChunkingTest(unittest.TestCase):
@@ -290,6 +311,35 @@ class ChunkingTest(unittest.TestCase):
         reverse, _client = _extract({"requirements": [second, VALID_REQUIREMENT]})
 
         self.assertEqual([entry.digest for entry in forward], [entry.digest for entry in reverse])
+
+
+class RejectionLoggingTest(unittest.TestCase):
+    """A skipped candidate is only visible in a log line, so that line must stay safe to keep.
+
+    The rejection reason is what makes fail-soft debuggable. Contract invariant messages are rule
+    text today, but a few embed the offending value with `!r`, and a locator carries a slug of the
+    customer's own headings. The reason is logged through a redaction that keeps rule text and
+    drops quoted values, so a future Contract message cannot turn this line into a leak.
+    """
+
+    def test_the_rejection_reason_is_logged_without_the_policy_sentence(self) -> None:
+        bad = {**VALID_REQUIREMENT, "classification": "UNSUPPORTED"}
+        with self.assertLogs("governance.authoring", level="WARNING") as logs:
+            requirements, _client = _extract({"requirements": [bad, VALID_REQUIREMENT]})
+        self.assertEqual(len(requirements), 1)
+        rejection = next(line for line in logs.output if "requirement rejected" in line)
+        self.assertIn("must not carry rule semantics", rejection)
+        self.assertNotIn(VALID_REQUIREMENT["requirement"], rejection)
+
+    def test_redaction_keeps_the_rule_text_and_drops_the_value(self) -> None:
+        self.assertEqual(
+            _redacted("source_locators must not repeat 'heading/tenant-secret/item/3'"),
+            "source_locators must not repeat '<redacted>'",
+        )
+        self.assertEqual(
+            _redacted("an AUTOMATABLE requirement must map to a control"),
+            "an AUTOMATABLE requirement must map to a control",
+        )
 
 
 if __name__ == "__main__":
