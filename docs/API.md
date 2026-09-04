@@ -52,6 +52,10 @@ Parent Orchestrator가 메시지를 분류해 다음 중 하나를 돌려준다.
   - `POLICY_QA`면 `answer`에 직접 답변, 워크플로 intent면 `selector`에 후보
     (`repository_id`, `policy_profile_id`, `finding_id`, `remediation_id` 중 해당 값)와
     `requires_confirmation`이 온다. Client는 사용자 확인 뒤 해당 endpoint를 직접 호출한다.
+- 오류 `502 ORCHESTRATION_UNAVAILABLE`: 메시지는 정상 파싱됐으나 Parent가 결정을 만들지 못했다
+  (upstream 모델 호출 실패 또는 라우터가 거부한 응답 형태). 재시도 가능한 상태이며, 구체적 예외는
+  서버 로그(`governance.api`)에만 남기고 응답 본문에는 노출하지 않는다. 400(잘못된 요청)·500(미분류
+  서버 결함)과 구분된다.
 - 배선됨: handler branch + API Gateway route(`PostOrchestrateRoute`) + SPA 챗봇 UI.
   라이브 반영은 `Deploy M0 Foundation` 재배포 시점을 따른다.
 

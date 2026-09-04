@@ -26,8 +26,13 @@ from apps.backend.api.remediation_exceptions import (
     RemediationExceptionRequest,
 )
 from apps.backend.api.remediations import RemediationApiService
-from apps.backend.auth import InvalidIdentityClaims, Principal
-from apps.backend.jobs import JobNotFoundError, RequestValidationError, sanitize_public_failure
+from apps.backend.auth import AuthorizationDenied, InvalidIdentityClaims, Principal
+from apps.backend.jobs import (
+    JobNotFoundError,
+    OrchestrationUnavailableError,
+    RequestValidationError,
+    sanitize_public_failure,
+)
 from packages.contracts import (
     ApiErrorResponse,
     DeploymentRejectionReason,
@@ -126,7 +131,19 @@ class JobHttpHandler:
                     orchestration_request = _orchestration_request(event.get("body"))
                 except (TypeError, ValueError, json.JSONDecodeError) as error:
                     raise RequestValidationError("orchestrate body is invalid") from error
-                decision = self._orchestrations.orchestrate(principal, orchestration_request)
+                try:
+                    decision = self._orchestrations.orchestrate(principal, orchestration_request)
+                except (AuthorizationDenied, InvalidIdentityClaims):
+                    # Authorization is a real 401/403 the caller must see, not an assistant fault.
+                    raise
+                except Exception as error:
+                    # The message parsed, so this is not a 400: the model call failed or returned a
+                    # shape the router rejected (OrchestrationError is a ValueError that would
+                    # otherwise fall through to an opaque 500). Surface it as a retryable 502; the
+                    # 5xx logger still records the concrete exception for diagnosis.
+                    raise OrchestrationUnavailableError(
+                        "parent orchestrator could not produce a decision"
+                    ) from error
                 return _response(200, decision.to_dict())
             if method == "POST" and path == "/policy-sources/uploads":
                 if self._policy_sources is None:

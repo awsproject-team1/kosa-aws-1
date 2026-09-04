@@ -4,6 +4,7 @@ from apps.backend.jobs.access import authorize_job_read
 from apps.backend.jobs.errors import (
     AssessmentScopeDenied,
     JobNotFoundError,
+    OrchestrationUnavailableError,
     RequestValidationError,
     WorkflowDispatchError,
     sanitize_public_error,
@@ -44,6 +45,7 @@ __all__ = [
     "sanitize_public_error",
     "sanitize_public_failure",
     "transition_job",
+    "OrchestrationUnavailableError",
     "WorkflowDispatchError",
     "WorkflowOutboxEntry",
 ]

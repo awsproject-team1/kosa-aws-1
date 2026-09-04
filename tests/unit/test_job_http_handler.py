@@ -250,3 +250,71 @@ class JobHttpHandlerTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 201)
         self.assertEqual(json.loads(response["body"])["source_id"], "source-1")
+
+
+class _OrchestrationStub:
+    """Duck-typed orchestrations service: only .orchestrate(principal, request) is called."""
+
+    def __init__(self, *, error: Exception | None = None, decision: object | None = None) -> None:
+        self._error = error
+        self._decision = decision
+
+    def orchestrate(self, _principal, _request):
+        if self._error is not None:
+            raise self._error
+        return self._decision
+
+
+def _orchestrate_handler(orchestrations: object) -> JobHttpHandler:
+    service = JobApiService(
+        repository=InMemoryJobRepository(),
+        assessment_scope=ApprovedScope(),
+        policy_catalog_factory=PublishedProfiles(),
+        outbox_dispatcher=OutboxDispatcher(
+            repository=InMemoryJobRepository(), dispatcher=Dispatcher()
+        ),
+        job_id_factory=lambda: "job-001",
+        assessment_id_factory=lambda: "asm-001",
+    )
+    return JobHttpHandler(service, orchestrations=orchestrations)
+
+
+class OrchestrateRouteTest(unittest.TestCase):
+    def test_a_router_failure_maps_to_502_not_an_opaque_500(self) -> None:
+        # OrchestrationError is a ValueError; without the explicit wrap it would fall through to a
+        # 500 EXECUTION_ERROR that hides the assistant being the failing dependency.
+        handler = _orchestrate_handler(_OrchestrationStub(error=ValueError("model returned junk")))
+        response = handler.handle(event("POST", "/orchestrate", '{"message":"evaluate test repo"}'))
+        self.assertEqual(response["statusCode"], 502)
+        self.assertEqual(json.loads(response["body"])["error"]["code"], "ORCHESTRATION_UNAVAILABLE")
+
+    def test_authorization_denial_is_still_a_403(self) -> None:
+        from apps.backend.auth import AuthorizationDenied
+
+        handler = _orchestrate_handler(_OrchestrationStub(error=AuthorizationDenied("no")))
+        response = handler.handle(event("POST", "/orchestrate", '{"message":"hi"}'))
+        self.assertEqual(response["statusCode"], 403)
+        self.assertEqual(json.loads(response["body"])["error"]["code"], "SCOPE_DENIED")
+
+    def test_a_valid_decision_returns_200(self) -> None:
+        from packages.contracts import OrchestrationDecision, OrchestrationIntent
+
+        decision = OrchestrationDecision(
+            intent=OrchestrationIntent.POLICY_QA,
+            rationale="asks a question",
+            answer="Block public access on S3 buckets.",
+        )
+        handler = _orchestrate_handler(_OrchestrationStub(decision=decision))
+        response = handler.handle(event("POST", "/orchestrate", '{"message":"what is our rule?"}'))
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(json.loads(response["body"])["intent"], "POLICY_QA")
+
+    def test_a_malformed_body_is_a_400_before_the_router(self) -> None:
+        handler = _orchestrate_handler(_OrchestrationStub(error=ValueError("should not run")))
+        response = handler.handle(event("POST", "/orchestrate", '{"message":""}'))
+        self.assertEqual(response["statusCode"], 400)
+        self.assertEqual(json.loads(response["body"])["error"]["code"], "VALIDATION_ERROR")
+
+
+if __name__ == "__main__":
+    unittest.main()
