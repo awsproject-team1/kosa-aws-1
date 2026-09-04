@@ -2,6 +2,16 @@
 
 ## Current
 
+- **PR #72 리뷰 후속(2026-09-04, `f574c0c`·`34b5f05`, #72에 포함돼 `dev` 병합):** `assign_profile`이 호출자가 준
+  email을 검증 없이 Cognito에 넘겨 다른 customer 사용자의 `profile`을 덮어쓸 수 있던 테넌트 구멍을 닫았다
+  (`admin_get_user`로 대상의 `custom:customer_id` 확인, 없는 사용자와 남의 사용자는 같은 403).
+  `DELETE /policy-sources/…`는 record → S3 순서로 바꾸고 없는 문서는 500이 아니라 404, 승인 문서 409 매핑은
+  문자열 타입명 비교 대신 `packages/common/errors.py`의 실제 예외로. CORS `localhost:5173`은 sandbox에서만.
+  `cognito-idp:AdminGetUser`를 ApiRuntimeRole에 추가하고, 서비스가 호출하는 Cognito API ↔ role 허용 목록을
+  소스에서 읽어 대조하는 security test를 넣었다. `ruff format` 7개 파일. 검증: unit 1231 / contract 236 /
+  integration 21 / security 108, cfn-lint, frontend build. **주의: 마지막 Foundation 배포는 `d687a00`(#71)이라
+  #72의 route 8개·IAM·`USER_POOL_ID`·`AdminGetUser`는 workflow 기준으로 아직 라이브에 없다.**
+
 - **SPA 콘솔을 관측성 중심으로 재설계하고, 라이브 sandbox에서 문서 관리·사용자 관리·평가/게시
   폐루프를 시연 가능한 상태로 굳혔다** (PR #72, branch `feature/console-redesign-and-authoring-hardening`,
   base `dev`). 정책 authoring 견고화와 신규 콘솔 API를 함께 포함한다. 라이브 배포·검증까지 완료.
@@ -1053,18 +1063,14 @@
   A·D·Security가 approve하는 것으로 서명을 대신한다. 미정 항목은 없고 Decision 1~8에 결정과
   근거가 모두 들어 있다. 세 Owner의 approve가 모이면 같은 PR에서 상태를 `Accepted`로 바꾸고,
   차단됐던 live plan 구현 커밋은 그 이후에만 시작한다.
-- **M3 A (ADR-0020 파생분의 남은 절반):** planned 집합은 저장되지만 검증 Assessment의 선택자는
-  아직 없다. Assessment item에 `phase`/`source_assessment_id`/`deployment_id`를 영속화하고
-  `apps/backend/assessment/runtime.py`의 `AssessmentPhase.INITIAL` 하드코딩을 인자로 바꾼 뒤,
-  `GET /deployments/{deploymentId}/verification`을 `compare_post_deploy_assessments()`에 배선한다
-  (ADR-0020 §1·§7). 계획 집합 주입은 `DynamoDbAssessmentReportStore.get_planned_evaluations()`로
-  이미 가능하다
-- **M3 A endpoint 배선 (Contract 동결 이후):** Deployment 생성 `POST /remediations/{id}/deployments`,
-  `GET /deployments/{id}`, `GET /deployments/{id}/verification`, `POST /deployments/{id}/reject`를
-  방금 동결한 Contract(`DeploymentStatus`/`derive_deployment_status()`, D port, `plan_hash` 투영,
-  `START_DEPLOYMENT`/`REJECT_DEPLOYMENT`, `DEPLOYMENT_REQUESTED`/`DEPLOYMENT_REJECTED`) 위에 올린다.
-  검증 조회는 `compare_post_deploy_assessments()`에 complete `ComparisonAssessment` 두 개를
-  fail-closed로 배선한다 (ADR-0019 §4·§8, ADR-0020 §1·§7).
+- ~~**M3 A (ADR-0020 파생분의 남은 절반)**~~ **해소됨 (2026-09-04 확인):** `phase`/`source_assessment_id`/
+  `deployment_id`는 `apps/backend/repositories/dynamodb.py`의 Assessment item write에 들어갔고,
+  `assessment/runtime.py`의 `AssessmentPhase.INITIAL`은 하드코딩이 아니라 `phase` 없는 legacy 레코드의
+  fallback이다. `GET /deployments/{deploymentId}/verification`은 `apps/backend/api/deployments.py`에서
+  `compare_post_deploy_assessments()`에 배선돼 있다.
+- ~~**M3 A endpoint 배선 (Contract 동결 이후)**~~ **해소됨:** `POST /remediations/{id}/deployments`,
+  `GET /deployments/{id}`, `GET /deployments/{id}/verification`, `POST /deployments/{id}/reject` 전부
+  handler branch + API Gateway route로 배선됨(`docs/API.md` M3 표). 라이브 확인만 재배포 뒤로 남는다.
 - **M3 C:** `POST_DEPLOY_VERIFICATION` phase의 18개 Golden Case(6 Rule × 3 perspective)를 추가했다.
   16개 정합 `PASS` snapshot과 logging 설정이 남은 Actual/Drift 2개 `FAIL` snapshot이며 원 Assessment와
   같은 rubric을 쓴다. fixture gate는 통과했고, 실제 Bedrock 반복 평가는 M4 customer sandbox gate로
@@ -1082,9 +1088,10 @@
   Terraform refresh-plan adapter를 연결하고, customer-approved runtime identity로 Remediation
   Lambda/SQS event source를 배선한다. `RUN_DEPLOYMENT`와 Human Approval/Apply는 D Deployment Worker에
   남기며 A/B/C mock flow를 변경하지 않는다
-- **Frontend 남은 화면:** 정책 원문 업로드·승인·Profile 게시(M1 A ingestion 경로)와 Admin 감사 이력
-  조회(`GET /audit-events`), 관측·비용 조회(`GET /deployments/{id}/observability`) 화면. Assessment
-  조회·조치 요청·배포 승인/거절·Post-Deploy 비교는 배선됐다.
+- **Frontend 남은 화면:** Admin 감사 이력 조회(`GET /audit-events`)와 관측·비용 조회
+  (`GET /deployments/{id}/observability`) 화면. 정책 원문 업로드·후보 추출·승인·Profile 게시·사용자 관리·
+  `/scope`·`/orchestrate` 챗봇은 #72 콘솔 재설계로 배선됐고, Assessment 조회·조치 요청·배포 승인/거절·
+  Post-Deploy 비교는 그 전에 배선됐다.
 - **EC2/RDS/ALB Golden Case:** Golden Dataset은 여전히 S3 6 Rule × 3관점 = 36 case다. 확장한 9 Rule
   (EC2 3 / RDS 4 / ALB 2)은 품질 게이트 없이 평가되므로, C의 rubric 반복 평가와 함께 case를 추가해야
   한다. fixture만 늘리는 것은 근거가 아니다 (ADR-0021/0022).
@@ -1094,14 +1101,11 @@
   생성한다. Dry-run의 `EXTERNAL_EVIDENCE_REQUIRED`나 fixture 결과는 release 통과 근거가 아니다.
   같은 `execution_id`와 repository/deployment/artifact digest로 A 관측·비용, D plan/apply 증적을
   결합한다 (ADR-0022).
-- M1 A: 고객 Policy Source 업로드 세션(presigned·1회용), customer-scoped S3/DynamoDB,
-  ingestion record 상태 전이와 조회 API. Client는 `PolicySourceUploadRequest`가 담는 값만
-  선언할 수 있고 `customer_id`/bucket/key/상태는 Backend가 발급한다
-- M1 A: 승인·Profile 게시 API 배선. `approve_source()`/`publish_profile()`을 DynamoDB 조건부
-  write 앞에서 호출하고, 거부 시 write를 시도하지 않는다. 승인 record와 audit record는
-  finalization tuple에 조건부로 묶는다
-- M1 A/B/C Shared: 업로드 → 정규화 → 승인 → Profile → Assessment 통합 테스트와
-  고객 간 Artifact 격리 테스트 (`docs/POLICY_INGESTION.md`의 남은 인수 조건)
+- ~~M1 A: 업로드 세션 / 승인·Profile 게시 API 배선 / 업로드→정규화→승인→Profile→Assessment 통합
+  테스트~~ **해소됨 (2026-09-04 확인):** 업로드 세션·상태 조회·`/process`·`/approve`·
+  `POST /policy-profiles`·목록·삭제가 전부 배선됐고(`docs/API.md` "Customer policy ingestion"),
+  ADR-0023 authoring worker가 후보를 채운다. 통합 테스트는
+  `tests/integration/test_policy_ingestion_lifecycle.py`·`test_policy_authoring_to_assessment.py`.
 - M1 A: 승인된 고객 sandbox에 Auth bootstrap을 배포하고, controlled local user의 Hosted UI
   로그인·Assessment 시작·결과 조회 E2E를 실행한다.
 - M1 A/D: 고객 sandbox의 Metadata Table에 `scripts/publish_policy_catalog.py`로 승인 Registry를
@@ -1114,9 +1118,11 @@
 
 ## Blocked
 
-- M1 actual sandbox validation: 두 protected GitHub Environment에 required reviewer가 없고 deploy
-  Environment의 `M1_ASSESSMENT_MODE` 및 M1 Secret 3개가 미설정이다. 로컬 AWS credential도 없으므로
-  bootstrap/runtime target 생성과 실제 workflow dispatch는 고객 관리자·승인자 작업 대기
+- ~~M1 actual sandbox validation: required reviewer·`M1_ASSESSMENT_MODE`·M1 Secret 3개 미설정~~
+  **해소됨 (2026-09-03, `docs/SESSION-HANDOFF-2026-09-03.md` §2):** 두 Environment 모두 필수 리뷰어
+  게이트가 있고 deploy Environment에 `M1_ASSESSMENT_MODE=live`와 Secret 3개가 설정됐다. Foundation 스택은
+  `d687a00`(#71)까지 배포됐고 라이브 Initial Assessment·remediation patch 생성까지 완주했다(§4).
+  남은 것은 `dev` HEAD(#72 포함) 재배포 — 그 전에 bootstrap 스택을 새 템플릿으로 갱신해야 한다(§6 H).
 - M1/M4 live Golden quality evidence: Initial FAIL/FAIL pair의 DRIFT 기대값은 ADR-0011에 맞춰
   PASS/100으로 교정했고, Post-Deploy 18 Case의 profile/case/run/artifact-bound M4 gate도 구현했다.
   남은 차단은 customer artifact resolver/exporter, protected customer runtime·Demo repository,
@@ -1223,7 +1229,8 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   A/EventBridge가 예약 write, D가 재조회·확정. `LivePlanRequestPort`와 `_live_worker`(D port 4종·
   store 3종·work repo 조립, I/O seam 주입)까지 구현해 **D의 코드 조각은 모두 완료**. 유일하게 실제
   검증이 남은 건 `_live_plan_outputs_fetcher`의 GitHub plan run I/O로, 실제 sandbox 자격 증명·
-  네트워크가 있어야 동작·검증된다(그전까지 호출 시 명시적으로 막음). A의 `#EVENT` 예약 write와
+  네트워크가 있어야 검증된다 — 구현 자체(`workflow_dispatch` → run 재식별 → artifact 축소)는 들어가 있고
+  `DEPLOYMENT_RUNTIME_JSON`이 없으면 조립 단계에서 fail-closed다. A의 `#EVENT` 예약 write와
   protected Environment/OIDC Role/자격 증명이 준비되면 live E2E가 열린다)*
 - [ ] **Shared:** 승인 없는 Write 방지, End-to-End Security/Integration Test
 
