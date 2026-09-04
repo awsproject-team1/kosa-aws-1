@@ -10,6 +10,7 @@ from apps.backend.policy import PolicyContext
 from apps.backend.policy.control_catalog import CONTROL_CATALOG_VERSION
 from packages.contracts import (
     AssessmentPhase,
+    DecisionSource,
     EvaluationStatus,
     ModelProfile,
     ModelProfileRole,
@@ -239,8 +240,13 @@ class EvidencePreflightGateTest(unittest.TestCase):
         self.assertEqual(client.calls, 0)
         self.assertIn("aws:s3:bucket/logs-bucket#read-resource", result.evidence_references)
 
-    def test_partial_compliance_fails_with_a_graded_score(self) -> None:
-        """모델은 이 입력을 PASS로 봤다(라이브 측정). 비율은 계산이므로 75가 나온다."""
+    def test_partial_compliance_fails_and_keeps_the_observation_detail(self) -> None:
+        """모델은 이 입력을 PASS로 봤다(라이브 측정). 코드는 FAIL이고, 무엇이 빠졌는지 남긴다.
+
+        score는 status가 정하므로 0이다. 비율 75는 준비도 평균에 넣을 값이 아니라 리포트와
+        조치가 읽을 관측 상세다 — 분모가 리소스 개수라 점수로 쓰면 같은 위험이 리소스를 더
+        붙일수록 준비도를 올린다.
+        """
         rule = _authored_rule()
         client = Client()
 
@@ -261,29 +267,99 @@ class EvidencePreflightGateTest(unittest.TestCase):
         )
 
         self.assertIs(result.status, EvaluationStatus.FAIL)
-        self.assertEqual(result.score, 75.0)
+        self.assertEqual(result.score, 0.0)
+        self.assertEqual((result.observed_satisfied, result.observed_total), (3, 4))
+        self.assertIs(result.decided_by, DecisionSource.CODE)
+        self.assertIn("RestrictPublicBuckets", result.rationale)
         self.assertEqual(client.calls, 0)
 
-    def test_a_legacy_rule_has_no_gate(self) -> None:
-        """legacy Rule은 evidence capability가 없으므로 이전과 같이 모델이 판단한다."""
+    def test_a_legacy_rule_the_catalog_maps_passes_the_same_gate(self) -> None:
+        """배포된 baseline Profile은 legacy Rule로 돼 있다. 그것이 게이트 밖에 있으면 안 된다."""
         rule = _legacy_rule()
         client = Client()
-        ActualBedrockEvaluator(evidence_loader=_loader({}), client=client).evaluate(
+        result = ActualBedrockEvaluator(evidence_loader=_loader({}), client=client).evaluate(
+            resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
+        )
+        self.assertIs(result.status, EvaluationStatus.INSUFFICIENT_EVIDENCE)
+        self.assertIs(result.decided_by, DecisionSource.CODE)
+        self.assertEqual(client.calls, 0)
+
+    def test_a_legacy_rule_the_catalog_maps_is_decided_by_code_when_it_can_be(self) -> None:
+        rule = _legacy_rule()
+        client = Client()
+        result = ActualBedrockEvaluator(
+            evidence_loader=_loader(FULL_BLOCK), client=client
+        ).evaluate(
+            resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
+        )
+        self.assertIs(result.status, EvaluationStatus.PASS)
+        self.assertIs(result.decided_by, DecisionSource.CODE)
+        self.assertEqual(client.calls, 0)
+
+    def test_a_legacy_rule_the_catalog_does_not_know_is_left_to_the_model(self) -> None:
+        """Catalog가 모르는 Rule에 대해서는 아무 선언도 없으므로 이전과 같이 모델이 판단한다."""
+        rule = PolicyRule(
+            rule_id="CUSTOM-LEGACY-1",
+            version="v1",
+            title="Unmapped",
+            severity=RuleSeverity.HIGH,
+            applicable_phases=(AssessmentPhase.INITIAL,),
+            resource_types=("AWS::S3::Bucket",),
+            source_references=(SOURCE,),
+        )
+        client = Client()
+        result = ActualBedrockEvaluator(evidence_loader=_loader({}), client=client).evaluate(
             resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
         )
         self.assertEqual(client.calls, 1)
+        self.assertIs(result.decided_by, DecisionSource.MODEL)
 
-    def test_an_iac_only_capability_is_not_gated_on_the_aws_read(self) -> None:
-        """IaC hint는 authoritative가 아니다. AWS 문서에 없다고 근거 부족으로 읽지 않는다."""
+    def test_a_capability_without_an_aws_binding_is_insufficient_not_judged(self) -> None:
+        """Catalog가 "이 관점의 근거가 없다"고 이미 아는 좌표에서 모델에게 묻지 않는다.
+
+        예전에는 이 경우 검사를 건너뛰고 모델을 불렀다. baseline의 S3 ACL Rule이 그렇게
+        public-access-block 플래그를 근거로 인용하며 PASS를 냈다 — 답이 문서에 존재할 수 없는데도.
+        """
         rule = _authored_rule(
             evaluation_type=RuleEvaluationType.HYBRID,
             required_evidence=("S3.IAC_PUBLIC_ACCESS_BLOCK",),
         )
         client = Client()
-        ActualBedrockEvaluator(evidence_loader=_loader({}), client=client).evaluate(
+        result = ActualBedrockEvaluator(
+            evidence_loader=_loader(FULL_BLOCK), client=client
+        ).evaluate(
             resource_id="logs-bucket", rule=rule, context=_context(rule), model_profile=PROFILE
         )
-        self.assertEqual(client.calls, 1)
+        self.assertIs(result.status, EvaluationStatus.INSUFFICIENT_EVIDENCE)
+        self.assertEqual(client.calls, 0)
+        self.assertIn(
+            "declares no AWS_ACTUAL evidence for S3.IAC_PUBLIC_ACCESS_BLOCK", result.rationale
+        )
+
+    def test_the_baseline_s3_rules_without_aws_evidence_are_not_judged_by_the_model(self) -> None:
+        """ACL·Bucket Policy·TLS·Logging은 S3 read 문서에 답이 없다. 넷 다 모델 호출 0회."""
+        for rule_id in ("S3-ACL-001", "S3-POLICY-001", "S3-TLS-001", "S3-LOGGING-001"):
+            with self.subTest(rule=rule_id):
+                rule = PolicyRule(
+                    rule_id=rule_id,
+                    version="2026-08-31",
+                    title=rule_id,
+                    severity=RuleSeverity.HIGH,
+                    applicable_phases=(AssessmentPhase.INITIAL,),
+                    resource_types=("AWS::S3::Bucket",),
+                    source_references=(SOURCE,),
+                )
+                client = Client()
+                result = ActualBedrockEvaluator(
+                    evidence_loader=_loader(FULL_BLOCK), client=client
+                ).evaluate(
+                    resource_id="logs-bucket",
+                    rule=rule,
+                    context=_context(rule),
+                    model_profile=PROFILE,
+                )
+                self.assertIs(result.status, EvaluationStatus.INSUFFICIENT_EVIDENCE)
+                self.assertEqual(client.calls, 0)
 
     def test_an_unknown_control_fails_closed(self) -> None:
         rule = _authored_rule(control_key="NOT_IN_CATALOG")

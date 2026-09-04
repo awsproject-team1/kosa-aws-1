@@ -312,7 +312,7 @@ class AssessmentWorkflowIntegrationTest(unittest.TestCase):
         self.assertEqual(len(report.findings), 6)
         self.assertIsNotNone(report.readiness_score)
         assert report.readiness_score is not None
-        self.assertEqual(report.readiness_score.score, 20)
+        self.assertEqual(report.readiness_score.score, 0)
 
 
 class PerspectiveBedrockClient:
@@ -441,9 +441,10 @@ class InitialAssessmentPerspectiveIntegrationTest(unittest.TestCase):
         report, _ = self.run_assessment(iac_status="PASS", actual_status="FAIL")
 
         assert report.readiness_score is not None
-        # Only the 12 IAC/AWS_ACTUAL results score: severity-weighted mean of 100 and 20.
+        # Only the 12 IAC/AWS_ACTUAL results score: 6 PASS (100) and 6 FAIL (0) of equal
+        # severity — the status decides, not the 20 the fixture model returned.
         self.assertEqual(report.readiness_score.evaluated_evaluations, 12)
-        self.assertEqual(report.readiness_score.score, 60)
+        self.assertEqual(report.readiness_score.score, 50)
 
     def test_aligned_resource_reports_no_drift_finding(self) -> None:
         report, _ = self.run_assessment(iac_status="FAIL", actual_status="FAIL")
@@ -454,4 +455,4 @@ class InitialAssessmentPerspectiveIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(report.coverage.percentage, 100)
         assert report.readiness_score is not None
-        self.assertEqual(report.readiness_score.score, 20)
+        self.assertEqual(report.readiness_score.score, 0)

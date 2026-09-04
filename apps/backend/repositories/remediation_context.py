@@ -31,6 +31,7 @@ from apps.backend.repositories.ports import RepositoryError, StoredDataError
 from packages.contracts import (
     ArtifactReference,
     ArtifactType,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -333,6 +334,9 @@ def _result_from_item(item: Mapping[str, object]) -> EvaluationResult:
     if not isinstance(evidence, list):
         raise StoredDataError("remediation result evidence is invalid")
     scoring_mode = item.get("scoring_mode")
+    decided_by = item.get("decided_by")
+    observed_satisfied = item.get("observed_satisfied")
+    observed_total = item.get("observed_total")
     try:
         return EvaluationResult(
             resource_id=_string(item.get("resource_id"), "resource_id"),
@@ -348,6 +352,15 @@ def _result_from_item(item: Mapping[str, object]) -> EvaluationResult:
             model_profile_id=_string(item.get("model_profile_id"), "model_profile_id"),
             scoring_mode=(
                 ScoringMode.CONTINUOUS if scoring_mode is None else ScoringMode(scoring_mode)
+            ),
+            decided_by=(DecisionSource.MODEL if decided_by is None else DecisionSource(decided_by)),
+            observed_satisfied=(
+                None
+                if observed_satisfied is None
+                else int(_number(observed_satisfied, "observed_satisfied"))
+            ),
+            observed_total=(
+                None if observed_total is None else int(_number(observed_total, "observed_total"))
             ),
             assessed_commit_sha=item.get("assessed_commit_sha"),
             evaluated_at=item.get("evaluated_at"),

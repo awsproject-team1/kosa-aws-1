@@ -163,7 +163,8 @@ class DynamoDbAssessmentReportStoreTest(unittest.TestCase):
         self.assertEqual(report.findings[0].status, EvaluationStatus.FAIL)
         self.assertIsNotNone(report.readiness_score)
         assert report.readiness_score is not None
-        self.assertEqual(report.readiness_score.score, 36)
+        # HIGH FAIL(0 × 4) + LOW PASS(100 × 1) / 5 — the status decides, not the stored score.
+        self.assertEqual(report.readiness_score.score, 20)
 
     def test_readiness_score_is_unavailable_until_the_full_plan_is_covered(self) -> None:
         table = Table()

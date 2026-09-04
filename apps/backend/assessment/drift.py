@@ -13,6 +13,7 @@ keeps `DRIFT` reproducible for the same pair of immutable results.
 from __future__ import annotations
 
 from packages.contracts import (
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -116,6 +117,7 @@ def _drift_result(
         rubric_version=present.rubric_version,
         model_profile_id=present.model_profile_id,
         scoring_mode=ScoringMode.CONTINUOUS,
+        decided_by=DecisionSource.CODE,
     )
 
 
@@ -157,6 +159,18 @@ def _decision(
             EvaluationStatus.PASS,
             _ALIGNED_SCORE,
             "The approved IaC and the AWS Actual state agree on this rule.",
+        )
+    if iac.decided_by is not actual.decided_by:
+        # 두 판정의 근거 체계가 다르다: 한쪽은 코드가 선언된 값을 읽었고, 다른 쪽은 모델이
+        # 문언을 해석했다. 측정에서 모델은 부분 준수를 PASS로 보는 false negative를 냈고, 그
+        # 조합은 양쪽 모두 비준수인 리소스를 "IaC는 만족하나 AWS는 아니다"라는 실재하지 않는
+        # drift로 보고했다. 근거 체계가 다른 불일치를 사실로 주장하지 않는다 — 사람이 본다.
+        return (
+            EvaluationStatus.MANUAL_REVIEW,
+            _DRIFTED_SCORE,
+            "The two perspectives disagree, but one was decided by code from declared "
+            "evidence and the other by the model; the disagreement needs review before "
+            "it is reported as drift.",
         )
     if iac_decisive:
         return (

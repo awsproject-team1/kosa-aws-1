@@ -89,7 +89,15 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(summary["expected_status_accuracy"], 1.0)
 
     def test_variance_is_reported_not_rounded_away(self) -> None:
-        answers = [{"status": "FAIL", "score": s} for s in (32, 67, 45, 81, 29)]
+        """The runtime pins the score from the status, so variance now measures status flips.
+
+        The model's own numbers (32, 67, 45 …) never reach the result: a FAIL is 0 and a
+        PASS is 100. A case that flips between them is the variance worth reporting.
+        """
+        answers = [
+            {"status": status, "score": s}
+            for status, s in (("FAIL", 32), ("PASS", 67), ("FAIL", 45), ("PASS", 81), ("FAIL", 29))
+        ]
         client = _ScriptedClient(answers)
         reports = measure(
             (_case("rds-public-actual"),),
@@ -98,17 +106,15 @@ class HarnessTest(unittest.TestCase):
             repetitions=5,
         )
         summary = reports[0].summary()
-        self.assertEqual(summary["scores"], [32.0, 67.0, 45.0, 81.0, 29.0])
-        self.assertEqual(summary["min"], 29.0)
-        self.assertEqual(summary["max"], 81.0)
-        self.assertEqual(summary["range"], 52.0)
-        self.assertEqual(summary["max_pairwise_diff"], 52.0)
+        self.assertEqual(summary["scores"], [0.0, 100.0, 0.0, 100.0, 0.0])
+        self.assertEqual(summary["min"], 0.0)
+        self.assertEqual(summary["max"], 100.0)
+        self.assertEqual(summary["range"], 100.0)
+        self.assertEqual(summary["max_pairwise_diff"], 100.0)
         self.assertGreater(summary["stdev"], 20)
-        # FAIL above the Golden violation ceiling is a severe-overestimation candidate.
-        self.assertEqual(
-            summary["severe_overestimation_candidates"],
-            [s for s in (32.0, 67.0, 45.0, 81.0) if s > GOLDEN_FAIL_SCORE_MAX],
-        )
+        # A pinned FAIL is 0, which can never exceed the Golden violation ceiling.
+        self.assertLess(0.0, GOLDEN_FAIL_SCORE_MAX)
+        self.assertEqual(summary["severe_overestimation_candidates"], [])
 
     def test_status_disagreement_lowers_agreement_and_finding_agreement(self) -> None:
         answers = [
@@ -141,7 +147,8 @@ class HarnessTest(unittest.TestCase):
         )[0].summary()
         self.assertEqual(len(summary["contract_errors"]), 1)
         self.assertIn("score must be a number", summary["contract_errors"][0])
-        self.assertEqual(summary["scores"], [11.0])
+        # The surviving FAIL run carries the pinned status score, not the model's 11.
+        self.assertEqual(summary["scores"], [0.0])
 
     def test_non_judgment_scores_are_normalized_so_no_contradiction_can_be_recorded(self) -> None:
         """The runtime pins MANUAL_REVIEW/INSUFFICIENT_EVIDENCE to 0; the harness sees 0."""
@@ -163,8 +170,10 @@ class HarnessTest(unittest.TestCase):
             profile=PROFILE, repetitions=1, dry_run=True, cases=pair, reports=reports
         )
         self.assertEqual(summary["transitions"][0]["direction_ok"], True)
+        # Scores are pinned from the status, so only a status regression can reverse the
+        # direction: the "after" document judged FAIL while the "before" one passed.
         regressed = _ScriptedClient(
-            [{"status": "FAIL", "score": 60}, {"status": "PASS", "score": 40}]
+            [{"status": "PASS", "score": 60}, {"status": "FAIL", "score": 40}]
         )
         reports = measure(pair, client_factory=lambda: regressed, profile=PROFILE, repetitions=1)
         summary = summarize(

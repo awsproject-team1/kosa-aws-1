@@ -66,12 +66,14 @@ type CandidatePage = {
   rejected: RejectedRequirement[];
   cursor: string | null;
 };
-type ResultRow = { resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; model_profile_id: string; rubric_version: string };
+/** `decided_by`·`observed_*`는 이 필드 이전에 저장된 결과에는 없다 — 그때는 전부 모델 판정이었다. */
+type ResultRow = { resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; model_profile_id: string; rubric_version: string; decided_by?: "CODE" | "MODEL"; observed_satisfied?: number | null; observed_total?: number | null };
+type Readiness = { score: number; evaluated_evaluations: number; undetermined_evaluations?: number };
 type FindingRow = ResultRow & { finding_id: string };
 type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string };
 type PublishedProfile = { policy_profile_id: string; version: string; rule_count: number; source_kinds: string[]; published_at?: string | null };
-type SegmentReadiness = { kind: string; score: { score: number; evaluated_evaluations: number } | null };
-type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: { score: number; evaluated_evaluations: number } | null; segment_readiness?: SegmentReadiness[]; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
+type SegmentReadiness = { kind: string; score: Readiness | null };
+type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: Readiness | null; segment_readiness?: SegmentReadiness[]; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
 type RemediationDecision = { action: string; manual_review_code: string | null; exception_id: string | null };
 type RemediationStart = { decision: RemediationDecision; job: { job_id: string; remediation_id: string | null } | null };
 type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null };
@@ -190,6 +192,14 @@ const SEGMENT_LABELS: Record<string, string> = { INTERNAL_POLICY: "사내 정책
  * API 응답에도 그 값이 실린다. 반올림은 표시에서만 한다: 보고서를 읽는 사람에게 `16.67`과
  * `17`은 같은 뜻이고, 소수점은 그 숫자가 실제보다 정밀하다는 인상을 준다. */
 const rounded = (value: number) => Math.round(value);
+
+/** 준비도 옆에 붙는 한 줄. "판정된 N건"과 "미판정 M건"은 다른 축이다 — 미판정은 근거가 없었거나
+ *  사람이 정해야 해서 코드도 모델도 답하지 않은 좌표이고, 점수에는 들어가지 않는다. 이 값이 0이
+ *  아니면 그만큼은 "위반"이 아니라 "아직 모름"이므로 읽는 사람이 함께 봐야 한다. */
+const readinessHint = (r: Readiness) => {
+  const undetermined = r.undetermined_evaluations ?? 0;
+  return `판정 ${r.evaluated_evaluations}건 가중 평균` + (undetermined > 0 ? ` · 미판정 ${undetermined}건 제외` : "");
+};
 
 async function fetchCandidatePage(token: string, sourceId: string, sourceVersion: string, cursor?: string): Promise<CandidatePage> {
   const query = new URLSearchParams({ limit: "50" });
@@ -874,7 +884,6 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
  * Assessment report — polls to completion, shows evidence, requests remediation
  * =======================================================================*/
 const REPORT_PAGE = 100;
-const FOLLOW_UP = new Set(["FAIL", "MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
 
 /** Read the whole immutable report: follow both opaque cursors (results, findings). */
 async function fetchFullReport(token: string, assessmentId: string): Promise<Report> {
@@ -952,17 +961,17 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
     <div className="card"><h2>Assessment 결과 <code>{rep.assessment_id}</code></h2>
       <div className="row">
         <span>실행률 <strong>{rounded(rep.coverage.percentage)}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
-        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rounded(rep.readiness_score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · 평가 {rep.readiness_score.evaluated_evaluations}건 가중 평균</span>}</span>}
+        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rounded(rep.readiness_score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · {readinessHint(rep.readiness_score)}</span>}</span>}
       </div>
       {/* Profile이 여러 원본에 걸치면 점수를 원본별로만 보여준다. 두 준비도를 합친 하나의
           숫자는 어느 기준에 대한 답도 아니며, 한쪽의 미달을 다른 쪽이 가린다. */}
       {segments.length > 0 && <div className="candidate-summary" aria-label="정책 원본별 준비도">
         {segments.map(s => <span key={s.kind}>
           <strong>{s.score ? rounded(s.score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>
-          <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · 평가 ${s.score.evaluated_evaluations}건` : ""}</small>
+          <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · ${readinessHint(s.score)}` : ""}</small>
         </span>)}
       </div>}
-      <p className="disclaimer">Readiness Score는 0–100 연속 점수의 severity 가중 평균으로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 한 Profile이 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다 — 한 Rule이 두 기준을 함께 뒷받침하면 그 Rule은 양쪽 점수에 들어갑니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
+      <p className="disclaimer">Readiness Score는 <strong>판정된</strong> 좌표(PASS=100, FAIL=0)의 severity 가중 준수율로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 근거가 부족하거나 사람이 검토해야 하는 좌표(INSUFFICIENT_EVIDENCE·MANUAL_REVIEW)는 <strong>미판정</strong>으로 따로 세며 점수를 깎지 않습니다 — "확인하지 못함"은 "위반"이 아닙니다. 한 Profile이 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
       <div className="candidate-summary" aria-label="평가 집계">
         <span><strong>{resources.size}</strong><small>평가 리소스</small></span>
         <span><strong>{rules.size}</strong><small>평가 Rule</small></span>
@@ -982,13 +991,17 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
 
     <div className="card"><h2>Resource × Rule × Perspective 결과 ({rep.results.length})</h2>
       <div style={{ overflowX: "auto" }}>
-      <table><thead><tr><th>Resource</th><th>Rule</th><th>관점</th><th>상태</th><th>Score</th><th>Severity</th></tr></thead>
+      <table><thead><tr><th>Resource</th><th>Rule</th><th>관점</th><th>상태</th><th>판정</th><th>관측</th><th>Severity</th></tr></thead>
         <tbody>{sorted.map(r => <tr key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} title={r.rationale}>
           <td><code>{r.resource_id}</code></td><td>{r.rule_id}@{r.rule_version}</td><td>{r.perspective}</td>
           <td><span className={`badge status-${r.status.toLowerCase()}`}>{r.status}</span></td>
-          <td>{FOLLOW_UP.has(r.status) || r.status === "PASS" ? r.score : "-"}</td><td>{r.severity}</td>
+          {/* 코드가 선언된 값을 읽어 내린 판정과 모델의 해석은 신뢰도가 다르다. 읽는 사람이 구분해야 한다. */}
+          <td>{r.decided_by === "CODE" ? "코드" : "모델"}</td>
+          {/* 부분 충족은 점수가 아니라 관측 상세다: "4개 중 3개 충족"이 조치의 목표가 된다. */}
+          <td>{r.observed_total != null ? `${r.observed_satisfied ?? 0}/${r.observed_total} 충족` : "-"}</td>
+          <td>{r.severity}</td>
         </tr>)}
-        {sorted.length === 0 && <tr><td colSpan={6} className="obs-empty">결과가 아직 없습니다.</td></tr>}</tbody></table>
+        {sorted.length === 0 && <tr><td colSpan={7} className="obs-empty">결과가 아직 없습니다.</td></tr>}</tbody></table>
       </div>
     </div>
   </div>;

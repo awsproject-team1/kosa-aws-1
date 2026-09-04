@@ -20,6 +20,12 @@ Coverage. It uses the evaluator's 0–100 score weighted by severity
 score. Readiness remains unavailable for incomplete coverage or execution errors.
 Coverage remains a separate mechanical execution-rate indicator.
 
+**정정 2026-09-05 (ADR-0024 §2).** Readiness averages the status contribution
+(`STATUS_SCORES`: PASS 100, FAIL 0), not the result's `score` field, and only over
+judged coordinates. `INSUFFICIENT_EVIDENCE` and `MANUAL_REVIEW` are reported as
+`undetermined_evaluations` instead of entering the mean as 0 — "could not check" is
+not "violated". A plan with no judged coordinate has no Readiness.
+
 `DRIFT` results are excluded from Readiness. Drift states whether the IaC and the
 AWS Actual perspective agree, which is not a degree of compliance; including its
 binary alignment value would raise the representative score for a resource whose

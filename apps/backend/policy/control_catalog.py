@@ -32,6 +32,7 @@ from packages.contracts import (
     EvidenceExpectation,
     GovernanceControl,
     GovernanceControlCatalog,
+    PolicyRule,
     RuleEvaluationType,
     RuleSeverity,
 )
@@ -633,8 +634,13 @@ MVP_CONTROL_CATALOG = GovernanceControlCatalog(
 )
 
 #: 커밋된 legacy fixture Rule이 어떤 Control을 구현하는지. legacy Rule 자체는 `control_key`를
-#: 갖지 않으므로(계약상 실행 의미를 갖지 않는다), 이 매핑은 **Catalog가 이미 배송된 평가 범위를
-#: 빠짐없이 덮는지**를 검증하는 회귀 대조표다. Runtime 조회 경로에는 쓰이지 않는다.
+#: 갖지 않으므로(계약상 실행 의미를 갖지 않는다) 이 매핑이 그 자리를 대신한다.
+#:
+#: **Runtime이 이 매핑을 읽는다 (2026-09-05).** 처음에는 회귀 대조표로만 두었고, legacy Rule의
+#: AWS_ACTUAL 평가는 근거 게이트 없이 모델로 갔다. 그 결과 baseline Profile의 S3 Rule 넷
+#: (ACL·Bucket Policy·TLS·Logging)은 AWS 문서에 답이 존재할 수 없는데도 모델이 판정했고, 모델은
+#: 있지도 않은 근거(public-access-block 플래그)를 대신 인용해 PASS를 냈다. Catalog가 이미 아는
+#: 것("이 Control은 AWS 근거가 없다")을 Runtime이 모른 척할 이유가 없다 — `control_for_rule()`.
 LEGACY_RULE_CONTROL_KEYS: dict[str, str] = {
     "S3-PUBLIC-001": "S3_BLOCK_PUBLIC_ACCESS",
     "S3-ENCRYPT-001": "S3_ENCRYPTION_AT_REST",
@@ -661,3 +667,37 @@ def manual_control() -> GovernanceControl:
     if control is None:  # pragma: no cover - the catalog literal above declares it
         raise LookupError("the MVP catalog must declare a MANUAL control")
     return control
+
+
+class RuleControlLookupError(LookupError):
+    """Raised when an authored Rule names a Control the catalog does not declare."""
+
+
+def control_for_rule(
+    rule: PolicyRule, catalog: GovernanceControlCatalog = MVP_CONTROL_CATALOG
+) -> tuple[GovernanceControl, tuple[str, ...]] | None:
+    """The Control a Rule implements and the capabilities its evidence must satisfy.
+
+    authored Rule은 `control_key`와 `required_evidence`를 스스로 갖는다. legacy Rule은
+    `LEGACY_RULE_CONTROL_KEYS`로 Control을 찾고, 요구 근거는 그 Control의
+    `baseline_required_evidence`다 — 그 Rule들이 승인될 때 존재했던 유일한 근거 선언이다.
+
+    `None`은 "Catalog가 이 Rule을 모른다"이며 매핑에 없는 legacy Rule에서만 나온다. authored Rule이
+    없는 Control을 가리키는 것은 승인 데이터의 손상이므로 `RuleControlLookupError`다.
+    """
+    if not isinstance(rule, PolicyRule):
+        raise TypeError("rule must be a PolicyRule")
+    if rule.evaluation_type is not None:
+        control = catalog.control(rule.control_key or "")
+        if control is None:
+            raise RuleControlLookupError(
+                f"approved rule {rule.rule_id!r} names a control the catalog does not declare"
+            )
+        return control, rule.required_evidence
+    control_key = LEGACY_RULE_CONTROL_KEYS.get(rule.rule_id)
+    if control_key is None:
+        return None
+    control = catalog.control(control_key)
+    if control is None:  # pragma: no cover - the catalog test pins every mapped key
+        raise RuleControlLookupError(f"legacy rule {rule.rule_id!r} maps to an unknown control")
+    return control, control.baseline_required_evidence

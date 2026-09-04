@@ -28,3 +28,11 @@ Assessment 소비자는 각 결과의 evaluation perspective와 evidence를 보�
 확장되면서 Golden fixture는 각 perspective를 다룬다. M0에서는 별도 Drift entity를 도입하지
 않고 결과와 Finding이 perspective를 가진다. 이후 Query 양이나 Drift lifecycle 요구가 생기면
 DynamoDB 모델은 versioned Contract 변경으로 전용 entity를 추가할 수 있다.
+
+## 정정 2026-09-05 — 판정 출처가 다른 불일치는 drift가 아니다 (ADR-0024 §4)
+
+AWS_ACTUAL 판정이 코드(선언된 값)로 옮겨진 뒤, IAC 판정은 여전히 모델이다. 측정된 부분 준수
+케이스(S3 4개 중 3개 차단, ALB HTTPS+HTTP)에서 코드는 옳게 FAIL을, 모델은 PASS를 냈고, 그 조합이
+양쪽 모두 비준수인 리소스를 "IaC는 만족하나 AWS는 아니다"라는 실재하지 않는 drift로 보고했다.
+`derive_drift_results()`는 두 관점의 `decided_by`가 다르고 판정이 어긋나면 `FAIL` 대신
+`MANUAL_REVIEW`를 낸다. 출처가 같을 때의 규칙은 그대로다.

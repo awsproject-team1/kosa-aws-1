@@ -187,13 +187,13 @@ class SegmentReadinessReportTest(unittest.TestCase):
         table = Table()
         store = self._store(table, profile=SINGLE_ORIGIN_PROFILE)
         store.put_plan_if_absent(_plan(INTERNAL_RULE))
-        self._seed_results(table, _result(INTERNAL_RULE, score=60))
+        self._seed_results(table, _result(INTERNAL_RULE, score=0))
 
         report = store.get_report(customer_id=CUSTOMER, assessment_id=ASSESSMENT)
 
         self.assertEqual(report.segment_readiness, ())
         assert report.readiness_score is not None
-        self.assertEqual(report.readiness_score.score, 60)
+        self.assertEqual(report.readiness_score.score, 0)
 
     def test_a_store_without_a_catalog_reports_no_segments(self) -> None:
         """Catalog를 배선하지 않은 배포는 지금까지처럼 전체 점수 하나만 낸다."""

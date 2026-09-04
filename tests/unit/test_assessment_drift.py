@@ -4,6 +4,7 @@ import unittest
 
 from apps.backend.assessment import DriftDerivationError, derive_drift_results
 from packages.contracts import (
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -21,6 +22,7 @@ def result(
     evidence: tuple[str, ...] = ("terraform:public-access-block",),
     model_profile_id: str = "assessment-nova-lite-m0-v1",
     rubric_version: str = "mvp-v1",
+    decided_by: DecisionSource = DecisionSource.MODEL,
 ) -> EvaluationResult:
     return EvaluationResult(
         resource_id="bucket-001",
@@ -34,6 +36,7 @@ def result(
         rule_version="v1",
         rubric_version=rubric_version,
         model_profile_id=model_profile_id,
+        decided_by=decided_by,
     )
 
 
@@ -43,6 +46,53 @@ def iac(status: EvaluationStatus, **kwargs: object) -> EvaluationResult:
 
 def actual(status: EvaluationStatus, **kwargs: object) -> EvaluationResult:
     return result(perspective=EvaluationPerspective.AWS_ACTUAL, status=status, **kwargs)  # type: ignore[arg-type]
+
+
+class DecisionSourceTest(unittest.TestCase):
+    """A code verdict and a model verdict are not the same kind of evidence.
+
+    측정된 그 케이스다: S3 4개 중 3개 차단, ALB HTTPS+HTTP. AWS 쪽은 코드가 옳게 FAIL을 내고
+    IaC 쪽은 모델이 PASS라고 한다 — 양쪽 다 비준수인데 "IaC는 만족하나 AWS는 아니다"라는 drift가
+    보고됐다. 근거 체계가 다른 불일치는 사실로 주장하지 않는다.
+    """
+
+    def test_code_fail_against_model_pass_needs_review_rather_than_claiming_drift(self) -> None:
+        (drift,) = derive_drift_results(
+            iac_results=(iac(EvaluationStatus.PASS, decided_by=DecisionSource.MODEL),),
+            actual_results=(
+                actual(EvaluationStatus.FAIL, score=0, decided_by=DecisionSource.CODE),
+            ),
+        )
+
+        self.assertIs(drift.status, EvaluationStatus.MANUAL_REVIEW)
+        self.assertIn("decided by code", drift.rationale)
+        self.assertIs(drift.decided_by, DecisionSource.CODE)
+
+    def test_agreement_across_sources_is_still_agreement(self) -> None:
+        (drift,) = derive_drift_results(
+            iac_results=(iac(EvaluationStatus.FAIL, score=0, decided_by=DecisionSource.MODEL),),
+            actual_results=(
+                actual(EvaluationStatus.FAIL, score=0, decided_by=DecisionSource.CODE),
+            ),
+        )
+
+        self.assertIs(drift.status, EvaluationStatus.PASS)
+
+    def test_disagreement_within_one_source_is_drift(self) -> None:
+        for source in DecisionSource:
+            with self.subTest(source=source):
+                (drift,) = derive_drift_results(
+                    iac_results=(iac(EvaluationStatus.PASS, decided_by=source),),
+                    actual_results=(actual(EvaluationStatus.FAIL, score=0, decided_by=source),),
+                )
+                self.assertIs(drift.status, EvaluationStatus.FAIL)
+
+    def test_every_drift_result_is_decided_by_code(self) -> None:
+        (drift,) = derive_drift_results(
+            iac_results=(iac(EvaluationStatus.PASS),),
+            actual_results=(actual(EvaluationStatus.PASS),),
+        )
+        self.assertIs(drift.decided_by, DecisionSource.CODE)
 
 
 class DriftDerivationTest(unittest.TestCase):

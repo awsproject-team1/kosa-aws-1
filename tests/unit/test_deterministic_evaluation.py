@@ -5,8 +5,9 @@
 1. **부분 준수가 통과하지 않는다.** 라이브 측정에서 모델이 틀린 3건은 전부 위반을 PASS로 본
    false negative였고 부분 준수에 집중됐다. 준법 제품에서 그것은 "준비됐다"고 말해 놓고 준비되지
    않은 상태다.
-2. **점수가 등급을 담는다.** 모델은 72회 평가에서 0과 100만 냈다. 선언된 경로의 충족 비율은
-   계산이므로 4개 중 3개는 75가 된다.
+2. **부분 충족은 점수가 아니라 관측 상세다.** 4개 중 3개는 `observed_satisfied=3 / observed_total=4`
+   이지 score 75가 아니다. 비율의 분모는 리소스 개수라서, 점수로 쓰면 미암호화 볼륨 하나라는
+   같은 위험이 볼륨을 더 붙일수록 준비도를 올린다. score는 status가 정한다(FAIL 0, PASS 100).
 3. **술어가 없으면 코드가 판정하지 않는다.** 해석이 필요한 통제까지 코드가 답하면 그것은 근거
    없는 확신이다.
 4. **식별자가 통제를 통과시키지 않는다.** `ALL_TRUE`는 참으로 평가되는 값이 아니라 `True`만 받는다.
@@ -83,10 +84,24 @@ def _verdict(control_key: str, capability: str, resource_type: str, document: di
     return decide(bindings, document)
 
 
+def _legacy(rule_id: str) -> PolicyRule:
+    return PolicyRule(
+        rule_id=rule_id,
+        version="2026-08-31",
+        title="Legacy",
+        severity=RuleSeverity.HIGH,
+        applicable_phases=(AssessmentPhase.INITIAL,),
+        resource_types=(S3,),
+        source_references=(
+            SourceReference(source_id="s", source_version="v", locator="l", content_sha256="c"),
+        ),
+    )
+
+
 class PartialComplianceTest(unittest.TestCase):
     """모델이 틀렸던 그 입력들이다."""
 
-    def test_three_of_four_block_flags_is_a_violation_scored_seventy_five(self) -> None:
+    def test_three_of_four_block_flags_is_a_violation_with_the_detail_kept(self) -> None:
         verdict = _verdict(
             "S3_BLOCK_PUBLIC_ACCESS",
             "S3.PUBLIC_ACCESS_BLOCK",
@@ -100,7 +115,8 @@ class PartialComplianceTest(unittest.TestCase):
         )
 
         self.assertIs(verdict.status, EvaluationStatus.FAIL)
-        self.assertEqual(verdict.score, 75.0)
+        self.assertEqual(verdict.score, 0.0)
+        self.assertEqual((verdict.observed_satisfied, verdict.observed_total), (3, 4))
         self.assertIn("RestrictPublicBuckets", verdict.rationale)
 
     def test_all_four_block_flags_pass_with_a_full_score(self) -> None:
@@ -119,8 +135,9 @@ class PartialComplianceTest(unittest.TestCase):
         self.assertIs(verdict.status, EvaluationStatus.PASS)
         self.assertEqual(verdict.score, 100.0)
 
-    def test_the_score_grades_how_much_of_the_criterion_is_met(self) -> None:
-        """모델은 0과 100만 냈다. 비율은 계산이므로 등급이 나온다."""
+    def test_the_observation_detail_counts_how_much_of_the_criterion_is_met(self) -> None:
+        """비율은 관측 상세로 남고, score는 status가 정한다 — 4/4만 PASS·100이다."""
+        observed = []
         scores = []
         for blocked in range(5):
             flags = dict.fromkeys(
@@ -134,13 +151,14 @@ class PartialComplianceTest(unittest.TestCase):
             )
             for name in list(flags)[:blocked]:
                 flags[name] = True
-            scores.append(
-                _verdict(
-                    "S3_BLOCK_PUBLIC_ACCESS", "S3.PUBLIC_ACCESS_BLOCK", S3, _block(**flags)
-                ).score
+            verdict = _verdict(
+                "S3_BLOCK_PUBLIC_ACCESS", "S3.PUBLIC_ACCESS_BLOCK", S3, _block(**flags)
             )
+            observed.append((verdict.observed_satisfied, verdict.observed_total))
+            scores.append(verdict.score)
 
-        self.assertEqual(scores, [0.0, 25.0, 50.0, 75.0, 100.0])
+        self.assertEqual(observed, [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4)])
+        self.assertEqual(scores, [0.0, 0.0, 0.0, 0.0, 100.0])
 
     def test_an_http_listener_beside_https_is_a_violation(self) -> None:
         verdict = _verdict(
@@ -158,7 +176,8 @@ class PartialComplianceTest(unittest.TestCase):
         )
 
         self.assertIs(verdict.status, EvaluationStatus.FAIL)
-        self.assertEqual(verdict.score, 50.0)
+        self.assertEqual(verdict.score, 0.0)
+        self.assertEqual((verdict.observed_satisfied, verdict.observed_total), (1, 2))
 
     def test_a_bucket_with_default_encryption_passes(self) -> None:
         """라이브에서 모델은 AES256이 적용된 버킷을 암호화 없음으로 판정했다."""
@@ -195,7 +214,8 @@ class PartialComplianceTest(unittest.TestCase):
         )
 
         self.assertIs(verdict.status, EvaluationStatus.FAIL)
-        self.assertEqual(verdict.score, 50.0)
+        self.assertEqual(verdict.score, 0.0)
+        self.assertEqual((verdict.observed_satisfied, verdict.observed_total), (1, 2))
 
 
 class BoundaryTest(unittest.TestCase):
@@ -205,20 +225,18 @@ class BoundaryTest(unittest.TestCase):
 
         self.assertEqual(decidable_bindings(CATALOG, rule, resource_type=EC2), ())
 
-    def test_a_legacy_rule_without_execution_semantics_is_left_to_the_model(self) -> None:
-        legacy = PolicyRule(
-            rule_id="S3-PUBLIC-001",
-            version="2026-08-31",
-            title="Legacy",
-            severity=RuleSeverity.HIGH,
-            applicable_phases=(AssessmentPhase.INITIAL,),
-            resource_types=(S3,),
-            source_references=(
-                SourceReference(source_id="s", source_version="v", locator="l", content_sha256="c"),
-            ),
+    def test_a_legacy_rule_the_catalog_maps_is_decided_like_an_authored_one(self) -> None:
+        """배포된 baseline Profile은 legacy Rule로 돼 있다. Catalog는 그것이 어떤 Control인지 안다."""
+        legacy = _legacy("S3-PUBLIC-001")
+
+        bindings = decidable_bindings(CATALOG, legacy, resource_type=S3)
+
+        self.assertEqual(
+            [binding.capability_key for binding in bindings], ["S3.PUBLIC_ACCESS_BLOCK"]
         )
 
-        self.assertEqual(decidable_bindings(CATALOG, legacy, resource_type=S3), ())
+    def test_a_legacy_rule_the_catalog_does_not_map_is_left_to_the_model(self) -> None:
+        self.assertEqual(decidable_bindings(CATALOG, _legacy("CUSTOM-1"), resource_type=S3), ())
 
     def test_a_mixed_rule_falls_back_entirely_rather_than_half_deciding(self) -> None:
         """하나의 결과가 두 근거 체계를 섞으면 그 결과가 무엇에 근거했는지 말할 수 없다."""

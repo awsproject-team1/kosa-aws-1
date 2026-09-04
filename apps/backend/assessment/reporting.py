@@ -21,6 +21,7 @@ from apps.backend.assessment.readiness import (
 from apps.backend.policy.remediation import FindingSuppression
 from packages.contracts import (
     AssessmentCoverage,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -642,6 +643,7 @@ def _result_from_item(
     score = item.get("score")
     if isinstance(score, Decimal):
         score = float(score)
+    decided_by = item.get("decided_by")
     try:
         return EvaluationResult(
             resource_id=item["resource_id"],
@@ -655,9 +657,22 @@ def _result_from_item(
             rule_version=item["rule_version"],
             rubric_version=item["rubric_version"],
             model_profile_id=item["model_profile_id"],
+            # 이 필드 이전에 저장된 결과는 전부 모델 판정이었다. 관측 상세는 있을 때만 복원한다.
+            decided_by=(DecisionSource.MODEL if decided_by is None else DecisionSource(decided_by)),
+            observed_satisfied=_optional_count(item.get("observed_satisfied")),
+            observed_total=_optional_count(item.get("observed_total")),
         )
     except (KeyError, TypeError, ValueError):
         raise AssessmentReportStoreError("assessment result is invalid") from None
+
+
+def _optional_count(value: object) -> int | None:
+    """DynamoDB returns numbers as Decimal; an absent count stays absent."""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return int(value)
+    return value  # type: ignore[return-value] - the contract validates the type
 
 
 def _finding_from_item(item: Mapping[str, object], customer_id: str, assessment_id: str) -> Finding:

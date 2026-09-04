@@ -19,6 +19,7 @@ from __future__ import annotations
 from apps.backend.policy import PolicyContext
 from apps.backend.policy.control_catalog import GOVERNANCE_ASSESSMENT_RESOURCE_TYPE
 from packages.contracts import (
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -89,4 +90,6 @@ class ManualReviewEvaluator:
             rubric_version=model_profile.rubric_version,
             model_profile_id=model_profile.model_profile_id,
             scoring_mode=ScoringMode.CONTINUOUS,
+            # 모델을 부르지 않았다. "사람이 정한다"는 사실을 코드가 기록한 것이다.
+            decided_by=DecisionSource.CODE,
         )

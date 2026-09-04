@@ -232,30 +232,38 @@ class ReadinessTreatmentTest(unittest.TestCase):
             calculate_readiness_score(results=(automated,), planned_evaluations=planned)
         )
 
-    def test_manual_review_on_an_automated_perspective_still_scores(self) -> None:
-        """기존 IAC/AWS_ACTUAL의 `MANUAL_REVIEW` 점수 의미는 바뀌지 않는다.
+    def test_manual_review_on_an_automated_perspective_is_undetermined_not_scored(self) -> None:
+        """IAC/AWS_ACTUAL의 `MANUAL_REVIEW`도 판정이 아니다 — 0점이 아니라 미판정으로 센다.
 
-        제외 기준은 Perspective이지 status가 아니다.
+        0점으로 평균에 넣으면 "사람이 봐야 함"이 "위반"과 같은 무게로 준비도를 깎는다.
         """
-        result = self._result(
+        undetermined = self._result(
             perspective=EvaluationPerspective.AWS_ACTUAL,
             status=EvaluationStatus.MANUAL_REVIEW,
-            score=40.0,
+            score=0.0,
             rule_id="RULE-AUTOMATED",
         )
-        planned = (
+        judged = self._result(
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            status=EvaluationStatus.PASS,
+            score=100.0,
+            rule_id="RULE-JUDGED",
+        )
+        planned = tuple(
             PlannedEvaluation(
-                resource_id="resource-1",
-                rule_id="RULE-AUTOMATED",
-                perspective=EvaluationPerspective.AWS_ACTUAL,
-            ),
+                resource_id="resource-1", rule_id=result.rule_id, perspective=result.perspective
+            )
+            for result in (undetermined, judged)
         )
 
-        readiness = calculate_readiness_score(results=(result,), planned_evaluations=planned)
+        readiness = calculate_readiness_score(
+            results=(undetermined, judged), planned_evaluations=planned
+        )
 
         assert readiness is not None
-        self.assertEqual(readiness.score, 40.0)
+        self.assertEqual(readiness.score, 100.0)
         self.assertEqual(readiness.evaluated_evaluations, 1)
+        self.assertEqual(readiness.undetermined_evaluations, 1)
 
 
 if __name__ == "__main__":

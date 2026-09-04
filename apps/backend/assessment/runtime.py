@@ -53,6 +53,7 @@ from apps.backend.policy.control_catalog import GOVERNANCE_ASSESSMENT_RESOURCE_T
 from packages.contracts import (
     AssessmentPhase,
     AwsResourceOperation,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -62,6 +63,7 @@ from packages.contracts import (
     PolicyRule,
     WorkflowCommand,
     WorkflowTask,
+    score_for_status,
 )
 
 
@@ -352,18 +354,20 @@ class SyntheticS3Evaluator:
         evidence = self._snapshot.get("evidence_references")
         if not isinstance(evidence, list) or not all(isinstance(value, str) for value in evidence):
             raise ValueError("M0 synthetic snapshot is invalid")
+        status = EvaluationStatus.PASS if compliant else EvaluationStatus.FAIL
         return EvaluationResult(
             resource_id=resource_id,
             rule_id=rule.rule_id,
             perspective=EvaluationPerspective.IAC,
-            status=EvaluationStatus.PASS if compliant else EvaluationStatus.FAIL,
+            status=status,
             severity=rule.severity.value,
-            score=100 if compliant else 20,
+            score=score_for_status(status),
             rationale="M0 synthetic S3 public-access-block evaluation",
             evidence_references=tuple(evidence),
             rule_version=rule.version,
             rubric_version=model_profile.rubric_version,
             model_profile_id=model_profile.model_profile_id,
+            decided_by=DecisionSource.CODE,
         )
 
 

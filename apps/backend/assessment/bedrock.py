@@ -9,6 +9,8 @@ from typing import Protocol
 
 from apps.backend.policy import PolicyContext
 from packages.contracts import (
+    NO_SCORE,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -16,6 +18,7 @@ from packages.contracts import (
     ModelProfileRole,
     PolicyRule,
     ScoringMode,
+    score_for_status,
 )
 
 
@@ -103,7 +106,8 @@ class BedrockStructuredEvaluator:
         )
         output = _response_object(response)
         status = _status(output.get("status"))
-        score = _normalized_score(status, _score(output.get("score")))
+        _score(output.get("score"))  # 계약 검증만 한다. 값은 status가 정한다.
+        score = _normalized_score(status)
         rationale = _non_empty_string(output.get("rationale"), "rationale")
         evidence = _response_evidence(output.get("evidence_references"), allowed_evidence)
         return EvaluationResult(
@@ -119,6 +123,7 @@ class BedrockStructuredEvaluator:
             rubric_version=model_profile.rubric_version,
             model_profile_id=model_profile.model_profile_id,
             scoring_mode=ScoringMode.CONTINUOUS,
+            decided_by=DecisionSource.MODEL,
         )
 
     def _request_body(
@@ -168,11 +173,9 @@ _SYSTEM_PROMPT = (
     "rationale must state why the rule does not apply. When the rule applies, use PASS "
     "when the resource satisfies it and FAIL when it violates it; use MANUAL_REVIEW when "
     "a human must decide and INSUFFICIENT_EVIDENCE when the supplied evidence cannot "
-    "support a judgment. score must be 0 through 100 and grades how completely the "
-    "resource satisfies the rule's criterion: reserve 0 and 100 for a resource that "
-    "wholly violates or wholly satisfies it, and place a partially satisfied resource "
-    "between the extremes. Every evidence reference must come from "
-    "allowed_evidence_references. Do not wrap the JSON in code fences or add prose."
+    "support a judgment. score must be a number from 0 through 100. Every evidence "
+    "reference must come from allowed_evidence_references. Do not wrap the JSON in code "
+    "fences or add prose."
 )
 
 #: **이 문단은 측정으로 정해졌다.** 처음에는 판정 아닌 status 셋(MANUAL_REVIEW,
@@ -189,14 +192,13 @@ _SYSTEM_PROMPT = (
 #: `INSUFFICIENT_EVIDENCE`(`actual_evaluator.INSUFFICIENT_EVIDENCE_SCORE`)와 `MANUAL_REVIEW`
 #: (`manual_review.MANUAL_REVIEW_SCORE`)의 0.0과 같은 status가 다른 값을 갖게 된다. 새로운 anchor가
 #: 아니라 이미 존재하는 Code 쪽 규약을 모델 응답에도 같게 적용하는 것이다.
-NON_JUDGMENT_SCORE = 0.0
-_NON_JUDGMENT_STATUSES = frozenset(
-    {
-        EvaluationStatus.MANUAL_REVIEW,
-        EvaluationStatus.INSUFFICIENT_EVIDENCE,
-        EvaluationStatus.OUT_OF_SCOPE,
-    }
-)
+#:
+#: **판정 status의 점수도 모델이 아니라 status가 정한다 (2026-09-05).** 72회 측정에서 모델의
+#: score는 0과 100뿐이었다 — 연속 점수는 status의 재진술이었고, 등급을 담은 적이 없다. 그래서
+#: PASS는 100, FAIL은 0으로 고정한다(`score_for_status`). 모델이 보낸 숫자는 계약 검증(범위·
+#: 유한성)만 받고 버린다. 응답 schema에서 `score`를 빼지 않은 것은 측정된 prompt를 바꾸지 않기
+#: 위해서다; 그 변경은 회귀 측정과 함께 해야 한다.
+NON_JUDGMENT_SCORE = NO_SCORE
 
 #: 모델이 돌려줄 수 없는 status. `EXECUTION_ERROR`는 "평가가 실행되지 못했다"는 Code의 사실이지
 #: 판정이 아니다. 모델이 그 값을 쓰면 Coverage 분모에 남아 재시도 대상처럼 보이고, 실제로는
@@ -307,11 +309,9 @@ def _score(value: object) -> float:
     return value
 
 
-def _normalized_score(status: EvaluationStatus, score: float) -> float:
-    """Pin the score of a non-judgment status to the runtime's fixed value."""
-    if status in _NON_JUDGMENT_STATUSES:
-        return NON_JUDGMENT_SCORE
-    return score
+def _normalized_score(status: EvaluationStatus) -> float:
+    """The score every status carries, regardless of the number the model returned."""
+    return score_for_status(status)
 
 
 def _response_evidence(value: object, allowed: tuple[str, ...]) -> tuple[str, ...]:

@@ -69,6 +69,41 @@ class ScoringMode(StrEnum):
 SCORE_ANCHORS = frozenset({0, 15, 30, 50, 70, 85, 100})
 
 
+class DecisionSource(StrEnum):
+    """Who settled a result's status: code reading declared values, or a model interpreting.
+
+    결과의 출처는 신뢰도의 일부다. 같은 `FAIL`이라도 "선언된 경로의 값을 코드가 읽어 내린 판정"과
+    "모델이 문언을 해석해 내린 판정"은 반복 안정성과 검증 가능성이 다르다. 이 값이 없으면 소비자
+    (drift 파생, 리포트, 조치)는 두 판정을 같은 근거 체계로 오해한다 — 실제로 결정적 AWS FAIL과
+    모델 IaC PASS의 조합이 실재하지 않는 drift로 보고됐다.
+
+    `CODE`는 도구가 관찰한 값 또는 Runtime의 사실(근거 없음, 사람 검토 대상, 실행 실패)을 코드가
+    그대로 status로 옮긴 것이다. `MODEL`은 승인된 모델 Profile이 문서를 읽고 판정한 것이다.
+    """
+
+    CODE = "CODE"
+    MODEL = "MODEL"
+
+
+#: status가 준비도에 기여하는 값. 점수는 status의 재진술이지 독립된 등급이 아니다 — 모델은 72회
+#: 측정에서 0과 100만 냈고, 결정적 비율은 분모가 리소스 개수라 같은 위험이 리소스를 더 붙일수록
+#: 점수를 올렸다. 판정이 아닌 status(MANUAL_REVIEW·INSUFFICIENT_EVIDENCE·OUT_OF_SCOPE·
+#: EXECUTION_ERROR)는 여기 없다: 그것은 0점이 아니라 **점수가 없는** 좌표다.
+STATUS_SCORES: dict[EvaluationStatus, float] = {
+    EvaluationStatus.PASS: 100.0,
+    EvaluationStatus.FAIL: 0.0,
+}
+
+#: 점수가 없는 status의 저장값. Contract는 `score`를 항상 요구하므로 자리를 채우는 값이지
+#: 준비도에 들어가는 값이 아니다.
+NO_SCORE = 0.0
+
+
+def score_for_status(status: EvaluationStatus) -> float:
+    """The only score a status may carry."""
+    return STATUS_SCORES.get(status, NO_SCORE)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AssessmentCoverage:
     """Completion against the immutable applicable evaluation plan."""
@@ -118,6 +153,15 @@ class EvaluationResult:
     scoring_mode: ScoringMode = ScoringMode.CONTINUOUS
     assessed_commit_sha: str | None = None
     evaluated_at: str | None = None
+    #: 누가 status를 정했는가. 기본값이 `MODEL`인 것은 이 필드 이전에 저장된 결과가 전부 모델
+    #: 판정이었기 때문이다(DRIFT·MANUAL은 각 producer가 `CODE`를 명시한다).
+    decided_by: DecisionSource = DecisionSource.MODEL
+    #: 부분 충족의 관측 상세. 코드가 선언된 경로를 판정할 때 "선언된 관측치 N개 중 M개 충족"을
+    #: 여기 싣는다. score가 아니라 여기 있는 이유: 이 비율의 분모는 리소스 개수라서 준비도
+    #: 평균에 넣으면 같은 위험이 리소스를 더 붙일수록 점수를 올린다. 리포트와 조치는 이 값으로
+    #: "무엇이 얼마나 빠졌는가"를 말한다. 둘은 함께 있거나 함께 없다.
+    observed_satisfied: int | None = None
+    observed_total: int | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -136,6 +180,8 @@ class EvaluationResult:
             raise TypeError("status must be an EvaluationStatus")
         if not isinstance(self.scoring_mode, ScoringMode):
             raise TypeError("scoring_mode must be a ScoringMode")
+        if not isinstance(self.decided_by, DecisionSource):
+            raise TypeError("decided_by must be a DecisionSource")
         if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
             raise TypeError("score must be a number")
         if not 0 <= self.score <= 100:
@@ -147,6 +193,12 @@ class EvaluationResult:
         for reference in self.evidence_references:
             require_non_empty_string(reference, "evidence_references item")
         _require_provenance(self.assessed_commit_sha, self.evaluated_at)
+        _require_observation(self.observed_satisfied, self.observed_total)
+
+    @property
+    def is_judgment(self) -> bool:
+        """Whether the status states compliance at all (PASS or FAIL)."""
+        return self.status in STATUS_SCORES
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -164,7 +216,26 @@ class EvaluationResult:
             "scoring_mode": self.scoring_mode.value,
             "assessed_commit_sha": self.assessed_commit_sha,
             "evaluated_at": self.evaluated_at,
+            "decided_by": self.decided_by.value,
+            "observed_satisfied": self.observed_satisfied,
+            "observed_total": self.observed_total,
         }
+
+
+def _require_observation(satisfied: int | None, total: int | None) -> None:
+    if (satisfied is None) != (total is None):
+        raise ValueError("observed_satisfied and observed_total must be provided together")
+    if satisfied is None or total is None:
+        return
+    for name, value in (("observed_satisfied", satisfied), ("observed_total", total)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer")
+        if value < 0:
+            raise ValueError(f"{name} must not be negative")
+    if total == 0:
+        raise ValueError("observed_total must be greater than zero")
+    if satisfied > total:
+        raise ValueError("observed_satisfied must not exceed observed_total")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -263,25 +334,39 @@ def _require_provenance(assessed_commit_sha: str | None, evaluated_at: str | Non
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReadinessScore:
-    """Deterministic Assessment-level score over completed applicable results."""
+    """Deterministic Assessment-level score over completed applicable results.
+
+    `score`는 **판정된** 좌표(PASS/FAIL)만의 severity 가중 준수율이다. `undetermined_evaluations`는
+    계획에 있고 실행도 됐지만 판정이 없는 좌표 수다 — 근거가 없었거나(INSUFFICIENT_EVIDENCE)
+    사람이 정해야 해서(MANUAL_REVIEW) 코드도 모델도 답하지 않은 것. 이 둘을 한 숫자로 합치면
+    "확인 못 함"이 "위반"과 같은 무게로 점수를 깎고, 읽기 권한 하나 없는 고객이 존재하지 않는
+    문제를 고치러 간다. Coverage("실행됐는가")와도 다른 축이다.
+    """
 
     score: float
     evaluated_evaluations: int
+    undetermined_evaluations: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
             raise TypeError("score must be a number")
         if not 0 <= self.score <= 100:
             raise ValueError("score must be between 0 and 100")
-        if isinstance(self.evaluated_evaluations, bool) or not isinstance(
-            self.evaluated_evaluations, int
-        ):
-            raise TypeError("evaluated_evaluations must be an integer")
+        for name in ("evaluated_evaluations", "undetermined_evaluations"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
         if self.evaluated_evaluations <= 0:
             raise ValueError("evaluated_evaluations must be greater than zero")
+        if self.undetermined_evaluations < 0:
+            raise ValueError("undetermined_evaluations must not be negative")
 
     def to_dict(self) -> dict[str, object]:
-        return {"score": self.score, "evaluated_evaluations": self.evaluated_evaluations}
+        return {
+            "score": self.score,
+            "evaluated_evaluations": self.evaluated_evaluations,
+            "undetermined_evaluations": self.undetermined_evaluations,
+        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

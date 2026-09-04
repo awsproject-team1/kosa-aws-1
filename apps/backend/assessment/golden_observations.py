@@ -41,6 +41,7 @@ from apps.backend.assessment.release_quality import (
 )
 from apps.backend.policy import PolicyContext
 from packages.contracts import (
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -533,6 +534,7 @@ def _execution_error_result(
         rubric_version=profile.rubric_version,
         model_profile_id=profile.model_profile_id,
         scoring_mode=case.scoring_mode,
+        decided_by=DecisionSource.CODE,
     )
 
 

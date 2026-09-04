@@ -60,6 +60,13 @@ IaC binding이 갖는 Terraform hint는 prompt 경계와 리뷰 화면 설명에
 자동 판정의 근거가 된다. IaC attribute-level 사전 검증에는 별도의 HCL parser/projection 계층이
 필요하며 이번 범위에 없다.
 
+**정정 2026-09-05 — 게이트는 fail-closed다 (ADR-0024 §3).** 처음 구현은 Rule이 요구한 capability에
+이 resource type의 AWS_ACTUAL binding이 없으면 검사를 건너뛰고 모델에게 물었다. 그러면 Catalog가
+"이 Control은 AWS 근거가 없다"고 이미 아는 좌표에서 모델이 다른 field를 근거로 인용한다 — baseline의
+S3 ACL Rule이 public-access-block 플래그를 근거로 PASS를 낸 것이 그 경우다. 선언이 없으면 그 좌표는
+`INSUFFICIENT_EVIDENCE`이고 모델 호출은 없다. legacy Rule도 `LEGACY_RULE_CONTROL_KEYS`로 같은
+게이트를 지난다.
+
 ### 3. IaC attribute-level pre-flight를 만들지 않는다
 
 만들려면 HCL을 파싱해 resource·attribute 단위로 투영하는 계층이 필요하다. 그것 없이 hint만으로

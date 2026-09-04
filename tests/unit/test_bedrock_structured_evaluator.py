@@ -237,11 +237,20 @@ class ScoreContractGuardTest(unittest.TestCase):
                 self.assertEqual(result.status, EvaluationStatus(status))
                 self.assertEqual(result.score, NON_JUDGMENT_SCORE)
 
-    def test_judgment_statuses_keep_the_continuous_score(self) -> None:
-        for status, score in (("FAIL", 12.5), ("PASS", 88)):
+    def test_judgment_statuses_carry_the_status_score_not_the_model_number(self) -> None:
+        """72회 측정에서 모델의 score는 0과 100뿐이었다 — 등급이 아니라 status의 재진술이었다.
+
+        그래서 PASS는 100, FAIL은 0으로 고정한다. 모델이 보낸 숫자는 계약 검증만 받고 버린다.
+        """
+        from packages.contracts import DecisionSource
+
+        for status, model_score, pinned in (("FAIL", 12.5, 0.0), ("PASS", 88, 100.0)):
             with self.subTest(status=status):
-                result = self._evaluate(Client(response(self._body(status=status, score=score))))
-                self.assertEqual(result.score, score)
+                result = self._evaluate(
+                    Client(response(self._body(status=status, score=model_score)))
+                )
+                self.assertEqual(result.score, pinned)
+                self.assertIs(result.decided_by, DecisionSource.MODEL)
 
     def test_non_numeric_or_non_finite_scores_are_contract_errors(self) -> None:
         for score in ("80", True, None, float("nan"), float("inf"), -1, 100.5):
@@ -315,7 +324,7 @@ class ScoreContractGuardTest(unittest.TestCase):
                         model_profile=PROFILE,
                     )
 
-    def test_the_prompt_asks_for_gradation_without_advertising_the_evasive_statuses(
+    def test_the_prompt_does_not_advertise_the_evasive_statuses_or_ask_for_gradation(
         self,
     ) -> None:
         """Score pinning belongs to `_normalized_score`, not to prose.
@@ -325,10 +334,15 @@ class ScoreContractGuardTest(unittest.TestCase):
         3306 open to 0.0.0.0/0, n=8 per arm) showed that wording cost accuracy: 5/8 correct
         FAIL without it, 0/8 with it — every run evaded to OUT_OF_SCOPE. The runtime pins the
         score either way, so the enumeration bought nothing and is gone.
+
+        The gradation sentence ("place a partially satisfied resource between the extremes")
+        is gone too: measured against the prompt without it, the 0/100 distribution was
+        identical, and the score is now pinned from the status regardless.
         """
         from apps.backend.assessment.bedrock import _SYSTEM_PROMPT
 
-        self.assertIn("place a partially satisfied resource between the extremes", _SYSTEM_PROMPT)
+        self.assertNotIn("between the extremes", _SYSTEM_PROMPT)
+        self.assertIn("score must be a number from 0 through 100", _SYSTEM_PROMPT)
         # The one applicability sentence the dev prompt already had may name OUT_OF_SCOPE;
         # a second, score-shaped mention is what moved the model.
         self.assertEqual(_SYSTEM_PROMPT.count("OUT_OF_SCOPE"), 2)

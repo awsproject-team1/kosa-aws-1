@@ -168,7 +168,54 @@ class AssessmentContractTest(unittest.TestCase):
     def test_readiness_score_is_a_bounded_report_projection(self) -> None:
         score = ReadinessScore(score=73.25, evaluated_evaluations=4)
 
-        self.assertEqual(score.to_dict(), {"score": 73.25, "evaluated_evaluations": 4})
+        self.assertEqual(
+            score.to_dict(),
+            {"score": 73.25, "evaluated_evaluations": 4, "undetermined_evaluations": 0},
+        )
+        with self.assertRaisesRegex(ValueError, "undetermined_evaluations"):
+            ReadinessScore(score=1, evaluated_evaluations=1, undetermined_evaluations=-1)
+
+    def test_evaluation_result_records_who_decided_and_what_was_observed(self) -> None:
+        from packages.contracts import DecisionSource, score_for_status
+
+        base = dict(
+            resource_id="s3_bucket_logs",
+            rule_id="S3-PUBLIC-001",
+            perspective=EvaluationPerspective.AWS_ACTUAL,
+            status=EvaluationStatus.FAIL,
+            severity="HIGH",
+            score=0,
+            rationale="Three of four flags are set.",
+            evidence_references=("aws:s3:bucket/logs#read-resource",),
+            rule_version="2026-08-01",
+            rubric_version="v1",
+            model_profile_id="assessment-nova-lite-m0-v1",
+        )
+        # Results stored before the field existed were all model decisions.
+        self.assertIs(EvaluationResult(**base).decided_by, DecisionSource.MODEL)
+        self.assertTrue(EvaluationResult(**base).is_judgment)
+        self.assertFalse(
+            EvaluationResult(**{**base, "status": EvaluationStatus.MANUAL_REVIEW}).is_judgment
+        )
+
+        result = EvaluationResult(
+            **base,
+            decided_by=DecisionSource.CODE,
+            observed_satisfied=3,
+            observed_total=4,
+        )
+        payload = result.to_dict()
+        self.assertEqual(payload["decided_by"], "CODE")
+        self.assertEqual((payload["observed_satisfied"], payload["observed_total"]), (3, 4))
+        self.assertEqual(score_for_status(EvaluationStatus.PASS), 100.0)
+        self.assertEqual(score_for_status(EvaluationStatus.INSUFFICIENT_EVIDENCE), 0.0)
+
+        with self.assertRaisesRegex(ValueError, "provided together"):
+            EvaluationResult(**base, observed_total=4)
+        with self.assertRaisesRegex(ValueError, "must not exceed"):
+            EvaluationResult(**base, observed_satisfied=5, observed_total=4)
+        with self.assertRaisesRegex(ValueError, "greater than zero"):
+            EvaluationResult(**base, observed_satisfied=0, observed_total=0)
 
     def test_post_deploy_comparison_contract_hides_delta_when_not_comparable(self) -> None:
         comparison = AssessmentComparison(

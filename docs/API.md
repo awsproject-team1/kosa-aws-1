@@ -175,8 +175,12 @@ operation으로 합치더라도 이 거부 조건과 audit record 기록은 동�
   stack output으로 설정하며, token·password는 build artifact나 저장소에 넣지 않는다.
 - 같은 응답의 `findings`는 `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE` 결과에서 C가
   결정적으로 만든 actionable projection이다. `readiness_score`는 전체 평가 계획이 완료되기
-  전에는 `null`이고, 완료 후에는 `{score, evaluated_evaluations}`를 반환한다. 점수는 severity
-  가중 평가 score이며 Coverage와 혼동하지 않는다.
+  전에는 `null`이고, 완료 후에는 `{score, evaluated_evaluations, undetermined_evaluations}`를
+  반환한다. 점수는 **판정된** 좌표(PASS=100, FAIL=0)의 severity 가중 준수율이고,
+  `undetermined_evaluations`는 실행됐으나 판정이 없는 좌표 수(`INSUFFICIENT_EVIDENCE`·
+  `MANUAL_REVIEW`)다 — 점수에 들어가지 않으며 Coverage와도 다른 축이다(ADR-0024). 판정된 좌표가
+  하나도 없으면 완료 후에도 `null`이다. 각 result는 `decided_by`(`CODE`|`MODEL`)와 부분 충족의
+  관측 상세 `observed_satisfied`/`observed_total`(없으면 `null`)을 싣는다.
 - 같은 응답의 `suppressions`는 이 페이지의 Finding 중 고객의 유효 예외로 덮인 것에 대한
   **조회 시점 표시 전용** 목록이다(ADR-0020 §6). 각 항목은
   `{finding_id, exception_id, reason, expires_at, ticket_reference}`이며 억제된 Finding만

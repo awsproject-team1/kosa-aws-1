@@ -6,11 +6,14 @@ from packages.contracts._validation import (
     require_optional_non_empty_string,
 )
 from packages.contracts.assessments import (
+    NO_SCORE,
     SCORE_ANCHORS,
+    STATUS_SCORES,
     AssessmentComparison,
     AssessmentCoverage,
     AssessmentPhase,
     ComparisonIneligibilityReason,
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
@@ -21,6 +24,7 @@ from packages.contracts.assessments import (
     ReadinessScore,
     ScoringMode,
     SegmentReadinessScore,
+    score_for_status,
 )
 from packages.contracts.audit import (
     AuditEvent,
@@ -209,6 +213,7 @@ __all__ = [
     "DeploymentReadinessStatus",
     "DeploymentRejectionReason",
     "DeploymentStatus",
+    "DecisionSource",
     "DocumentUnitKind",
     "EvaluationPerspective",
     "EvaluationResult",
@@ -270,9 +275,12 @@ __all__ = [
     "RuleLifecycle",
     "RuleEvaluationType",
     "RuleSeverity",
+    "NO_SCORE",
     "SCORE_ANCHORS",
+    "STATUS_SCORES",
     "ScoringMode",
     "SegmentReadinessScore",
+    "score_for_status",
     "SourceReference",
     "SUPPORTED_MEDIA_TYPES",
     "TERMINAL_STATUSES",

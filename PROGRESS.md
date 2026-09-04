@@ -2,6 +2,34 @@
 
 ## Current
 
+- **경계를 의미로 다시 긋는다 — 사실·해석·모름 (2026-09-05, ADR-0024).** 바로 아래 항목이 만든
+  결정적 판정은 옳았지만, 경계의 기준이 "Catalog가 술어를 선언했는가"라서 네 가지가 새어 나갔다.
+  전체 검토는 `docs/decisions/ADR-0024-scoring-boundary-by-meaning.md`.
+  - **근거 없는 PASS를 닫았다.** `missing_required_evidence()`는 binding 미선언 capability를
+    `continue`로 건너뛰고 모델을 불렀다. baseline S3 Rule 넷(ACL·Bucket Policy·TLS·Logging)은
+    S3 read 문서에 답이 존재할 수 없는데 모델이 public-access-block 플래그를 대신 인용하며 PASS를
+    냈다. 이제 `evidence_gap()`이 미선언·미채움 둘 다 `INSUFFICIENT_EVIDENCE`로 닫고 모델을 부르지
+    않는다. legacy Rule도 `LEGACY_RULE_CONTROL_KEYS`(`control_for_rule`)로 같은 게이트를 지난다 —
+    회귀 대조표가 Runtime 조회 경로가 됐다. 배포된 baseline Profile의 S3-PUBLIC-001·ENCRYPT-001은
+    이제 코드가 판정하고 Bedrock을 부르지 않는다.
+  - **score는 status의 재진술이다.** 코드의 관측 비율(분모가 리소스 개수: 미암호화 볼륨 1개가
+    1+1→50, 19+1→**95**)과 모델의 0/100이 한 평균에 섞여 같은 위반이 엔진에 따라 75점 차이로
+    기여했다. 모든 producer가 `score_for_status`(PASS 100, FAIL 0)를 쓰고, 부분 충족은
+    `observed_satisfied`/`observed_total`로 결과에 남는다(3/4는 여전히 보인다 — 점수가 아니라
+    조치의 목표로).
+  - **"모름"은 0점이 아니라 미판정이다.** `INSUFFICIENT_EVIDENCE`·`MANUAL_REVIEW`가 0으로 평균에
+    들어가 "확인 못 함+통과"와 "위반+통과"가 같은 50.0이었다. 준비도는 `STATUS_SCORES`를 status로
+    가중 평균하고(결과의 score 필드를 읽지 않는다) 미판정은 `undetermined_evaluations`로 따로 센다.
+    화면은 "판정 N건 가중 평균 · 미판정 M건 제외"로 보여 준다.
+  - **판정 출처가 결과에 남는다.** `EvaluationResult.decided_by: CODE | MODEL`. drift 파생은 두
+    관점의 출처가 다르고 판정이 어긋나면 `FAIL`이 아니라 `MANUAL_REVIEW`다 — 코드 FAIL + 모델
+    PASS가 양쪽 모두 비준수인 리소스를 유령 drift로 보고하던 것을 막는다.
+  - **다음.** (1) 계측기 `measure_score_consistency.py`가 `BedrockStructuredEvaluator`를 직접 만들어
+    게이트와 결정적 경로를 우회한다 — 실제 `ActualBedrockEvaluator` 경로로 옮기고 코드/모델 좌표
+    지표를 나눈다. (2) 이제 미판정으로 **보이게 된** 빈 곳(S3 ownership/logging/policy 본문, EC2
+    서브넷, SG ingress CIDR 술어)을 adapter·read role·술어 어휘로 메운다. (3) plan `after` 값으로
+    IaC 관점도 코드가 판정한다. (4) 조치 prompt에 Rule 문언과 Terraform 매핑을 넘긴다.
+
 - **사실은 코드가 판정하고, 판단만 모델에 맡긴다 (2026-09-05).** ISMS-P 준비도 평가의 비용과
   시간을 줄이는 것이 이 서비스의 목적이므로, 측정으로 드러난 세 가지 손실을 한 곳에서 없앤다.
   - **왜.** 라이브 측정에서 status 오류 3건이 전부 위반을 PASS로 본 false negative였고 부분 준수

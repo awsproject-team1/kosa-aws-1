@@ -17,8 +17,12 @@
 필요한 통제 — 조직 통제, "적절한 범위로 제한" 같은 문언 — 는 여전히 모델과 사람의 몫이다.
 
 **점수 규칙.** status는 Rule 문언 그대로다: 선언된 술어를 **모두** 충족해야 PASS다. score는
-충족한 관측치의 비율이며, 임계값이나 Anchor가 아니라 측정된 비율이다(ADR-0003의 연속 점수 정책).
-관측치가 하나뿐인 술어는 자연히 0 또는 100이 된다.
+status가 정한다(`score_for_status`, PASS 100 / FAIL 0). 충족한 관측치의 비율은 버리지 않고
+`observed_satisfied`/`observed_total`로 결과에 싣는다 — 그것이 리포트와 조치가 실제로 쓰는
+정보("네 플래그 중 `RestrictPublicBuckets` 하나가 꺼져 있다")다. 비율을 score로 쓰지 않는
+이유는 분모가 리소스 개수이기 때문이다: 미암호화 볼륨 하나라는 같은 위험이 볼륨을 더 붙일수록
+(1+1 → 50, 19+1 → 95) 준비도를 올렸고, 모델 FAIL(0)과 같은 평균에 들어가 같은 위반이 어느
+엔진을 지나갔느냐에 따라 75점 차이로 기여했다.
 """
 
 from __future__ import annotations
@@ -26,17 +30,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from apps.backend.policy.control_catalog import control_for_rule
 from apps.backend.policy.evidence_paths import document_path_values
 from packages.contracts import (
+    DecisionSource,
     EvaluationPerspective,
     EvaluationResult,
     EvaluationStatus,
     EvidenceCapabilityBinding,
     EvidenceExpectation,
+    GovernanceControl,
     GovernanceControlCatalog,
     ModelProfile,
     PolicyRule,
     ScoringMode,
+    score_for_status,
 )
 
 
@@ -57,12 +65,19 @@ class DeterministicVerdict:
     """The decided outcome, carrying enough to explain itself to a reviewer."""
 
     status: EvaluationStatus
-    score: float
     rationale: str
+    #: 선언된 관측치 중 충족한 수와 전체 수. 부분 충족의 상세이지 점수가 아니다.
+    observed_satisfied: int
+    observed_total: int
 
     @property
     def is_pass(self) -> bool:
         return self.status is EvaluationStatus.PASS
+
+    @property
+    def score(self) -> float:
+        """status가 정한 점수. 관측 비율이 아니다."""
+        return score_for_status(self.status)
 
 
 def decidable_bindings(
@@ -70,28 +85,47 @@ def decidable_bindings(
 ) -> tuple[EvidenceCapabilityBinding, ...]:
     """The AWS bindings that can settle this Rule, or `()` when any of them cannot.
 
-    Rule이 요구한 capability 중 **하나라도** 술어가 없으면 결정적으로 답할 수 없다. 일부만
-    코드가 판정하고 나머지를 모델이 판정하면 하나의 결과가 두 근거 체계를 섞게 되므로, 그 경우는
-    통째로 모델에 맡긴다.
+    authored Rule은 자기 `required_evidence`로, legacy Rule은 Catalog 매핑의
+    `baseline_required_evidence`로 같은 질문을 받는다(`control_for_rule`).
     """
-    if rule.evaluation_type is None or not rule.required_evidence or not rule.control_key:
+    resolved = control_for_rule(rule, catalog)
+    if resolved is None:
         return ()
-    control = catalog.control(rule.control_key)
-    if control is None:
+    control, required = resolved
+    return decidable_bindings_for(control, required, resource_type=resource_type)
+
+
+def decidable_bindings_for(
+    control: GovernanceControl, required: tuple[str, ...], *, resource_type: str
+) -> tuple[EvidenceCapabilityBinding, ...]:
+    """The AWS bindings for `required` on this resource type, or `()` if any is undecidable.
+
+    요구된 capability 중 **하나라도** 술어가 없으면 결정적으로 답할 수 없다. 일부만 코드가
+    판정하고 나머지를 모델이 판정하면 하나의 결과가 두 근거 체계를 섞게 되므로, 그 경우는 통째로
+    모델에 맡긴다.
+    """
+    if not required:
         return ()
-    bindings = {
-        binding.capability_key: binding
-        for binding in control.available_evidence_capabilities
-        if binding.perspective is EvaluationPerspective.AWS_ACTUAL
-        and binding.resource_type == resource_type
-    }
+    bindings = aws_bindings(control, resource_type=resource_type)
     selected: list[EvidenceCapabilityBinding] = []
-    for capability_key in rule.required_evidence:
+    for capability_key in required:
         binding = bindings.get(capability_key)
         if binding is None or not binding.is_decidable:
             return ()
         selected.append(binding)
     return tuple(selected)
+
+
+def aws_bindings(
+    control: GovernanceControl, *, resource_type: str
+) -> dict[str, EvidenceCapabilityBinding]:
+    """The control's AWS_ACTUAL bindings for one resource type, by capability key."""
+    return {
+        binding.capability_key: binding
+        for binding in control.available_evidence_capabilities
+        if binding.perspective is EvaluationPerspective.AWS_ACTUAL
+        and binding.resource_type == resource_type
+    }
 
 
 def decide(
@@ -114,25 +148,26 @@ def decide(
                 observations.append(_Observation(path=path, satisfied=_satisfies(binding, value)))
     satisfied = [observation for observation in observations if observation.satisfied]
     unsatisfied = [observation for observation in observations if not observation.satisfied]
-    score = round(len(satisfied) / len(observations) * 100, 2)
     if not unsatisfied:
         return DeterministicVerdict(
             status=EvaluationStatus.PASS,
-            score=score,
             rationale=(
                 "Every declared evidence path satisfies the control criterion: "
                 + ", ".join(sorted({observation.path for observation in observations}))
                 + "."
             ),
+            observed_satisfied=len(satisfied),
+            observed_total=len(observations),
         )
     failing = sorted({observation.path for observation in unsatisfied})
     return DeterministicVerdict(
         status=EvaluationStatus.FAIL,
-        score=score,
         rationale=(
             f"{len(satisfied)} of {len(observations)} declared evidence observations satisfy the "
             "control criterion. These do not: " + ", ".join(failing) + "."
         ),
+        observed_satisfied=len(satisfied),
+        observed_total=len(observations),
     )
 
 
@@ -195,4 +230,7 @@ def result_from_verdict(
         rubric_version=model_profile.rubric_version,
         model_profile_id=model_profile.model_profile_id,
         scoring_mode=ScoringMode.CONTINUOUS,
+        decided_by=DecisionSource.CODE,
+        observed_satisfied=verdict.observed_satisfied,
+        observed_total=verdict.observed_total,
     )

@@ -48,13 +48,53 @@ def result(
 class ReadinessScoreTest(unittest.TestCase):
     def test_scores_a_plan_only_when_every_planned_coordinate_completed(self) -> None:
         score = calculate_readiness_score(
-            results=(result(score=20), result(resource_id="bucket-002", score=100, severity="LOW")),
+            results=(
+                result(status=EvaluationStatus.FAIL, score=0),
+                result(resource_id="bucket-002", score=100, severity="LOW"),
+            ),
             planned_evaluations=(planned(), planned(resource_id="bucket-002")),
         )
 
         assert score is not None
-        self.assertEqual(score.score, 36)
+        # HIGH FAIL(0 × 4) + LOW PASS(100 × 1) / 5
+        self.assertEqual(score.score, 20)
         self.assertEqual(score.evaluated_evaluations, 2)
+        self.assertEqual(score.undetermined_evaluations, 0)
+
+    def test_the_status_decides_the_contribution_not_the_score_field(self) -> None:
+        """모델은 0과 100만 냈고 코드의 비율은 분모가 리소스 개수였다. status만이 공통 문언이다."""
+        score = calculate_readiness_score(
+            results=(result(status=EvaluationStatus.PASS, score=20),),
+            planned_evaluations=(planned(),),
+        )
+
+        assert score is not None
+        self.assertEqual(score.score, 100)
+
+    def test_undetermined_coordinates_are_counted_not_averaged(self) -> None:
+        """ "확인 못 함 + 통과"와 "위반 + 통과"가 같은 숫자였다. 이제 전자는 100에 미판정 1이다."""
+        for status in (EvaluationStatus.INSUFFICIENT_EVIDENCE, EvaluationStatus.MANUAL_REVIEW):
+            with self.subTest(status=status):
+                score = calculate_readiness_score(
+                    results=(
+                        result(status=status, score=0),
+                        result(resource_id="bucket-002"),
+                    ),
+                    planned_evaluations=(planned(), planned(resource_id="bucket-002")),
+                )
+
+                assert score is not None
+                self.assertEqual(score.score, 100)
+                self.assertEqual(score.evaluated_evaluations, 1)
+                self.assertEqual(score.undetermined_evaluations, 1)
+
+    def test_a_plan_with_only_undetermined_coordinates_has_no_score(self) -> None:
+        self.assertIsNone(
+            calculate_readiness_score(
+                results=(result(status=EvaluationStatus.INSUFFICIENT_EVIDENCE, score=0),),
+                planned_evaluations=(planned(),),
+            )
+        )
 
     def test_an_unplanned_result_does_not_fill_a_missing_planned_coordinate(self) -> None:
         """The defect a count comparison cannot see: the totals agree, the plan does not."""
@@ -88,21 +128,24 @@ class ReadinessScoreTest(unittest.TestCase):
         """A vanished resource keeps Coverage whole while staying out of the score."""
         score = calculate_readiness_score(
             results=(
-                result(score=40),
+                result(),
                 result(resource_id="bucket-002", status=EvaluationStatus.OUT_OF_SCOPE, score=0),
             ),
             planned_evaluations=(planned(), planned(resource_id="bucket-002")),
         )
 
         assert score is not None
-        self.assertEqual(score.score, 40)
+        self.assertEqual(score.score, 100)
         self.assertEqual(score.evaluated_evaluations, 1)
+        self.assertEqual(score.undetermined_evaluations, 0)
 
     def test_drift_completes_its_coordinate_but_is_excluded_from_the_score(self) -> None:
         score = calculate_readiness_score(
             results=(
-                result(score=40),
-                result(perspective=EvaluationPerspective.DRIFT, score=0),
+                result(),
+                result(
+                    perspective=EvaluationPerspective.DRIFT, status=EvaluationStatus.FAIL, score=0
+                ),
             ),
             planned_evaluations=(
                 planned(),
@@ -111,7 +154,7 @@ class ReadinessScoreTest(unittest.TestCase):
         )
 
         assert score is not None
-        self.assertEqual(score.score, 40)
+        self.assertEqual(score.score, 100)
         self.assertEqual(score.evaluated_evaluations, 1)
 
     def test_rejects_a_duplicated_or_empty_plan(self) -> None:
@@ -139,7 +182,12 @@ class SegmentReadinessTest(unittest.TestCase):
         scores = calculate_segment_readiness(
             results=(
                 result(rule_id="CUST-1", score=100),
-                result(rule_id="ISMS-1", resource_id="bucket-002", score=0),
+                result(
+                    rule_id="ISMS-1",
+                    resource_id="bucket-002",
+                    status=EvaluationStatus.FAIL,
+                    score=0,
+                ),
             ),
             planned_evaluations=(
                 planned(rule_id="CUST-1"),
@@ -158,7 +206,7 @@ class SegmentReadinessTest(unittest.TestCase):
     def test_a_rule_serving_both_standards_counts_toward_both(self) -> None:
         """기준선 Rule 대부분이 사내 체크리스트와 ISMS-P 조항을 함께 인용한다."""
         scores = calculate_segment_readiness(
-            results=(result(rule_id="SHARED-1", score=40),),
+            results=(result(rule_id="SHARED-1", status=EvaluationStatus.FAIL, score=0),),
             planned_evaluations=(planned(rule_id="SHARED-1"),),
             rule_kinds={"SHARED-1": (self.INTERNAL, self.ISMS)},
         )
@@ -166,13 +214,13 @@ class SegmentReadinessTest(unittest.TestCase):
         self.assertEqual([entry.kind for entry in scores], [self.INTERNAL, self.ISMS])
         for entry in scores:
             assert entry.score is not None
-            self.assertEqual(entry.score.score, 40)
+            self.assertEqual(entry.score.score, 0)
             self.assertEqual(entry.score.evaluated_evaluations, 1)
 
     def test_one_origin_can_be_scored_while_the_other_is_still_running(self) -> None:
         """전체 점수 하나였을 때는 할 수 없던 구분이다 — 미완결 쪽만 `None`이다."""
         scores = calculate_segment_readiness(
-            results=(result(rule_id="CUST-1", score=70),),
+            results=(result(rule_id="CUST-1"),),
             planned_evaluations=(
                 planned(rule_id="CUST-1"),
                 planned(rule_id="ISMS-1", resource_id="bucket-002"),
@@ -182,7 +230,7 @@ class SegmentReadinessTest(unittest.TestCase):
 
         by_kind = {entry.kind: entry.score for entry in scores}
         assert by_kind[self.INTERNAL] is not None
-        self.assertEqual(by_kind[self.INTERNAL].score, 70)
+        self.assertEqual(by_kind[self.INTERNAL].score, 100)
         self.assertIsNone(by_kind[self.ISMS])
 
     def test_a_profile_without_recorded_origins_is_not_split(self) -> None:

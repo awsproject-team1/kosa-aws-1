@@ -27,11 +27,20 @@
   "evidence_references": ["aws:s3:bucket/example#read-resource", "isms-p-2023@2023.1#control/5.2.1"],
   "rule_version": "string",
   "rubric_version": "string",
-  "model_profile_id": "string"
+  "model_profile_id": "string",
+  "decided_by": "CODE | MODEL",
+  "observed_satisfied": 3,
+  "observed_total": 4
 }
 ```
 
-`score`는 기본적으로 0–100 범위의 연속 값이다. Golden Dataset 반복 평가에서 편차가 ±10점을 지속적으로 넘겨 Anchor 방식으로 전환한 경우에만 `{0, 15, 30, 50, 70, 85, 100}` 중 하나여야 한다. 코드가 현재 Scoring 정책, Schema와 Evidence Reference를 검증한다.
+**`score`는 status의 재진술이다 (2026-09-05, ADR-0024).** PASS 100, FAIL 0, 판정이 아닌 status는 0
+(`score_for_status`). 모든 producer가 이 값을 쓰며, 모델이 보낸 숫자는 계약 검증(범위·유한성)만 받고
+버린다. 부분 충족은 `observed_satisfied`/`observed_total`(둘 다 있거나 둘 다 없음)로 남고, 판정 주체는
+`decided_by`(`CODE` | `MODEL`, 기본 `MODEL`)로 남는다. 연속 점수와 Anchor 전환은 폐기됐다 — 아래 두
+문단은 계약 필드가 남아 있는 이유를 설명하는 역사다.
+
+`score`는 원래 0–100 범위의 연속 값이었다. Golden Dataset 반복 평가에서 편차가 ±10점을 지속적으로 넘겨 Anchor 방식으로 전환한 경우에만 `{0, 15, 30, 50, 70, 85, 100}` 중 하나여야 했다. 코드가 현재 Scoring 정책, Schema와 Evidence Reference를 검증한다.
 
 `packages/contracts/assessments.py`는 V3 평가 단계(`INITIAL`, `DEPLOYMENT_READINESS`, `POST_DEPLOY_VERIFICATION`), `EvaluationPerspective`(`IAC`, `AWS_ACTUAL`, `DRIFT`)와 `EvaluationResult`의 기본 검증을 제공한다. 각 결과는 평가에 실제 사용된 `model_profile_id`를 반드시 보존한다. Initial Assessment는 동일한 Terraform 관리 대상의 IaC Compliance, Actual Compliance, Drift를 이 관점으로 분리한다. Score 산출 자체는 AI Evaluator가 담당하며 Contract는 범위와 구조만 검증한다.
 
