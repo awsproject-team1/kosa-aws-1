@@ -97,6 +97,8 @@ class RemediationResultStore(Protocol):
         self, *, work: RemediationWork, pull_request: OpenedPullRequest
     ) -> None: ...
 
+    def put_failure_if_absent(self, *, work: RemediationWork, code: str, reason: str) -> None: ...
+
 
 class RemediationWorker:
     """Dispatch one stored policy decision through exactly one injected D port."""

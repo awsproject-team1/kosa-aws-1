@@ -34,6 +34,8 @@ class RemediationView:
     decided_at: str | None
     result: Mapping[str, object] | None
     pull_request: Mapping[str, object] | None
+    #: 조치가 끝내 실패한 사유(`code`, `reason`, `failed_at`). 없으면 실패하지 않았다.
+    failure: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         for name in ("remediation_id", "finding_id", "status"):
@@ -42,7 +44,7 @@ class RemediationView:
                 raise ValueError(f"{name} must be a non-empty string")
         if not isinstance(self.decision, Mapping):
             raise TypeError("decision must be a mapping")
-        for name in ("result", "pull_request"):
+        for name in ("result", "pull_request", "failure"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, Mapping):
                 raise TypeError(f"{name} must be a mapping or None")
@@ -57,6 +59,7 @@ class RemediationView:
             "decided_at": self.decided_at,
             "result": None if self.result is None else dict(self.result),
             "pull_request": None if self.pull_request is None else dict(self.pull_request),
+            "failure": None if self.failure is None else dict(self.failure),
         }
 
 
@@ -98,6 +101,7 @@ class DynamoDbRemediationReadRepository:
                 decided_at=_optional_string(item.get("decided_at")),
                 result=_optional_mapping(item.get("result")),
                 pull_request=_optional_mapping(item.get("pull_request")),
+                failure=_optional_mapping(item.get("failure")),
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("stored remediation is invalid") from error

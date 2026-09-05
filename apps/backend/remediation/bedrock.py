@@ -24,6 +24,7 @@ Boundary, mirroring the Assessment evaluator:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
@@ -37,6 +38,7 @@ from apps.backend.remediation.patch_content import (
 )
 from apps.backend.remediation.terraform_change import (
     TerraformChangeError,
+    removed_resource_blocks,
     validate_terraform_changes,
 )
 from packages.contracts import (
@@ -119,24 +121,7 @@ class BedrockPatchGenerator:
         finding = context.finding
         document = self._read_document(context)
 
-        response = self._client.converse(
-            modelId=self._model_profile.model_id,
-            system=[{"text": _SYSTEM_PROMPT}],
-            messages=[
-                {"role": "user", "content": [{"text": self._request_body(context, document)}]}
-            ],
-            inferenceConfig={"temperature": 0, "maxTokens": 4096},
-        )
-        changes = _response_changes(_response_object(response))
-        # 경계 위반(절대 경로, `..`)은 snapshot 대조보다 먼저 그 이름으로 거부한다. 둘 다 거부지만
-        # 사유가 다르다 — 전자는 모델이 저장소 밖을 가리킨 것이고 후자는 저장소 안의 다른 파일이다.
-        for path in changes:
-            if path.startswith("/") or ".." in path.split("/"):
-                raise BedrockPatchError("model patch is outside the repository boundary")
-        try:
-            validate_terraform_changes(document, changes)
-        except TerraformChangeError as error:
-            raise BedrockPatchError(f"model patch is not bound to the snapshot: {error}") from error
+        changes = self._bound_changes(context, document)
 
         # Content-addressed digest over the canonical patch bytes bound to the base
         # commit. Same finding + commit + changes -> same bytes -> same artifact identity,
@@ -180,6 +165,54 @@ class BedrockPatchGenerator:
         self._content_store.put(patch=patch, content=content)
         return patch
 
+    def _bound_changes(
+        self, context: RemediationContext, document: IaCDocument
+    ) -> Mapping[str, str]:
+        """Ask the model, and ask once more when it dropped resource blocks it had to keep.
+
+        라이브에서 가장 잦은 거부는 모델이 파일을 "다시 쓰면서" 무관한 리소스 블록을 빼먹은 것이다
+        (227줄 파일에서 13개 블록). 그것은 판정이 아니라 형식 실패이고, 빠진 블록을 이름으로 알려
+        주면 다음 응답이 고칠 수 있다 — 게이트는 그대로다. 두 번째도 어기면 이 조치의 실패다.
+        """
+        hint: Mapping[str, object] | None = None
+        last: BedrockPatchError | None = None
+        for _ in range(_PATCH_ATTEMPTS):
+            response = self._client.converse(
+                modelId=self._model_profile.model_id,
+                system=[{"text": _SYSTEM_PROMPT}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"text": self._request_body(context, document, hint)}],
+                    }
+                ],
+                inferenceConfig={"temperature": 0, "maxTokens": 4096},
+            )
+            changes = _response_changes(_response_object(response))
+            # 경계 위반(절대 경로, `..`)은 snapshot 대조보다 먼저 그 이름으로 거부한다. 둘 다
+            # 거부지만 사유가 다르다 — 전자는 모델이 저장소 밖을 가리킨 것이고 후자는 저장소 안의
+            # 다른 파일이다. 되묻지 않는다.
+            for path in changes:
+                if path.startswith("/") or ".." in path.split("/"):
+                    raise BedrockPatchError("model patch is outside the repository boundary")
+            try:
+                validate_terraform_changes(document, changes)
+                return changes
+            except TerraformChangeError as error:
+                last = BedrockPatchError(f"model patch is not bound to the snapshot: {error}")
+                last.__cause__ = error
+                removed = removed_resource_blocks(document, changes)
+                if not removed:
+                    raise last from error
+                logging.getLogger("governance.remediation").warning(
+                    "patch attempt discarded: finding=%s dropped resource blocks in %s",
+                    context.finding.finding_id,
+                    sorted(removed),
+                )
+                hint = {"must_keep_resource_blocks": {p: list(b) for p, b in removed.items()}}
+        assert last is not None
+        raise last
+
     def _read_document(self, context: RemediationContext) -> IaCDocument:
         """Read the Terraform body of the exact commit the Finding was evaluated at."""
         if self._iac_documents is None:
@@ -203,38 +236,40 @@ class BedrockPatchGenerator:
             raise BedrockPatchError("Terraform source document is outside the snapshot")
         return document
 
-    def _request_body(self, context: RemediationContext, document: IaCDocument) -> str:
+    def _request_body(
+        self,
+        context: RemediationContext,
+        document: IaCDocument,
+        hint: Mapping[str, object] | None = None,
+    ) -> str:
         finding = context.finding
         snapshot = context.snapshot
         rule = None
         if self._rule_lookup is not None:
             rule = self._rule_lookup(finding.rule_id, finding.rule_version)
-        return json.dumps(
-            {
-                "terraform_files": [
-                    {"path": path, "content": content} for path, content in document.files
-                ],
-                "finding": {
-                    "finding_id": finding.finding_id,
-                    "resource_id": finding.resource_id,
-                    "rule_id": finding.rule_id,
-                    "rule_version": finding.rule_version,
-                    "perspective": finding.perspective.value,
-                    "severity": finding.severity,
-                    "rationale": finding.rationale,
-                },
-                "remediation_guidance": remediation_guidance(finding, rule),
-                "snapshot": {
-                    "repository_id": snapshot.repository_id,
-                    "commit_sha": snapshot.commit_sha,
-                },
-                "evidence_references": list(context.evidence_references),
+        body: dict[str, object] = {
+            "terraform_files": [
+                {"path": path, "content": content} for path, content in document.files
+            ],
+            "finding": {
+                "finding_id": finding.finding_id,
+                "resource_id": finding.resource_id,
+                "rule_id": finding.rule_id,
+                "rule_version": finding.rule_version,
+                "perspective": finding.perspective.value,
+                "severity": finding.severity,
+                "rationale": finding.rationale,
             },
-            # Rule 문언과 Control 설명은 한국어일 수 있다. 평가 어댑터와 같은 이유로 escape하지 않는다.
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+            "remediation_guidance": remediation_guidance(finding, rule),
+            "snapshot": {
+                "repository_id": snapshot.repository_id,
+                "commit_sha": snapshot.commit_sha,
+            },
+            "evidence_references": list(context.evidence_references),
+        }
+        if hint is not None:
+            body["repair_hint"] = dict(hint)
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 _SYSTEM_PROMPT = (
@@ -254,8 +289,14 @@ _SYSTEM_PROMPT = (
     "deterministic check will read from the plan together with the value they must hold; "
     "a change that leaves any plan_check unsatisfied does not resolve the Finding. Every "
     "path must be repository-relative (no leading slash and no '..' segment). Do not perform "
-    "any AWS write or apply, and do not wrap the JSON in code fences or add prose."
+    "any AWS write or apply, and do not wrap the JSON in code fences or add prose. A "
+    "request may carry repair_hint.must_keep_resource_blocks: a previous answer to these same "
+    "terraform_files dropped the listed resource blocks; return the complete file again with "
+    "every listed block present and unchanged apart from the attributes the Finding requires."
 )
+
+#: 한 조치에 허용하는 모델 호출 횟수. 두 번째는 빠진 블록을 이름으로 알려 되묻는 repair다.
+_PATCH_ATTEMPTS = 2
 
 
 def remediation_guidance(finding: Finding, rule: PolicyRule | None) -> dict[str, object]:
@@ -316,6 +357,9 @@ def remediation_guidance(finding: Finding, rule: PolicyRule | None) -> dict[str,
 def _response_object(response: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(response, Mapping):
         raise BedrockPatchError("Bedrock response is invalid")
+    if response.get("stopReason") == "max_tokens":
+        # 잘린 파일은 "블록을 지운 파일"과 같은 모양이라 되물어도 낫지 않는다. 사유를 그대로 적는다.
+        raise BedrockPatchError("model output was truncated (max_tokens)")
     output = response.get("output")
     if not isinstance(output, Mapping):
         raise BedrockPatchError("Bedrock response output is missing")

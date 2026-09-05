@@ -1853,6 +1853,21 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     `coverage.py` fallback과 비교 경계(`comparison.py`)도 같은 정의로 맞췄다 — 셋이 달랐다.
   - 이 실행의 새 준비도: 18.52 (판정 27 · 미판정 1 · 실행 오류 4 제외).
 
+- **조치 요청이 QUEUED · "Worker 결과 대기 중"에 영영 멈췄다 (2026-09-05).** `rem-a444cda1`. 원인은
+  둘. (a) 모델이 `multiresource.tf`를 다시 쓰며 무관한 리소스 블록 13개를 빼먹어 snapshot 대조에서
+  거부됐는데(`BedrockPatchError`), 실패가 어디에도 기록되지 않고 예외로만 죽어 SQS가 재시도하고
+  DLQ로 보냈다(DLQ 69건). record와 Job은 QUEUED 그대로. (b) GitHub PR 생성 4xx가 사유 없이
+  `GitHubWriteToolError`로만 남았고, 재시도마다 모델이 다른 patch를 내 branch·PR이 하나씩 늘었다
+  — 한 finding에 열린 PR 20개(`awsproject-team1/test`).
+  - 처리: 실패를 두 종류로 나눴다(`remediation/failure.py`). **다시 보내도 같은 실패**(모델 출력
+    형식, GitHub 4xx, 저장된 work와 어긋나는 task)는 record `status=FAILED` + `failure{code, reason}`
+    와 Job FAILED로 기록하고 message를 소비한다. **다음에 다를 수 있는 실패**(저장소·네트워크·5xx)
+    는 예외를 올려 SQS 재시도에 맡긴다. GitHub 오류는 status와 GitHub의 message를 싣는다.
+  - 모델 형식 실패는 한 번 되묻는다: 빠진 블록을 `type.name`으로 알려주는 `repair_hint`
+    (`_PATCH_ATTEMPTS = 2`). 두 번째도 어기면 이 조치의 실패다. `max_tokens` 절단은 그 이름으로 거부.
+  - 화면: FAILED이면 "Worker 결과 대기 중" 대신 사유를 보인다. 라이브 검증(DLQ 재처리, 열린 PR 20개
+    정리)은 MFA 재인증 뒤 — PR·branch 정리는 운영자의 결정이다.
+
 
 
 

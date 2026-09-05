@@ -145,7 +145,7 @@ class LiveGitHubWriteTool:
             # 조회와 생성 사이에 다른 재시도가 만들었다. 같은 이름·같은 base이므로 그대로 쓴다.
             return
         if status != 201:
-            raise GitHubWriteToolError("GitHub branch creation failed")
+            raise github_failure("GitHub branch creation failed", status, payload)
 
     def _put_file(
         self, *, path: str, contents: str, branch: str, message: str, headers: Mapping[str, str]
@@ -168,9 +168,9 @@ class LiveGitHubWriteTool:
         }
         if existing_sha is not None:
             body["sha"] = existing_sha
-        status, _ = self._request("PUT", url, headers, _json(body))
+        status, payload = self._request("PUT", url, headers, _json(body))
         if status not in (200, 201):
-            raise GitHubWriteToolError("GitHub file commit failed")
+            raise github_failure("GitHub file commit failed", status, payload)
 
     def _existing_pull(
         self, branch: str, headers: Mapping[str, str]
@@ -204,9 +204,7 @@ class LiveGitHubWriteTool:
             ),
         )
         if status != 201:
-            raise GitHubWriteToolError(
-                f"GitHub pull request creation failed (status {status}): {_error_detail(payload)}"
-            )
+            raise github_failure("GitHub pull request creation failed", status, payload)
         return _mapping(payload)
 
     def _branch_head(self, branch: str, headers: Mapping[str, str]) -> str:
@@ -324,6 +322,18 @@ def _github_request(
         return status, json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise GitHubWriteToolError("GitHub response is not JSON") from None
+
+
+def github_failure(message: str, status: int, payload: object) -> GitHubWriteToolError:
+    """An error that carries the HTTP status and GitHub's own `message`.
+
+    status는 재시도 판단의 근거다(4xx는 다시 보내도 같고, 5xx·네트워크는 다를 수 있다). GitHub의
+    message는 사람이 읽을 사유이며 고객 정책 텍스트가 아니다 — `_error_detail`로 message와 errors를 붙인다.
+    """
+    detail = _error_detail(payload)
+    error = GitHubWriteToolError(f"{message} ({status}): {detail[:300]}")
+    error.status = status  # type: ignore[attr-defined]
+    return error
 
 
 def _mapping(value: object) -> Mapping[str, object]:

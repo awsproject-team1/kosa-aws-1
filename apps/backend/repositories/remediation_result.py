@@ -11,6 +11,7 @@ get이 된다. 두 item으로 나누면 decision은 보이고 결과는 아직 �
 """
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Protocol
 
 from agent.runtime.github_write_tool import OpenedPullRequest
@@ -76,6 +77,56 @@ class DynamoDbRemediationResultStore:
             }:
                 return
             raise RepositoryError("remediation result write failed") from None
+
+    def put_failure_if_absent(self, *, work: RemediationWork, code: str, reason: str) -> None:
+        """Mark the remediation FAILED with a reason, only while it is still QUEUED without a result.
+
+        조치가 끝내 실패하면 그 사실이 record에 남아야 화면이 "Worker 결과 대기 중"에서 벗어난다 —
+        라이브에서 실패한 조치가 QUEUED로 영영 남았다. 결과가 이미 있거나 이미 실패로 적힌 record는
+        건드리지 않는다(멱등, 그리고 성공 뒤의 늦은 실패 기록은 거짓이다).
+        """
+        if not isinstance(work, RemediationWork):
+            raise TypeError("work must be a RemediationWork")
+        for name, value in (("code", code), ("reason", reason)):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        failure = {
+            "code": code,
+            "reason": reason[:300],
+            "failed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+        try:
+            self._transaction_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": self._table_name,
+                            "Key": marshal_item(
+                                {
+                                    "PK": f"CUSTOMER#{work.customer_id}",
+                                    "SK": f"REMEDIATION#{work.remediation_id}",
+                                }
+                            ),
+                            "UpdateExpression": "SET #status = :failed, failure = :failure",
+                            "ExpressionAttributeNames": {"#status": "status", "#result": "result"},
+                            "ConditionExpression": (
+                                "attribute_exists(PK) AND attribute_not_exists(#result) "
+                                "AND #status = :queued"
+                            ),
+                            "ExpressionAttributeValues": marshal_item(
+                                {":failed": "FAILED", ":queued": "QUEUED", ":failure": failure}
+                            ),
+                        }
+                    }
+                ]
+            )
+        except Exception as error:
+            if _error_code(error) in {
+                "ConditionalCheckFailedException",
+                "TransactionCanceledException",
+            }:
+                return
+            raise RepositoryError("remediation failure write failed") from None
 
     def put_pull_request_if_absent(
         self, *, work: RemediationWork, pull_request: OpenedPullRequest

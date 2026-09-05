@@ -76,7 +76,7 @@ type SegmentReadiness = { kind: string; score: Readiness | null };
 type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRow[]; readiness_score: Readiness | null; segment_readiness?: SegmentReadiness[]; coverage: { percentage: number; completed_evaluations: number; planned_evaluations: number }; next_cursor?: string | null; findings_next_cursor?: string | null; suppressions?: Suppression[] };
 type RemediationDecision = { action: string; manual_review_code: string | null; exception_id: string | null };
 type RemediationStart = { decision: RemediationDecision; job: { job_id: string; remediation_id: string | null } | null };
-type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null };
+type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null; failure?: { code: string; reason: string; failed_at?: string } | null };
 type DeploymentView = { deployment_id: string; status: string; commit_sha: string; remediation_id: string; source_assessment_id: string; plan_hash: string | null; verification_assessment_id: string | null };
 
 /* =========================================================================
@@ -1703,7 +1703,8 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
         </div>}
     {start && start.decision.action === "MANUAL_REVIEW" && <p className="hint">자동 조치 대상이 아닙니다{code === "RULE_NOT_IN_SCOPE" ? " — 이 Rule은 자동 patch 허용 범위(remediation eligibility)에 등록되어 있지 않습니다" : code === "RULE_MANUAL_ONLY" ? " — 이 Rule만으로는 안전한 목표 상태가 유일하게 정해지지 않거나 리소스 교체·데이터 손실이 필요해 자동 patch를 열지 않습니다(ADR-0017). IaC를 사람이 고친 뒤 재평가하면 ACTUAL_SYNC 경로는 열립니다" : ""}. 담당자가 직접 검토합니다.</p>}
     {view && <div className="remediation-result">
-      <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : " · Worker 결과 대기 중"}</div>
+      <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : view.status === "FAILED" ? "" : " · Worker 결과 대기 중"}</div>
+      {view.status === "FAILED" && <p className="alert">조치 실패{view.failure ? ` — ${view.failure.code}: ${view.failure.reason}` : ""}. 재시도해도 같은 결과일 사유입니다(모델 출력 형식·GitHub 거부 등). 담당자가 IaC를 직접 고치거나, 사유가 일시적이면 조치를 다시 요청하세요.</p>}
       {view.result?.patch && <div className="hint">변경 파일: <CodeValues values={view.result.patch.changed_paths} /> base commit <code>{view.result.patch.base_commit_sha.slice(0, 12)}</code> · patch digest <code>{view.result.patch.artifact.content_sha256.slice(0, 16)}</code></div>}
       {view.result?.sync_target && <div className="hint">IaC는 이미 안전합니다. 배포 대상 commit <code>{view.result.sync_target.commit_sha.slice(0, 12)}</code>로 Actual 동기화를 진행합니다.</div>}
       {view.pull_request

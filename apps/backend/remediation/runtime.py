@@ -34,11 +34,13 @@ from apps.backend.deployment.runtime_config import (
     DeploymentTarget,
 )
 from apps.backend.policy import DynamoDbPolicyCatalog
+from apps.backend.remediation.failure import RemediationFailureRecorder, is_terminal
 from apps.backend.remediation.patch_content import PatchContentStore
 from apps.backend.remediation.pull_request import PatchPullRequestAction
 from apps.backend.remediation.sync import SnapshotSyncAction
 from apps.backend.remediation.worker import RemediationWorker
 from apps.backend.repositories import (
+    DynamoDbJobRepository,
     DynamoDbPatchContentStore,
     DynamoDbRemediationResultStore,
     DynamoDbRemediationWorkRepository,
@@ -56,15 +58,31 @@ class RemediationRuntimeError(RuntimeError):
 
 def lambda_handler(event: Mapping[str, object], context: object) -> None:
     """SQS event source entrypoint. Worker를 조립해 구동한다."""
-    run_tasks(event, _live_worker())
+    worker = _live_worker()
+    run_tasks(event, worker, _live_failure_recorder())
 
 
-def run_tasks(event: Mapping[str, object], worker: RemediationWorker) -> None:
-    """파싱한 각 task를 주입된 Worker로 구동한다."""
+def run_tasks(
+    event: Mapping[str, object],
+    worker: RemediationWorker,
+    failure_recorder: RemediationFailureRecorder | None = None,
+) -> None:
+    """파싱한 각 task를 주입된 Worker로 구동한다.
+
+    실패는 두 종류다(`failure.py`). 다시 보내도 같은 실패는 recorder가 record와 Job에 적고 message를
+    소비한다 — 예외를 올리면 SQS가 재시도하고, 재시도마다 Bedrock을 다시 불러 다른 patch를 냈다.
+    다음에 다를 수 있는 실패(저장소·네트워크·5xx)는 그대로 올려 재시도하게 둔다. recorder가 없으면
+    예전처럼 전부 올린다.
+    """
     if not isinstance(worker, RemediationWorker):
         raise TypeError("worker must be a RemediationWorker")
     for task in parse_tasks(event):
-        worker.handle(task)
+        try:
+            worker.handle(task)
+        except Exception as error:
+            if failure_recorder is None or not is_terminal(error):
+                raise
+            failure_recorder.record(task, error)
 
 
 def parse_tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
@@ -97,6 +115,19 @@ def parse_tasks(event: Mapping[str, object]) -> tuple[WorkflowTask, ...]:
             )
         )
     return tuple(tasks)
+
+
+def _live_failure_recorder() -> RemediationFailureRecorder:
+    table_name = _required_env("METADATA_TABLE_NAME")
+    boto3 = _boto3()
+    table = boto3.resource("dynamodb").Table(table_name)
+    return RemediationFailureRecorder(
+        work_repository=DynamoDbRemediationWorkRepository(table),
+        result_store=DynamoDbRemediationResultStore(
+            table_name=table_name, transaction_client=boto3.client("dynamodb")
+        ),
+        jobs=DynamoDbJobRepository(table),
+    )
 
 
 def _live_worker() -> RemediationWorker:

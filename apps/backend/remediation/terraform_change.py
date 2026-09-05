@@ -67,6 +67,34 @@ def validate_terraform_changes(document: IaCDocument, changes: Mapping[str, str]
             )
 
 
+def removed_resource_blocks(
+    document: IaCDocument, changes: Mapping[str, str]
+) -> dict[str, tuple[str, ...]]:
+    """Per changed path, the `type.name` resource blocks the proposal dropped or renamed.
+
+    `validate_terraform_changes()`가 거부하는 사유 중 유일하게 **모델에게 되물을 수 있는** 것이다:
+    "이 블록들은 그대로 남아야 한다"는 사실이고, 그것을 이름으로 알려주면 다음 응답이 고칠 수 있다
+    (authoring의 누락 locator repair와 같은 성격). 다른 사유(없는 파일, 빈 변경)는 되물을 내용이 없다.
+    """
+    if not isinstance(document, IaCDocument):
+        raise TypeError("document must be an IaCDocument")
+    originals = dict(document.files)
+    removed: dict[str, tuple[str, ...]] = {}
+    for path, contents in changes.items():
+        original = originals.get(path)
+        if original is None or not isinstance(contents, str):
+            continue
+        present = set(resource_block_headers(contents))
+        missing = tuple(
+            f"{kind}.{name}"
+            for kind, name in resource_block_headers(original)
+            if (kind, name) not in present
+        )
+        if missing:
+            removed[path] = missing
+    return removed
+
+
 def render_unified_diff(document: IaCDocument, changes: Mapping[str, str]) -> str:
     """Render one unified diff over the changed files, in path order.
 
