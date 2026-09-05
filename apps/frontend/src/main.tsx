@@ -334,16 +334,22 @@ function loadTurns(sub: string): Turn[] {
  * "요약/조치" 같은 결과-지향 요청은 백엔드 라우팅(/orchestrate) 대신 프론트엔드가 이미 있는
  * 결과 API(GET /assessments/{id})와 조치 API(POST /findings/{id}/remediations)로 결정적으로
  * 처리한다. 안전 경계(사용자 확인 후 실행)는 그대로 유지한다 — 조치는 버튼으로만 실행된다. */
-type ChatLocalIntent = "summary" | "remediate" | "none";
+type ChatLocalIntent = "summary" | "remediate" | "query" | "none";
 function detectLocalIntent(text: string): ChatLocalIntent {
   const t = text.toLowerCase();
   const remediate = /(고쳐|고침|조치|리메디|remediat|수정해|패치|fix)/.test(t);
   if (remediate) return "remediate";
+  // 결과 기반 질의: 심각도/리소스종류/상태 필터가 언급되면 결과에서 뽑아 정리한다.
+  // "critical만 정리", "ec2 관련 finding만 알려줘" 등.
+  const hasFilter = severityFilter(t) !== null || resourceKindFilter(t) !== null || statusFilter(t) !== null;
+  const asksList = /(뽑아|정리|알려|보여|목록|리스트|나열|list|show)/.test(t);
+  const mentionsFinding = /(finding|파인딩|결과|항목)/.test(t);
+  if (hasFilter && (asksList || mentionsFinding)) return "query";
   const summary = /(요약|정리|결과.*(어때|어떻|보여|알려)|(어때|어떻|보여|알려).*결과|summary|summarize)/.test(t);
   if (summary) return "summary";
   return "none";
 }
-/** 조치 요청에서 심각도 필터를 뽑는다. 없으면 전체 대상. */
+/** 조치/질의 요청에서 심각도 필터를 뽑는다. 없으면 null. */
 function severityFilter(text: string): Set<string> | null {
   const t = text.toLowerCase();
   const picked = new Set<string>();
@@ -352,6 +358,49 @@ function severityFilter(text: string): Set<string> | null {
   if (/(medium|미디엄|중간)/.test(t)) picked.add("MEDIUM");
   if (/(low|로우|낮음)/.test(t)) picked.add("LOW");
   return picked.size > 0 ? picked : null;
+}
+/** 질의에서 상태 필터를 뽑는다(FAIL/PASS/수동검토/근거부족). 없으면 null. */
+function statusFilter(text: string): Set<string> | null {
+  const t = text.toLowerCase();
+  const picked = new Set<string>();
+  if (/(fail|실패|불합격|미준수|위반)/.test(t)) picked.add("FAIL");
+  if (/(pass|합격|준수|통과)/.test(t)) picked.add("PASS");
+  if (/(manual|수동)/.test(t)) picked.add("MANUAL_REVIEW");
+  if (/(근거\s*부족|insufficient|evidence)/.test(t)) picked.add("INSUFFICIENT_EVIDENCE");
+  return picked.size > 0 ? picked : null;
+}
+/** 질의에서 리소스 종류 키워드를 뽑는다(ec2, s3, iam 등). resource_id/rule_id에 대해 부분일치. */
+function resourceKindFilter(text: string): string[] | null {
+  const t = text.toLowerCase();
+  const known = ["ec2", "s3", "iam", "rds", "vpc", "kms", "lambda", "cloudtrail", "cloudfront", "dynamodb", "sns", "sqs", "eks", "ecs", "efs", "elb", "ebs", "secretsmanager", "route53", "apigateway"];
+  const found = known.filter(k => t.includes(k));
+  return found.length > 0 ? found : null;
+}
+/** 결과 기반 질의: 필터에 맞는 결과 행을 뽑아 사람이 읽을 목록으로 정리한다(결정적, LLM 미사용). */
+function answerQuery(rep: Report, text: string): string {
+  const sev = severityFilter(text);
+  const st = statusFilter(text);
+  const kinds = resourceKindFilter(text);
+  const matchesKind = (row: { resource_id: string; rule_id: string }) =>
+    !kinds || kinds.some(k => row.resource_id.toLowerCase().includes(k) || row.rule_id.toLowerCase().includes(k));
+  // 기본 대상은 Findings(후속 조치가 필요한 결과). 상태 필터에 PASS가 포함되면 전체 결과에서 찾는다.
+  const wantsPass = st?.has("PASS");
+  const base = wantsPass ? rep.results : rep.findings;
+  const rows = base.filter(r =>
+    (!sev || sev.has(r.severity)) && (!st || st.has(r.status)) && matchesKind(r));
+  const parts: string[] = [];
+  if (sev) parts.push([...sev].join("/"));
+  if (kinds) parts.push(kinds.join("/").toUpperCase());
+  if (st) parts.push([...st].join("/"));
+  const label = parts.length ? parts.join(" · ") + " " : "";
+  if (rows.length === 0) return `${label}조건에 맞는 결과가 없습니다.`;
+  const shown = rows.slice(0, 20);
+  const lines = [`${label}결과 ${rows.length}건${rows.length > shown.length ? ` (상위 ${shown.length}건 표시)` : ""}:`];
+  for (const r of shown) {
+    const reason = r.rationale ? ` — ${r.rationale.length > 140 ? r.rationale.slice(0, 140) + "…" : r.rationale}` : "";
+    lines.push(`• [${r.severity}/${r.status}] ${r.resource_id} · ${r.rule_id}@${r.rule_version} (${r.perspective})${reason}`);
+  }
+  return lines.join("\n");
 }
 /** 보고서를 사람이 읽을 요약 문자열로. LLM 없이 결정적 집계. */
 function summarizeReport(rep: Report): string {
@@ -370,7 +419,7 @@ function summarizeReport(rep: Report): string {
   if (rep.findings.length > 0) lines.push('조치가 필요하면 "CRITICAL 문제 고쳐줘"처럼 요청하세요.');
   return lines.join("\n");
 }
-function Chat({ session, obs, profileId, assessmentId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; assessmentId: string | null; onAssessment: (id: string) => void }) {
+function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; assessmentId: string | null; completedAssessmentId: string | null; onAssessment: (id: string) => void }) {
   const [turns, setTurns] = useState<Turn[]>(() => loadTurns(session.sub));
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -380,6 +429,17 @@ function Chat({ session, obs, profileId, assessmentId, onAssessment }: { session
   // 대화가 바뀔 때마다 사용자별 키에 저장한다. 초기 인사만 있는 상태도 저장해 두면 다음 마운트에서
   // 동일하게 복원된다. 저장 실패(용량 초과 등)는 대화 진행을 막지 않도록 조용히 무시한다.
   useEffect(() => { try { sessionStorage.setItem(chatKey(session.sub), JSON.stringify(turns)); } catch { /* 저장 실패는 무시 */ } }, [turns, session.sub]);
+
+  // 평가가 끝나면 챗봇에 한 번만 "평가가 끝났습니다"를 알린다. 같은 완료를 중복 알리지 않도록
+  // 마지막으로 알린 assessment id를 ref로 추적한다. Chat이 언마운트됐다가 다시 마운트돼도
+  // App이 보관한 completedAssessmentId로 상태를 복원해 알림이 유지된다.
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (completedAssessmentId && announcedRef.current !== completedAssessmentId) {
+      announcedRef.current = completedAssessmentId;
+      setTurns(t => [...t, { role: "bot", text: `평가가 끝났습니다 (${completedAssessmentId}). "결과 요약해줘", "CRITICAL만 정리해줘", "EC2 관련 finding만 알려줘"처럼 결과를 물어보거나 조치를 요청할 수 있습니다.` }]);
+    }
+  }, [completedAssessmentId]);
 
   async function send() {
     const text = msg.trim();
@@ -400,6 +460,10 @@ function Chat({ session, obs, profileId, assessmentId, onAssessment }: { session
         const rep = await fetchFullReport(session.accessToken, assessmentId);
         if (local === "summary") {
           setTurns(t => [...t, { role: "bot", text: summarizeReport(rep) }]);
+          return;
+        }
+        if (local === "query") {
+          setTurns(t => [...t, { role: "bot", text: answerQuery(rep, text) }]);
           return;
         }
         // remediate: 조치 대상(Finding)만 추린다. 후속 조치가 필요한 상태이면서 억제되지 않은 것.
@@ -1114,7 +1178,7 @@ async function fetchFullReport(token: string, assessmentId: string): Promise<Rep
 
 function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
 
-function ReportPanel({ session, assessmentId, obs }: { session: Session; assessmentId: string; obs: ObserverApi }) {
+function ReportPanel({ session, assessmentId, obs, onComplete }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -1133,7 +1197,7 @@ function ReportPanel({ session, assessmentId, obs }: { session: Session; assessm
           const r = await fetchFullReport(session.accessToken, assessmentId);
           if (cancelled) return;
           setRep(r);
-          if (isComplete(r)) { setWaiting(false); return; }
+          if (isComplete(r)) { setWaiting(false); onComplete(assessmentId); return; }
         } catch (e) {
           const msg = (e as Error).message;
           // Keep polling only while the report is not yet created; surface anything else.
@@ -1288,6 +1352,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("chat");
   const [assessmentId, setAssessmentId] = useState<string | null>(null);
+  // 평가가 완료되면 결과 화면(ReportPanel)이 여기에 id를 기록한다. Chat은 이 값을 받아
+  // "평가가 끝났습니다" 알림을 한 번 띄운다 — Chat이 그때 언마운트 상태여도 완료 사실을 잃지 않도록
+  // App 레벨에 보관한다.
+  const [completedAssessmentId, setCompletedAssessmentId] = useState<string | null>(null);
   const observer = useObserver();
   useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
   const isAdmin = !!session?.groups.includes("Admin");
@@ -1313,6 +1381,7 @@ function App() {
   const myProfile = session.profile;
   const nav: { id: View; label: string; admin?: boolean }[] = [
     { id: "chat", label: "챗봇" },
+    { id: "report", label: "Assessment 결과" },
     { id: "documents", label: "정책 문서", admin: true },
     { id: "users", label: "사용자 관리", admin: true },
   ];
@@ -1324,16 +1393,17 @@ function App() {
         <span className={`role-chip ${isAdmin ? "admin" : ""}`}>{isAdmin ? "관리자" : "사용자"}</span>
         <nav>
           {nav.filter(n => !n.admin || isAdmin).map(n => <button key={n.id} className={view === n.id ? "active" : ""} onClick={() => setView(n.id)}>{n.label}</button>)}
-          {assessmentId && <button className={view === "report" ? "active" : ""} onClick={() => setView("report")}>Assessment 결과</button>}
         </nav>
         <span className="spacer" />
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
-      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
+      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} completedAssessmentId={completedAssessmentId} onAssessment={id => { setAssessmentId(id); setCompletedAssessmentId(null); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
-      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} obs={observer} />}
+      {view === "report" && (assessmentId
+        ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} />
+        : <div className="panel"><div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div></div>)}
     </div>
   </div>;
 }
