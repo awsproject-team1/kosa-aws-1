@@ -176,6 +176,13 @@ async function exchangeCallback(): Promise<Session | null> {
 async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), Authorization: `Bearer ${token}`, ...init?.headers } });
   if (!res.ok) {
+    // 401은 대개 Cognito access token 만료다. API Gateway authorizer는 우리 오류 형식이 아니라
+    // {"message":"Unauthorized"}를 반환하므로 code를 찾지 못한다. 식별 가능한 문구로 던지고
+    // 전역 이벤트를 쏘아, 어디서 발생했든 App이 세션 만료 배너로 재로그인을 유도하게 한다.
+    if (res.status === 401) {
+      try { window.dispatchEvent(new Event("gov:session-expired")); } catch { /* 무시 */ }
+      throw new Error("SESSION_EXPIRED");
+    }
     const d = await res.json().catch(() => null) as { code?: string; error?: { code?: string } } | null;
     const code = d?.error?.code ?? d?.code;
     throw new Error(code ? `${res.status} ${code}` : `요청 실패 (${res.status})`);
@@ -1359,7 +1366,7 @@ function AssessmentHistoryCard({ history, current, reports, onSelect }: { histor
   </div>;
 }
 
-function ReportPanel({ session, assessmentId, obs, onComplete, onReport, cached, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; onReport: (id: string, rep: Report) => void; cached?: Report | null; isAdmin: boolean }) {
+function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFound, cached, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; onReport: (id: string, rep: Report) => void; onNotFound: (id: string) => void; cached?: Report | null; isAdmin: boolean }) {
   const [rep, setRep] = useState<Report | null>(cached ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -1372,21 +1379,34 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, cached,
     // immutable result per Resource × Rule × Perspective. Poll through the initial 404 window and
     // then keep refreshing until coverage reaches the planned denominator — the Job record is not
     // advanced by the worker, so coverage is the only completion signal the API exposes.
+    //
+    // 단, 새 평가는 수 초 내에 나타난다. 계속 404면 존재하지 않는 평가다(오래된/삭제된 id가
+    // 복원된 경우 등). 무한 폴링하면 화면이 "평가 실행 중"에 갇히므로 연속 404를 제한하고,
+    // 그 뒤에는 실패로 처리해 낡은 id를 정리한다(onNotFound).
     let cancelled = false;
-    setRep(null); setErr(null); setWaiting(true); setAttempt(0);
+    let notFoundStreak = 0;
+    const NOT_FOUND_LIMIT = 20; // 약 1분.
+    setRep(cached ?? null); setErr(null); setWaiting(true); setAttempt(0);
     (async () => {
       for (let i = 0; i < 200 && !cancelled; i++) {
         setAttempt(i + 1);
         try {
           const r = await fetchFullReport(session.accessToken, assessmentId);
           if (cancelled) return;
+          notFoundStreak = 0;
           setRep(r);
           onReport(assessmentId, r);
           if (isComplete(r)) { setWaiting(false); onComplete(assessmentId); return; }
         } catch (e) {
           const msg = (e as Error).message;
-          // Keep polling only while the report is not yet created; surface anything else.
-          if (!msg.includes("404") && !msg.includes("NOT_FOUND")) {
+          if (msg === "SESSION_EXPIRED") { if (!cancelled) { setErr("세션이 만료되었습니다. 상단의 '다시 로그인'을 눌러 주세요."); setWaiting(false); } return; }
+          if (msg.includes("404") || msg.includes("NOT_FOUND")) {
+            notFoundStreak++;
+            if (notFoundStreak >= NOT_FOUND_LIMIT) {
+              if (!cancelled) { setErr("이 평가를 찾을 수 없습니다. 오래되었거나 삭제된 평가일 수 있습니다. 새 평가를 실행해 주세요."); setWaiting(false); onNotFound(assessmentId); }
+              return;
+            }
+          } else {
             if (!cancelled) { setErr(msg); setWaiting(false); }
             return;
           }
@@ -1627,6 +1647,13 @@ function App() {
   // 이번 로그인에서 실행한 평가의 기록과, 이미 읽어 온 결과(완료본은 불변이라 다시 폴링하지 않는다).
   const [history, setHistory] = useState<AssessmentRecord[]>([]);
   const [reports, setReports] = useState<Record<string, Report>>({});
+  // API가 401을 만나면(주로 토큰 만료) 전역 이벤트로 알린다. 세션 만료 배너를 띄워 재로그인을 유도한다.
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    const onExpired = () => setSessionExpired(true);
+    window.addEventListener("gov:session-expired", onExpired);
+    return () => window.removeEventListener("gov:session-expired", onExpired);
+  }, []);
   const observer = useObserver();
   // 토큰 교환은 새 로그인에서만 일어난다(code 파라미터). 그때 이전 로그인의 기록을 비운다.
   useEffect(() => { exchangeCallback().then(s => { if (s) { clearAssessmentStorage(); setSession(s); } }).catch(e => setError((e as Error).message)); }, []);
@@ -1641,6 +1668,12 @@ function App() {
     setHistory(prev => prev.some(r => r.id === id) ? prev : [{ id, at: new Date().toISOString(), ...meta }, ...prev]);
     setAssessmentId(id);
     setCompletedAssessmentId(null);
+  }
+  // 존재하지 않는(404) 평가를 기록·현재선택·캐시에서 지운다. 다음 조회에서 유령 id를 다시 붙잡지 않는다.
+  function forgetAssessment(id: string) {
+    setHistory(prev => prev.filter(r => r.id !== id));
+    setReports(prev => { const n = { ...prev }; delete n[id]; return n; });
+    setAssessmentId(prev => (prev === id ? null : prev));
   }
   const isAdmin = !!session?.groups.includes("Admin");
   useEffect(() => {
@@ -1682,6 +1715,10 @@ function App() {
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
+      {sessionExpired && <p className="alert" style={{ margin: "8px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+        세션이 만료되어 요청이 거부되었습니다(401). 다시 로그인해 주세요.
+        <button onClick={() => void startLogin()}>다시 로그인</button>
+      </p>}
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} completedAssessmentId={completedAssessmentId} onAssessment={id => { recordAssessment(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
@@ -1689,7 +1726,7 @@ function App() {
         <StartAssessmentCard session={session} obs={observer} profileId={myProfile} isAdmin={isAdmin} onAssessment={recordAssessment} />
         <AssessmentHistoryCard history={history} current={assessmentId} reports={reports} onSelect={id => setAssessmentId(id)} />
         {assessmentId
-          ? <ReportPanel key={assessmentId} session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} onReport={(id, rep) => setReports(prev => ({ ...prev, [id]: rep }))} cached={reports[assessmentId]} isAdmin={isAdmin} />
+          ? <ReportPanel key={assessmentId} session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} onReport={(id, rep) => setReports(prev => ({ ...prev, [id]: rep }))} onNotFound={forgetAssessment} cached={reports[assessmentId]} isAdmin={isAdmin} />
           : <div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 위에서 '평가 실행'을 누르거나 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div>}
       </div>}
     </div>
