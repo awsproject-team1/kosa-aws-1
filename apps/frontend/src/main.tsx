@@ -218,9 +218,24 @@ const rounded = (value: number) => Math.round(value);
 /** 준비도 옆에 붙는 한 줄. "판정된 N건"과 "미판정 M건"은 다른 축이다 — 미판정은 근거가 없었거나
  *  사람이 정해야 해서 코드도 모델도 답하지 않은 좌표이고, 점수에는 들어가지 않는다. 이 값이 0이
  *  아니면 그만큼은 "위반"이 아니라 "아직 모름"이므로 읽는 사람이 함께 봐야 한다. */
-const readinessHint = (r: Readiness) => {
+/* 분모가 왜 그 수인지 한 줄에 다 적는다. 미판정(근거 부족·사람 검토)뿐 아니라 실행 오류와 범위 밖도
+ * 점수에서 빠지는데, 그 둘은 백엔드 ReadinessScore에 없으므로 결과에서 세어 넘긴다. */
+type Excluded = { errors: number; outOfScope: number };
+const readinessHint = (r: Readiness, excluded?: Excluded) => {
   const undetermined = r.undetermined_evaluations ?? 0;
-  return `판정 ${r.evaluated_evaluations}건 가중 평균` + (undetermined > 0 ? ` · 미판정 ${undetermined}건 제외` : "");
+  const parts = [`판정 ${r.evaluated_evaluations}건 가중 평균`];
+  if (undetermined > 0) parts.push(`미판정 ${undetermined}`);
+  if (excluded && excluded.errors > 0) parts.push(`실행 오류 ${excluded.errors}`);
+  if (excluded && excluded.outOfScope > 0) parts.push(`범위 밖 ${excluded.outOfScope}`);
+  return parts.length === 1 ? parts[0] : `${parts[0]} · ${parts.slice(1).join(" · ")} 제외`;
+};
+/* 상태 배지. DRIFT의 PASS는 준수가 아니라 "IaC와 AWS 판정이 같다"는 뜻이라 PASS로 보이면 안 된다 —
+ * 둘 다 FAIL이어도 일치하면 DRIFT PASS다. 결과표에서 PASS 비율이 실제보다 높아 보이던 이유다. */
+const statusBadge = (r: ResultRow): { label: string; cls: string } => {
+  if (r.perspective === "DRIFT" && r.status === "PASS") return { label: "일치", cls: "status-drift_match" };
+  if (r.perspective === "DRIFT" && r.status === "FAIL") return { label: "불일치", cls: "status-fail" };
+  if (r.status === "MANUAL_REVIEW" && r.rationale.startsWith("Not yet supported")) return { label: "지원 예정", cls: "status-not_yet_supported" };
+  return { label: r.status, cls: `status-${r.status.toLowerCase()}` };
 };
 
 async function fetchCandidatePage(token: string, sourceId: string, sourceVersion: string, cursor?: string): Promise<CandidatePage> {
@@ -1268,7 +1283,8 @@ const STATUS_GROUPS: { key: string; label: string; match: (r: ResultRow) => bool
   { key: "NOT_YET_SUPPORTED", label: "지원 예정", match: isNotYetSupported, hint: "기술 통제이지만 이 제품의 근거 카탈로그가 아직 읽지 못하는 항목(IAM·KMS·백업·CloudTrail·GuardDuty·SSM 등). 카탈로그가 확장되면 자동 판정으로 옮겨가며, 그때까지 사람이 검토합니다." },
   { key: "INSUFFICIENT_EVIDENCE", label: "근거 부족", match: r => r.status === "INSUFFICIENT_EVIDENCE", hint: "읽은 문서에 판정할 값이 없어 코드가 fail-closed한 좌표. 위반이 아닙니다." },
   { key: "EXECUTION_ERROR", label: "실행 오류", match: r => r.status === "EXECUTION_ERROR", hint: "평가가 실행되지 못한 좌표. rationale에 사유가 적힙니다." },
-  { key: "PASS", label: "PASS", match: r => r.status === "PASS", hint: "판정된 준수." },
+  { key: "PASS", label: "PASS", match: r => r.status === "PASS" && r.perspective !== "DRIFT", hint: "판정된 준수(IaC·AWS 관점). 점수의 분자입니다." },
+  { key: "DRIFT_MATCH", label: "일치", match: r => r.perspective === "DRIFT" && r.status === "PASS", hint: "IaC와 AWS의 판정이 같음 — 준수가 아니라 불일치(drift)가 없다는 뜻입니다. 둘 다 FAIL이어도 일치이며, 점수에는 들어가지 않습니다." },
   { key: "OTHER", label: "기타", match: r => r.status === "OUT_OF_SCOPE", hint: "Rule이 이 리소스에 적용되지 않음." },
 ];
 
@@ -1293,7 +1309,7 @@ function ResultsByStatus({ rep, complete, suppressed, session, obs, isAdmin }: {
       return finding
         ? <FindingCard key={finding.finding_id} finding={finding} suppression={suppressed.get(finding.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />
         : <article key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} className="candidate">
-            <div className="candidate-badges"><span className="badge severity">{r.severity}</span><span className={`badge status-${r.status.toLowerCase()}`}>{r.status}</span><span className="badge">{r.perspective}</span><span className="badge">판정 {r.decided_by === "CODE" ? "코드" : "모델"}</span></div>
+            <div className="candidate-badges"><span className="badge severity">{r.severity}</span><span className={`badge ${statusBadge(r).cls}`}>{statusBadge(r).label}</span><span className="badge">{r.perspective}</span><span className="badge">판정 {r.decided_by === "CODE" ? "코드" : "모델"}</span></div>
             <h3><code>{r.resource_id}</code> · {r.rule_id}@{r.rule_version}</h3>
             <p style={{ margin: "6px 0" }}>{r.rationale}</p>
           </article>;
@@ -1458,19 +1474,23 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFo
   const suppressed = new Map((rep.suppressions ?? []).map(s => [s.finding_id, s]));
   const sorted = [...rep.results].sort((a, b) => a.resource_id.localeCompare(b.resource_id) || a.rule_id.localeCompare(b.rule_id) || a.perspective.localeCompare(b.perspective));
   const segments = rep.segment_readiness ?? [];
+  const excluded: Excluded = { errors: countStatus("EXECUTION_ERROR"), outOfScope: countStatus("OUT_OF_SCOPE") };
+  const scoring = rep.results.filter(r => r.perspective !== "DRIFT" && r.perspective !== "MANUAL");
+  const judgedPass = scoring.filter(r => r.status === "PASS").length;
+  const judgedFail = scoring.filter(r => r.status === "FAIL").length;
 
   return <div className="panel">
     <div className="card"><h2>Assessment 결과 <code>{rep.assessment_id}</code></h2>
       <div className="row">
         <span>실행률 <strong>{rounded(rep.coverage.percentage)}%</strong> ({rep.coverage.completed_evaluations}/{rep.coverage.planned_evaluations}){!complete && <span className="hint"> — 평가 진행 중, 자동 갱신 (조회 {attempt}회)</span>}</span>
-        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rounded(rep.readiness_score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · {readinessHint(rep.readiness_score)}</span>}</span>}
+        {segments.length === 0 && <span>Readiness Score <strong>{rep.readiness_score ? rounded(rep.readiness_score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>{rep.readiness_score && <span className="hint"> / 100 · {readinessHint(rep.readiness_score, excluded)} · PASS {judgedPass} / FAIL {judgedFail}</span>}</span>}
       </div>
       {/* Profile이 여러 원본에 걸치면 점수를 원본별로만 보여준다. 두 준비도를 합친 하나의
           숫자는 어느 기준에 대한 답도 아니며, 한쪽의 미달을 다른 쪽이 가린다. */}
       {segments.length > 0 && <div className="candidate-summary" aria-label="정책 원본별 준비도">
         {segments.map(s => <span key={s.kind}>
           <strong>{s.score ? rounded(s.score.score) : (complete ? "계산 불가" : "계산 대기")}</strong>
-          <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · ${readinessHint(s.score)}` : ""}</small>
+          <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · ${readinessHint(s.score, segments.length === 1 ? excluded : undefined)}` : ""}{s.score && segments.length === 1 ? ` · PASS ${judgedPass} / FAIL ${judgedFail}` : ""}</small>
         </span>)}
       </div>}
       <p className="disclaimer">Readiness Score는 <strong>판정된</strong> 좌표(PASS=100, FAIL=0)의 severity 가중 준수율로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 근거가 부족하거나 사람이 검토해야 하는 좌표(INSUFFICIENT_EVIDENCE·MANUAL_REVIEW)는 <strong>미판정</strong>으로 따로 세며 점수를 깎지 않습니다 — "확인하지 못함"은 "위반"이 아닙니다. 한 Profile이 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
@@ -1493,7 +1513,7 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFo
       <table><thead><tr><th>Resource</th><th>Rule</th><th>관점</th><th>상태</th><th>판정</th><th>관측</th><th>Severity</th></tr></thead>
         <tbody>{sorted.map(r => <tr key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} title={r.rationale}>
           <td><code>{r.resource_id}</code></td><td>{r.rule_id}@{r.rule_version}</td><td>{r.perspective}</td>
-          <td><span className={`badge status-${r.status.toLowerCase()}`}>{r.status}</span></td>
+          <td><span className={`badge ${statusBadge(r).cls}`}>{statusBadge(r).label}</span></td>
           {/* 코드가 선언된 값을 읽어 내린 판정과 모델의 해석은 신뢰도가 다르다. 읽는 사람이 구분해야 한다. */}
           <td>{r.decided_by === "CODE" ? "코드" : "모델"}</td>
           {/* 부분 충족은 점수가 아니라 관측 상세다: "4개 중 3개 충족"이 조치의 목표가 된다. */}
@@ -1616,8 +1636,7 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
   // 그중 "지원 예정"은 검토할 일도 아니고 카탈로그가 넓어질 일이다. 상태 배지와 버튼이 그렇게 말해야 한다.
   const notYetSupported = isNotYetSupported(f);
   const humanReview = f.perspective === "MANUAL";
-  const statusLabel = notYetSupported ? "지원 예정" : f.status;
-  const statusClass = notYetSupported ? "status-not_yet_supported" : `status-${f.status.toLowerCase()}`;
+  const { label: statusLabel, cls: statusClass } = statusBadge(f);
   return <article className="candidate">
     <div className="candidate-badges"><span className="badge severity">{f.severity}</span><span className={`badge ${statusClass}`}>{statusLabel}</span><span className="badge">{humanReview ? "사람 검토" : f.perspective}</span>{!humanReview && <span className="badge">score {f.score}</span>}{suppression && <span className="badge">억제됨 · {suppression.reason}</span>}</div>
     <h3><code>{f.resource_id}</code> · {f.rule_id}@{f.rule_version}</h3>

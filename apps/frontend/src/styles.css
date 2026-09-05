@@ -212,3 +212,6 @@ button.linklike { background: none; border: 0; padding: 0; color: var(--accent);
 .profile-pick { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--muted); }
 .profile-pick select { display: inline-block; width: auto; margin: 0; padding: 4px 8px; font-size: 12px; }
 .badge.status-not_yet_supported { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+/* DRIFT 일치: 준수가 아니라 불일치 없음. PASS의 초록을 쓰지 않는다 */
+.badge.status-drift_match { color: var(--muted); border-color: var(--line); }
