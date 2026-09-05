@@ -23,6 +23,15 @@ IAC + AWS_ACTUAL + DRIFT 세 관점으로 평가된다. authoring이 만드는 R
 경계를 우회하는 방법이 아니다 — bootstrap으로 심은 Rule도 `lifecycle = APPROVED` item으로
 저장되며, 그것이 무엇을 뜻하는지는 운영자가 책임진다.
 
+`baselines/isms-p-2023/`는 **ISMS-P 인증기준 기준선 Registry**다(ADR-0026). 같은 네 파일 모양을
+`load_rule_registry`가 읽고 같은 bootstrap이 게시하지만(`publish_policy_catalog.py --registry
+isms-p-2023`), 내용은 다르다 — 인증기준 101개 항목마다 MANUAL Rule 하나(`ISMSP-x.y.z`)와
+Control 하나(`ISMS-P-x.y.z`), 그리고 그 전부를 `ISMS_P` Segment로 담은
+`profile-isms-p-baseline@v1`. 고객은 ISMS-P를 업로드하지 않고 Profile 게시 때 이 기준선을
+고른다. 손으로 편집하지 않는다: `scripts/build_isms_p_baseline.py`가 로컬 원문에서 결정적으로
+생성하며 `--check`가 커밋본과 대조한다. `sources.json`의 `isms-p-2023` 항목은 `rules/`의 것과
+바이트가 같아야 한다 — 다르면 두 번째 bootstrap이 불변 key 충돌로 fail-closed한다.
+
 `terraform/` is intentionally empty. The WordPress/LAMP demo Terraform lives in a separate
 customer sandbox repository, not in this platform repository, so the apply path is validated
 through the real GitHub App / OIDC / approved-repository boundary (ADR-0021 §1). See

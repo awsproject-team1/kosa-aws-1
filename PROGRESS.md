@@ -1704,3 +1704,29 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     "writer가 쓰는 segment ⊆ reader가 읽는 segment"를 소스에서 파생하는 테스트를 더했다.
   - 실패율 자체는 그대로다. chunk 축소·문서 분할은 열려 있고, 미분류 단위 수가 그 지표가 된다.
     라이브 ISMS-P 재실행 측정은 아직 남아 있다.
+  - **라이브 재실행 측정(2026-09-05, 배포 후, 3회).** chunk 최종 실패율 **19–25%**(13·13·17 / 67),
+    실패한 chunk는 설계대로 미분류로 남고 실행이 계속됐다. 그러나 성공한 50+ chunk가
+    `MAX_REQUIREMENTS_PER_DOCUMENT=150`을 넘겨 chunk 루프 밖의 상한 검사가 실행 전체를 세웠다 —
+    ADR-0025가 없앤 것과 같은 성격의 전부-아니면-전무 게이트가 하나 더 있었다. 이 문서에 대해서는
+    아래 결정(ADR-0026)으로 그 경로 자체를 쓰지 않게 됐고, 상한 게이트의 처리는 열려 있다.
+
+- **ISMS-P는 고객이 올리지 않는다 — 운영자 기준선으로 게시한다 (2026-09-05, ADR-0026).**
+  - 원래 설계가 그랬다: `PolicySourceKind.ISMS_P`, `isms-p-2023` Source, `control/x.y.z` locator,
+    게시 요청의 `baseline`, `ISMS_P` Segment, 원본별 준비도까지 전부 있었다. 없던 것은 **내용**이다 —
+    legacy Registry의 16개 Rule이 ISMS-P 조항 5개를 인용할 뿐 인증기준 101개 항목은 어디에도 없어서,
+    점검표를 고객 문서로 올려 모델 추출에 태웠고 그것이 ADR-0025의 실패였다.
+  - `fixtures/baselines/isms-p-2023/`: 항목마다 MANUAL Rule(`ISMSP-x.y.z`)·Control(`ISMS-P-x.y.z`),
+    `profile-isms-p-baseline@v1`(101 Rule, `ISMS_P` Segment 1). `scripts/build_isms_p_baseline.py`가
+    로컬 원문에서 결정적으로 생성하고 `--check`가 커밋본과 대조한다(원문 없는 CI는 건너뜀). 항목
+    번호·항목명·분야명·digest만 싣는다(ADR-0004). legacy `fixtures/rules/`에 섞지 않았다 — 그
+    디렉터리는 "legacy Rule 16개"를 계약으로 고정한 테스트가 있다.
+  - `publish_policy_catalog.py --registry {legacy|isms-p-2023}`, `policy_source_digest.py`는 두
+    Registry를 함께 검증. 발췌 digest 106개 전부 일치. (로컬 xlsx의 **파일 전체** digest는 커밋된
+    `ab99…`와 다르다 — 재저장된 파일이며 이 작업 이전부터 그랬다. 라이브 `POLICY_SOURCE` item이
+    `ab99…`이므로 지금 바꾸면 bootstrap이 fail-closed한다. 별도 결정.)
+  - **sandbox에 게시했다.** `kosa-sandbox`에 103 item 신규, 재실행 0 신규(멱등). 라이브 확인:
+    `POLICY_PROFILE#profile-isms-p-baseline` current `v1`, rule_references 101, segments 1,
+    `RULE#ISMSP-*` 101. 콘솔의 기준선 select에 바로 나타난다.
+  - 평가에서 101개 Rule은 `MANUAL_REVIEW` 좌표가 되어 준비도 평균에서 빠진다(ADR-0024 §2). 기준선은
+    점수가 아니라 심사원이 검토할 좌표를 만든다. Bedrock 호출 0회.
+  - 검증: unit 1533 / contract 248 / integration 23 / security 119, ruff, `--check` OK.

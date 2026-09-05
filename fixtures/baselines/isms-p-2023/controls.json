@@ -1,0 +1,1618 @@
+[
+  {
+    "control_id": "ISMS-P-1.1.1",
+    "title": "경영진의 참여",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.1",
+      "content_sha256": "10340c347dc622de335207881208f5e481715b38c854c1b0ec7a0a39ff5aea0b"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.1.2",
+    "title": "최고책임자의 지정",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.2",
+      "content_sha256": "f3377b188aece0dbca33fdb8bf5a2573eaa9836109371d0b010ddb02f922497e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.1.3",
+    "title": "조직 구성",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.3",
+      "content_sha256": "4be4fa13e8a664957a7fdb1bf1280e6f535242127756f9ea8ab90868e5f4234f"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.1.4",
+    "title": "범위 설정",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.4",
+      "content_sha256": "6c71a7eec7f9b4992dd9716e03347c574be2b30a3c94c4f41077ad65f0fd0afe"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.1.5",
+    "title": "정책 수립",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.5",
+      "content_sha256": "df55441c932f882ee588ad6449779e9c3167bdb0998e556dfc46262b8e1cf65e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.1.6",
+    "title": "자원 할당",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.1.6",
+      "content_sha256": "823bef983ca46e44394d1ea82d4083396947192783f760bf4e54190b7e24002a"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.1.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.2.1",
+    "title": "정보자산 식별",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.2.1",
+      "content_sha256": "98a972c83decdb8ae4c9d52c1e02494cb4e0f5edd1f02a8e2f11f7f16236bc6e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.2.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.2.2",
+    "title": "현황 및 흐름분석",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.2.2",
+      "content_sha256": "34ab4e10992c6cb716fb8183d1d694a4444caf05146648cd40d23f4f59803077"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.2.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.2.3",
+    "title": "위험 평가",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.2.3",
+      "content_sha256": "5bb9a85abadc3718434498807b2c80e83e1f6cb8acfd39ded5d15e38233bc0a0"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.2.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.2.4",
+    "title": "보호대책 선정",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.2.4",
+      "content_sha256": "56c6af55c579e29e706bbaaba013dea0bbee4381794723c684855e29a8e653d7"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.2.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.3.1",
+    "title": "보호대책 구현",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.3.1",
+      "content_sha256": "49dd27e0559fd52ad4a1f15270e5a2a5af31f3d238037d76c9e093f34edc3bc1"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.3.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.3.2",
+    "title": "보호대책 공유",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.3.2",
+      "content_sha256": "5811dae2ca9295bdfef7a9233bdaf6fc61668010be43ef31003276d4011db5ed"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.3.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.3.3",
+    "title": "운영현황 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.3.3",
+      "content_sha256": "55ec24498036a479e3e45b0abc526511e7fdd8cca85251093eeef1dcff56783d"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.3.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.4.1",
+    "title": "법적 요구사항 준수 검토",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.4.1",
+      "content_sha256": "a0f41be5a124806ba07a3ede4a00344f43b80e1df700de8ef7931647649a1e4e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.4.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.4.2",
+    "title": "관리체계 점검",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.4.2",
+      "content_sha256": "ba87591f566ffdbe473a5ad3090a774d5572871dadbde547b1b414758b9d30c1"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.4.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-1.4.3",
+    "title": "관리체계 개선",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/1.4.3",
+      "content_sha256": "eb2ebe9be02d84222ca887c2b1aa20ed3aaa35e57253de88370afe516c3eba3a"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-1.4.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.1.1",
+    "title": "정책의 유지관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.1.1",
+      "content_sha256": "5b109539ca390209c477c182e548a500be151ae0bb3ab6f6bb9a67ca5a6537eb"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.1.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.1.2",
+    "title": "조직의 유지관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.1.2",
+      "content_sha256": "10aa472930f85c1492a80d2603ee9cfbb523a1092a579d15f0313de6bacc08ea"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.1.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.1.3",
+    "title": "정보자산 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.1.3",
+      "content_sha256": "951da173cd345baa0cf225e6ecc5044d4312d45ee499872ad8e2215f43df8d55"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.1.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.1",
+    "title": "주요 직무자 지정 및 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.1",
+      "content_sha256": "6383f4484163bd9803ea1a963d5ea1dec6a4b6a99ee653c80c12a4f8454fdbf1"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.2",
+    "title": "직무 분리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.2",
+      "content_sha256": "a83d3a82f84d69c1bd3d2b3a49fbe7b836a08a08aeb0b5bc309b91b02370f436"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.3",
+    "title": "보안 서약",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.3",
+      "content_sha256": "77ee6e369f66de33b9c5cdb1f8bcd4f6d587644c57efebb9e217d4b90040616e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.4",
+    "title": "인식제고 및 교육훈련",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.4",
+      "content_sha256": "fe18227fc81edf8cba8a1ef06d99ef8b328787ba18932359b3eb9d385e990271"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.5",
+    "title": "퇴직 및 직무변경 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.5",
+      "content_sha256": "7d12ecf071002bc85ea02ed22175a5c813b53db8dbd36957028ad3d1929220c0"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.2.6",
+    "title": "보안 위반 시 조치",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.2.6",
+      "content_sha256": "b9bd10c3b0ab1702341c086dee64ac430c1eade289f8e89d417d0e64591f6ccc"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.2.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.3.1",
+    "title": "외부자 현황 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.3.1",
+      "content_sha256": "e7b153194501c9e4ba744b5d2976374c956b1142659ffa2ee4a8ea3ca28785ed"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.3.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.3.2",
+    "title": "외부자 계약 시 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.3.2",
+      "content_sha256": "15a18fb35773bddcf62d50c03a7fdc61707c81055ce62af3d186fcaea0cdb03b"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.3.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.3.3",
+    "title": "외부자 보안 이행 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.3.3",
+      "content_sha256": "bdd728e19a5d288ccbb81b7daab351467ec591b57cd4c9510b3889f7c12887f6"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.3.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.3.4",
+    "title": "외부자 계약 변경 및 만료 시 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.3.4",
+      "content_sha256": "fd3cba729a3c7926086bc5142073a32f49e020ebf102d3358427538761ea91c4"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.3.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.1",
+    "title": "보호구역 지정",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.1",
+      "content_sha256": "6a59f81e5d6bf3e6864962107be4d5f7cf9705b530ce2b6077ae1bd4885d28c1"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.2",
+    "title": "출입통제",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.2",
+      "content_sha256": "707d25e3d9024de43062959c479749e6783130a9bdc27bb8811ed0fe27112ca9"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.3",
+    "title": "정보시스템 보호",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.3",
+      "content_sha256": "a5728c6628784afd2db89213ef6bf80682c70a3b064a347fcde66782fdcc9f9f"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.4",
+    "title": "보호설비 운영",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.4",
+      "content_sha256": "69b049cb0ece09101deb8dba630f304c61878671301977a1720316cadf06324b"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.5",
+    "title": "보호구역 내 작업",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.5",
+      "content_sha256": "84ed3fb0bf44dd58ea9925a44429799c040b031f4b673de6d511980bc3aad990"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.6",
+    "title": "반출입 기기 통제",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.6",
+      "content_sha256": "0428d91d8d09680f786839c729a41bc4e70f9168947d547d97946589d8b4297f"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.4.7",
+    "title": "업무환경 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.4.7",
+      "content_sha256": "c4ddca520ef7431085f77a73db5a5790ace09d9ce71a61ae2c196074ffd93d83"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.4.7",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.1",
+    "title": "사용자 계정 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.1",
+      "content_sha256": "b9cfa06ef776a3120ef883d3a1a4bde36ba251e7fbb8599e4e365c50ae77b99d"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.2",
+    "title": "사용자 식별",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.2",
+      "content_sha256": "8b249f4e68c1eaa1e7d7a80a5af67379f4f6ebfc6894f5513da0d7385468a9a7"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.3",
+    "title": "사용자 인증",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.3",
+      "content_sha256": "ca81318a70ac51e26ddcd9713085bf85a9e0e080d23a1435d94b77be1dffbb5b"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.4",
+    "title": "비밀번호 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.4",
+      "content_sha256": "66b6f62f99aa5d7e4c5f7fe13ee45b600e82f4e7663523b1f48ca40ab5c5b45e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.5",
+    "title": "특수 계정 및 권한 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.5",
+      "content_sha256": "3537ec8f8f3acdd08b1f7301df701c7512c5140888bf428940fef5d2c5986eff"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.5.6",
+    "title": "접근권한 검토",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.5.6",
+      "content_sha256": "87408aabf17c0fb7c36396c8da2d477b5ce850fb8bfbf94644009882f5dd59e8"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.5.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.1",
+    "title": "네트워크 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.1",
+      "content_sha256": "d36f4b5af67edf844db13b93b9eeb3ce39d075e44d989f3816e24d1adc7ee844"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.2",
+    "title": "정보시스템 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.2",
+      "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.3",
+    "title": "응용프로그램 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.3",
+      "content_sha256": "dffae663d945e049d46eb7708d215268b7ea50c4f082705020333c9ad8b92256"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.4",
+    "title": "데이터베이스 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.4",
+      "content_sha256": "56a844efe3298b787158dfa51d98fcf8985c1825427b7e44febce72ae7355efc"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.5",
+    "title": "무선 네트워크 접근",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.5",
+      "content_sha256": "601629b0848856a7f34cff46c4a6b49fcf92bb1d8f49f4d847c13f1b77afa06f"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.6",
+    "title": "원격접근 통제",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.6",
+      "content_sha256": "fee1891a48dfe7ca4341e9bdc7e5edaf4807b135a29d78197e8a3495ea25fc51"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.6.7",
+    "title": "인터넷 접속 통제",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.6.7",
+      "content_sha256": "8e6416f2403fe2ee4e273e4c917cd52dd701e3f311306de686d2c6a51450f74e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.6.7",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.7.1",
+    "title": "암호정책 적용",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.7.1",
+      "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.7.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.7.2",
+    "title": "암호키 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.7.2",
+      "content_sha256": "5a30aad603d359fb307f5c72bc7a0c62bd258d815c2a8bdecaf629268132b44e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.7.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.1",
+    "title": "보안 요구사항 정의",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.1",
+      "content_sha256": "5b33f5a131eafbf601972bb780ae2f0a963a6a383e4af2f14042ae1e7c7a83b9"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.2",
+    "title": "보안 요구사항 검토 및 시험",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.2",
+      "content_sha256": "be56c03e78b191361683d816632dc1fd72e73b8016ad8a77753ff68e6b1e5a07"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.3",
+    "title": "시험과 운영 환경 분리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.3",
+      "content_sha256": "327673eca8b740a5548d4a34089cbc13007d064967b3c4180fe6ac0429d2d2b4"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.4",
+    "title": "시험 데이터 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.4",
+      "content_sha256": "ee1c5e32d7984c2c6fe2856a86c9a1dd77d2427e4993454b24762b2ad926d5ad"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.5",
+    "title": "소스 프로그램 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.5",
+      "content_sha256": "4c21d15b95e2bdf799e2886da2cfe3930a115eb7bba5b496432484333388524a"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.8.6",
+    "title": "운영환경 이관",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.8.6",
+      "content_sha256": "4e6c2fb96626423baad3ef17ab44b56cd3f8f41f69e61eacb91662c92170e89e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.8.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.1",
+    "title": "변경관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.1",
+      "content_sha256": "72dd0e764b6624bd59d756da1ef1359c4c71d3d127a7f89ce0d0b54277f07791"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.2",
+    "title": "성능 및 장애관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.2",
+      "content_sha256": "d1df4f74582a997bb0df7d467fd4631866972f566a2c8fd8ad8da8cf7e0bc5de"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.3",
+    "title": "백업 및 복구관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.3",
+      "content_sha256": "e80ef370e5fc26c183b327cd32ffa071e1906695e2b1c660acd920747786c1fc"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.4",
+    "title": "로그 및 접속기록 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.4",
+      "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.5",
+    "title": "로그 및 접속기록 점검",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.5",
+      "content_sha256": "3bbbb55c83652996c718465a7c7117f7b97990f33bcc38e49f0b6f993cef5907"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.6",
+    "title": "시간 동기화",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.6",
+      "content_sha256": "f8103645b2da6ae968cba507c8d4009182c6f7972a3264a6c94f031abecc44a1"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.9.7",
+    "title": "정보자산의 재사용 및 폐기",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.9.7",
+      "content_sha256": "ea8dc0e0a039866cd16207bc25b90517decd9159c065e7257100876c2b82786e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.9.7",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.1",
+    "title": "보안시스템 운영",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.1",
+      "content_sha256": "6091fab9b94625321bc8bb8c371f9ae0dc0e12f5afbae5f264decbe5b0bf85af"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.2",
+    "title": "클라우드 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.2",
+      "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.3",
+    "title": "공개서버 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.3",
+      "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.4",
+    "title": "전자거래 및 핀테크 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.4",
+      "content_sha256": "3c3deac950581ffe7c34e9a119e5232d6797b87da70ae40dbac358abb726affa"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.5",
+    "title": "정보전송 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.5",
+      "content_sha256": "e4728469a76a82e25fd61aabf2c5e6dfbf1b6fe1a5e3e4332cd539bdc0df0740"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.6",
+    "title": "업무용 단말기기 보안",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.6",
+      "content_sha256": "5ccb02b9277b5259a194c52572e7f2cd45dc7a6975b40d4f739be0a55191ad3a"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.7",
+    "title": "보조저장매체 관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.7",
+      "content_sha256": "1cee2b53670bc43151bbc7b1ef65c3fd14957a5ebfce1e56a0287d2cf0081b78"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.7",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.8",
+    "title": "패치관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.8",
+      "content_sha256": "23196115f3969d1b479ae79b7c1f8ad2c43c7a732ac5448363b41780dbcc5217"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.8",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.10.9",
+    "title": "악성코드 통제",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.10.9",
+      "content_sha256": "f358ee842d58631efc8d1379adadbc1ca01132f17ffac8aed13a2fa9205713ec"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.10.9",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.11.1",
+    "title": "사고 예방 및 대응체계 구축",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.11.1",
+      "content_sha256": "e7bec8645338cd92437c86a150d664769fbc53da9d21ff7a40173abb8b385799"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.11.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.11.2",
+    "title": "취약점 점검 및 조치",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.11.2",
+      "content_sha256": "33d4453c2679c5e9a5740b63bcda6d8d6ea520d7b9865d20ddcbf958396a4e2e"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.11.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.11.3",
+    "title": "이상행위 분석 및 모니터링",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.11.3",
+      "content_sha256": "e086d2c0c042442981e58a3b7f70864973496ff98458c978676e3490af5c8685"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.11.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.11.4",
+    "title": "사고 대응 훈련 및 개선",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.11.4",
+      "content_sha256": "f12e55dbb6c91cbc717dc41bb01434af8b8e2ebd989633507f65a4f17569a22d"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.11.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.11.5",
+    "title": "사고 대응 및 복구",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.11.5",
+      "content_sha256": "237297caa1743b24f54829d9c2738195b35f7d170bf794dcb3d0b144cddf06eb"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.11.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.12.1",
+    "title": "재해∙재난 대비 안전조치",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.12.1",
+      "content_sha256": "af283841f5c0d8bceab92da01a312b4b757d5dc0ec36023c328ae4f99f2021d3"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.12.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-2.12.2",
+    "title": "재해 복구 시험 및 개선",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/2.12.2",
+      "content_sha256": "7f0f528d2ae4821c1869036bc7f7b3342a749b9623092becbf9c45da0314d9e0"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-2.12.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.1",
+    "title": "개인정보 수집∙이용",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.1",
+      "content_sha256": "1862a2d956da3a9564fcdde000e99b577da6eceea1faac179aa162b91aa80d46"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.2",
+    "title": "개인정보 수집 제한",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.2",
+      "content_sha256": "ca0c82f7cb5949201c5f688b9ef2416817c91421ca8a189d36184960a46ab664"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.3",
+    "title": "주민등록번호 처리 제한",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.3",
+      "content_sha256": "ef32d824883090adf04bb54479fa12b010d0225f205135645762d156c165b5d3"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.4",
+    "title": "민감정보 및 고유식별정보의 처리 제한",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.4",
+      "content_sha256": "e39c1db1b3a13cb4ed6cac7602f4bd1c19ee8ef0fa8e295e0413d924cc25f376"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.5",
+    "title": "개인정보 간접수집",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.5",
+      "content_sha256": "0a3dbc9573eb49d98d47d113a35ae678c301af6fbee3b82f4f43c8184aab76f2"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.6",
+    "title": "영상정보처리기기 설치∙운영",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.6",
+      "content_sha256": "a97640ac34012e8f4561bcab69545cea1dbbe12dc8caf38b04619e087792f996"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.6",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.1.7",
+    "title": "마케팅 목적의 개인정보 수집∙이용",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.1.7",
+      "content_sha256": "75791dbdb66c92418bdf09d3edadcf725db60beb4f8a499786411f4b6df67d5a"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.1.7",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.2.1",
+    "title": "개인정보 현황관리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.2.1",
+      "content_sha256": "8420bb98d9c5c52b05857d8bfee4a833eaba45a49298dff7fd197a0a61aa6c8c"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.2.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.2.2",
+    "title": "개인정보 품질보장",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.2.2",
+      "content_sha256": "cc12f378b23997429e8ed253834bc4b4e663357c19ec2de467e8dd27ae020673"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.2.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.2.3",
+    "title": "이용자 단말기 접근 보호",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.2.3",
+      "content_sha256": "06635fb64eb09829f5bcf8ed402e3b4b89c4ba39c4b00ad1333646e88141c88b"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.2.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.2.4",
+    "title": "개인정보 목적 외 이용 및 제공",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.2.4",
+      "content_sha256": "9b57568c546ad68e79ad54b565b40924081064f868b68a3a88af8e24d5e330a9"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.2.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.2.5",
+    "title": "가명정보 처리",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.2.5",
+      "content_sha256": "5251e9476d3d24606736e9d7b6439fa30a442d896bf599bfcd3ab94ae5fcfb35"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.2.5",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.3.1",
+    "title": "개인정보 제3자 제공",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.3.1",
+      "content_sha256": "041b5ad5766271191ba086d7753eb5fd57de6ec2e36f66c641930a0b9898aa45"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.3.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.3.2",
+    "title": "개인정보 처리 업무 위탁",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.3.2",
+      "content_sha256": "d050823ebf7d8f7835e9ad6bd26bd531c6cf2cf7be6919dc65303612c390c698"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.3.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.3.3",
+    "title": "영업의 양도 등에 따른 개인정보 이전",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.3.3",
+      "content_sha256": "084e6f3baa0790116898afe471765f2c4a43b1c80c177b244cf9911fddd123ea"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.3.3",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.3.4",
+    "title": "개인정보 국외이전",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.3.4",
+      "content_sha256": "f86967a3f3df0c17bc83b1a64d2af907f022dfe0417cfbfe66d1d450ffed155c"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.3.4",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.4.1",
+    "title": "개인정보 파기",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.4.1",
+      "content_sha256": "a31f9e3d72852ad53a99c35bcf72e02d82877d0ff6bc374a8588707f598c1116"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.4.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.4.2",
+    "title": "처리목적 달성 후 보유 시 조치",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.4.2",
+      "content_sha256": "e6a3be28adfe8ee462dbd06f2b8c46f1479e1d6c563d351514f6ca3610a4a1fb"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.4.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.5.1",
+    "title": "개인정보 처리방침 공개",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.5.1",
+      "content_sha256": "1887caf7ebe8b2995c27bf12a9748a63dab837b3cd82361ccfd6b9f0881f6a71"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.5.1",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.5.2",
+    "title": "정보주체 권리보장",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.5.2",
+      "content_sha256": "87ea03b025fd8a95318ef350f5bdccc42efbf9068cc771f3ff1dd33b7618aaa2"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.5.2",
+        "version": "2023-10-31"
+      }
+    ]
+  },
+  {
+    "control_id": "ISMS-P-3.5.3",
+    "title": "정보주체에 대한 통지",
+    "source_reference": {
+      "source_id": "isms-p-2023",
+      "source_version": "2023-10-31",
+      "locator": "control/3.5.3",
+      "content_sha256": "a5632e46521b1f15cc51a6b3efc39e6e698ec0fff34260addc5a69fe46831278"
+    },
+    "rule_references": [
+      {
+        "rule_id": "ISMSP-3.5.3",
+        "version": "2023-10-31"
+      }
+    ]
+  }
+]

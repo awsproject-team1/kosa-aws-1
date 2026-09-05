@@ -259,6 +259,14 @@ sanitized gate result before customer deployment.
    customer-approved protected operator/CI identity with exact-table
    `GetItem`/`PutItem`; the deployment and CloudFormation execution roles must
    not be broadened or reused for this step. Stop if an immutable key differs.
+
+   Then publish the ISMS-P certification baseline the same way, with
+   `--registry isms-p-2023` (ADR-0026). It writes 101 MANUAL rules and
+   `profile-isms-p-baseline@v1` (104 items, one of which — the `isms-p-2023`
+   source — already exists from the legacy registry and must match
+   byte-for-byte). Customers never upload the standard; reviewers pick this
+   profile as the `baseline` when publishing their own Profile. The command is
+   idempotent: a second run reports every item as already matched.
 6. Create the controlled Cognito `User` as described in
    [M1-AUTH-FRONTEND-TEST.md](M1-AUTH-FRONTEND-TEST.md).
 7. In the SPA, log in and submit the configured repository ID and policy profile.

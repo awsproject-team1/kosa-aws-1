@@ -56,10 +56,10 @@ def _write_registry(directory: Path, sources: list[dict[str, object]]) -> None:
 
 class RegistryReferenceKeyTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._original_registry_dir = digest_tool.REGISTRY_DIR
+        self._original_registry_dirs = digest_tool.REGISTRY_DIRS
 
     def tearDown(self) -> None:
-        digest_tool.REGISTRY_DIR = self._original_registry_dir
+        digest_tool.REGISTRY_DIRS = self._original_registry_dirs
 
     def test_keeps_two_versions_of_the_same_source_apart(self) -> None:
         """같은 Source의 구·신 version이 공존해도 한쪽이 덮어써지면 안 된다."""
@@ -86,7 +86,7 @@ class RegistryReferenceKeyTest(unittest.TestCase):
                     },
                 ],
             )
-            digest_tool.REGISTRY_DIR = directory
+            digest_tool.REGISTRY_DIRS = (directory,)
 
             source_digests, references = digest_tool._registry_references()
 
@@ -113,7 +113,7 @@ class RegistryReferenceKeyTest(unittest.TestCase):
                 "content_sha256": "a" * 64,
             }
             _write_registry(directory, [source, dict(source)])
-            digest_tool.REGISTRY_DIR = directory
+            digest_tool.REGISTRY_DIRS = (directory,)
 
             with self.assertRaisesRegex(ValueError, "duplicate policy source"):
                 digest_tool._registry_references()

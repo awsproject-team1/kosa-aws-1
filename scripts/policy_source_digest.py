@@ -25,6 +25,10 @@ from xml.etree import ElementTree
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLICIES_LOCAL = REPO_ROOT / "policies-local"
 REGISTRY_DIR = REPO_ROOT / "fixtures" / "rules"
+#: 검증 대상 Registry 전부. ISMS-P 기준선은 별도 디렉터리다 — legacy Registry는 세 관점으로
+#: 평가되는 legacy Rule만 담는다는 계약이 있고(`fixtures/README.md`), 기준선의 MANUAL Rule을 거기
+#: 섞으면 그 계약과 그것을 고정한 테스트가 함께 깨진다.
+REGISTRY_DIRS = (REGISTRY_DIR, REPO_ROOT / "fixtures" / "baselines" / "isms-p-2023")
 SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 # (source_id, source_version) -> 로컬 원문 파일명. 원문 자체는 저장소에 없다.
@@ -178,14 +182,26 @@ def _xlsx_rows(path: Path) -> list[list[str]]:
 
 
 def _registry_references() -> tuple[dict[tuple[str, str], str], list[tuple[str, str, str, str]]]:
-    """Return committed digests keyed by (source_id, version) plus pinned references."""
-    sources = json.loads((REGISTRY_DIR / "sources.json").read_text(encoding="utf-8"))
+    """Return committed digests keyed by (source_id, version) plus pinned references.
+
+    두 Registry(legacy `fixtures/rules/`, ISMS-P 기준선 `fixtures/baselines/isms-p-2023/`)를 함께
+    읽는다. 같은 Source가 양쪽에 선언될 수 있으며(기준선은 legacy의 `isms-p-2023` 항목을 그대로
+    복사한다), 그때 digest가 다르면 bootstrap이 fail-closed할 내용이므로 여기서도 거부한다.
+    """
     source_digests: dict[tuple[str, str], str] = {}
-    for entry in sources:
-        key = (entry["source_id"], entry["version"])
-        if key in source_digests:
-            raise ValueError(f"duplicate policy source {key[0]}@{key[1]} in sources.json")
-        source_digests[key] = entry["content_sha256"]
+    for directory in REGISTRY_DIRS:
+        sources = json.loads((directory / "sources.json").read_text(encoding="utf-8"))
+        seen_here: set[tuple[str, str]] = set()
+        for entry in sources:
+            key = (entry["source_id"], entry["version"])
+            if key in seen_here:
+                raise ValueError(f"duplicate policy source {key[0]}@{key[1]} in sources.json")
+            seen_here.add(key)
+            committed = source_digests.setdefault(key, entry["content_sha256"])
+            if committed != entry["content_sha256"]:
+                raise ValueError(
+                    f"policy source {key[0]}@{key[1]} is declared with different digests"
+                )
 
     references: list[tuple[str, str, str, str]] = []
 
@@ -199,12 +215,13 @@ def _registry_references() -> tuple[dict[tuple[str, str], str], list[tuple[str, 
             )
         )
 
-    for rule_file in sorted(REGISTRY_DIR.glob("rules.*.json")):
-        for rule in json.loads(rule_file.read_text(encoding="utf-8")):
-            for reference in rule["source_references"]:
-                add(reference)
-    for control in json.loads((REGISTRY_DIR / "controls.json").read_text(encoding="utf-8")):
-        add(control["source_reference"])
+    for directory in REGISTRY_DIRS:
+        for rule_file in sorted(directory.glob("rules.*.json")):
+            for rule in json.loads(rule_file.read_text(encoding="utf-8")):
+                for reference in rule["source_references"]:
+                    add(reference)
+        for control in json.loads((directory / "controls.json").read_text(encoding="utf-8")):
+            add(control["source_reference"])
     return source_digests, sorted(set(references))
 
 

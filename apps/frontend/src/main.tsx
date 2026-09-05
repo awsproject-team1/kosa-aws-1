@@ -842,6 +842,7 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         </label>
         <button disabled={cart.length === 0 && !baselineId} onClick={() => void publishCart()}>Profile 게시</button>
       </div>
+      <p className="hint">ISMS-P 인증기준은 업로드하지 않습니다. 운영자가 게시한 <code>profile-isms-p-baseline</code>(101개 항목, 사람 검토 좌표)을 기준선으로 고르면 문서 추출 없이 Profile에 포함됩니다.</p>
       {published.length === 0 && <p className="hint">게시된 기준선 Profile이 없습니다. 운영자 bootstrap이 Registry를 이 고객 파티션에 게시하면 여기에 나타납니다.</p>}
     </div>
 

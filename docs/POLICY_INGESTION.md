@@ -312,6 +312,16 @@ Rule이 인용한 Source의 승인 record로 판정하므로 문서 수와 무�
 사람의 결정은 그대로 남는다. 기준선을 넣을지는 `PUBLISH_POLICY_PROFILE` 권한을 가진 사람이
 게시 요청에서 명시적으로 고른다. 고를 대상은 `GET /policy-profiles`가 돌려준다.
 
+**ISMS-P 인증기준은 그 기준선이다 — 고객이 올리는 문서가 아니다** (2026-09-05, ADR-0026).
+`fixtures/baselines/isms-p-2023/`가 인증기준 101개 항목마다 MANUAL Rule 하나(`ISMSP-x.y.z`)를
+담고, `profile-isms-p-baseline@v1`이 그 전부를 `ISMS_P` Segment로 묶는다. 운영자가
+`scripts/publish_policy_catalog.py --registry isms-p-2023`로 고객 파티션에 게시하면 그 Profile이
+`GET /policy-profiles`에 나타나고, 리뷰어는 사내 문서의 승인 Rule과 함께 `baseline`으로 고른다.
+이 경로에는 모델 호출이 없다. 인증기준은 고객마다 다시 추출할 이유가 없고, 확률적 추출 경로에
+태우면 고객마다 다른 후보 집합이 나온다(같은 문서를 업로드했을 때 실제로 그랬다 — ADR-0025).
+평가에서 이 101개 Rule은 `MANUAL_REVIEW` 좌표가 되어 준비도 평균에서 빠지고 미판정으로
+세어진다: 기준선은 점수를 만드는 것이 아니라 심사원이 검토할 좌표를 만든다.
+
 게시된 Profile은 `segments`에 원본 구분을 기록한다. 보고 단계는 그것으로 준비도를 사내 정책과
 ISMS-P로 나눈다 — **두 점수를 하나로 합치지 않는다**(`docs/CONTRACTS.md`,
 `SegmentReadinessScore`). 모든 Rule의 모든 인용 Source를 이름 붙일 수 있을 때만 Segment를
