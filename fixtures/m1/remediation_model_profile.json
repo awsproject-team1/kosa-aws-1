@@ -1,8 +1,8 @@
 {
-  "model_profile_id": "remediation-nova-lite-m1-v1",
+  "model_profile_id": "remediation-claude-sonnet-4-5-v1",
   "role": "REMEDIATION",
   "region": "us-east-1",
-  "model_id": "amazon.nova-lite-v1:0",
+  "model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "prompt_version": "remediation-terraform-v1",
   "rubric_version": "remediation-terraform-v1",
   "golden_dataset_version": "remediation-terraform-v1"

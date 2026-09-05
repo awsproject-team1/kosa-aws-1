@@ -20,6 +20,7 @@ def build_remediation_context(
     finding: Finding,
     snapshot: IaCSnapshot,
     results: Iterable[EvaluationResult],
+    source_assessment_id: str | None = None,
 ) -> RemediationContext:
     """Validate one evidence set without making a remediation action decision.
 
@@ -51,6 +52,7 @@ def build_remediation_context(
         finding=finding,
         snapshot=snapshot,
         evidence_references=evidence,
+        source_assessment_id=source_assessment_id,
     )
 
 

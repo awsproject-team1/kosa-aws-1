@@ -83,6 +83,7 @@ class DynamoDbRemediationContextReader:
                 finding=finding,
                 snapshot=snapshot,
                 results=tuple(results.values()),
+                source_assessment_id=assessment_id,
             )
         except (TypeError, ValueError) as error:
             raise StoredDataError("stored remediation evidence is invalid") from error
