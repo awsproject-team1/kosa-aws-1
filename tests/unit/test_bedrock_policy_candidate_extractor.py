@@ -17,17 +17,14 @@ from apps.backend.policy.authoring import (
 from apps.backend.policy.authoring.bedrock_extractor import (
     MAX_REQUIREMENTS_PER_CHUNK,
     PROMPT_VERSION,
+    ChunkAccountingError,
     PoisonedResponseError,
     _catalog_prompt_view,
     _chunks,
     _redacted,
 )
 from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
-from packages.contracts import (
-    ModelProfile,
-    ModelProfileRole,
-    UnclassifiedReason,
-)
+from packages.contracts import ModelProfile, ModelProfileRole
 from tests.authoring_fixtures import (
     UNIT_TEXTS,
     normalized_artifact_bytes,
@@ -124,34 +121,7 @@ def _extract(payload: object, *, complete: bool = True, **kwargs: object):
         model_profile=AUTHORING_PROFILE,
         **kwargs,  # type: ignore[arg-type]
     )
-    outcome = extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
-    return outcome.requirements, outcome.unclassified, client
-
-
-ALL_LOCATORS = tuple(locator for locator, _kind, _text in UNIT_TEXTS)
-
-
-def _refused(
-    case: unittest.TestCase,
-    payload: object,
-    *,
-    message: str,
-    reason: UnclassifiedReason = UnclassifiedReason.MODEL_RESPONSE_INVALID,
-    **kwargs: object,
-) -> None:
-    """The chunk gate still refuses the response; the document records the refusal.
-
-    게이트는 그대로다 — 거부된 응답에서 요구사항이 하나도 나오지 않는다. 달라진 것은 그
-    거부가 문서 전체를 예외로 끝내는 대신 **보이는 미분류**로 남는다는 것뿐이다. 조용한
-    유실이 아니라는 것이 요점이므로, 사유가 로그에 남는 것까지 함께 확인한다.
-    """
-    with case.assertLogs("governance.authoring", level="WARNING") as logs:
-        requirements, unclassified, _client = _extract(payload, **kwargs)  # type: ignore[arg-type]
-
-    case.assertEqual(requirements, ())
-    case.assertEqual([entry.locators for entry in unclassified], [ALL_LOCATORS])
-    case.assertEqual([entry.reason for entry in unclassified], [reason])
-    case.assertRegex("\n".join(logs.output), message)
+    return extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG), client
 
 
 class ApprovedProfileTest(unittest.TestCase):
@@ -194,7 +164,7 @@ class ApprovedProfileTest(unittest.TestCase):
 
 class RequestTest(unittest.TestCase):
     def test_the_request_is_deterministic_and_temperature_zero(self) -> None:
-        _requirements, _unclassified, client = _extract({"requirements": []})
+        _requirements, client = _extract({"requirements": []})
 
         request = client.calls[0]
         self.assertEqual(request["inferenceConfig"], {"temperature": 0, "maxTokens": 8192})
@@ -221,7 +191,7 @@ class RequestTest(unittest.TestCase):
 
 class ResponseGateTest(unittest.TestCase):
     def test_a_valid_response_becomes_one_requirement(self) -> None:
-        requirements, _unclassified, _client = _extract({"requirements": [VALID_REQUIREMENT]})
+        requirements, _client = _extract({"requirements": [VALID_REQUIREMENT]})
 
         self.assertEqual(len(requirements), 1)
         self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
@@ -230,7 +200,7 @@ class ResponseGateTest(unittest.TestCase):
         """Nova는 완결된 JSON을 ```json ... ``` 펜스로 감싸 반환한다. 감싼 펜스만 벗겨 파싱한다."""
         body = json.dumps(_response([VALID_REQUIREMENT]))
         fenced = f"```json\n{body}\n```"
-        requirements, _unclassified, _client = _extract(fenced)
+        requirements, _client = _extract(fenced)
 
         self.assertEqual(len(requirements), 1)
         self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
@@ -243,7 +213,7 @@ class ResponseGateTest(unittest.TestCase):
         전체가 버려졌다. 67개 청크가 모두 통과해야 하는 문서에서 그 비율은 완주 불가다.
         """
         body = json.dumps(_response([VALID_REQUIREMENT]))
-        requirements, _unclassified, _client = _extract(body + "]")
+        requirements, _client = _extract(body + "]")
 
         self.assertEqual(len(requirements), 1)
         self.assertEqual(requirements[0].mapped_control_key, "S3_BLOCK_PUBLIC_ACCESS")
@@ -251,26 +221,32 @@ class ResponseGateTest(unittest.TestCase):
     def test_prose_after_the_object_is_still_refused(self) -> None:
         """보정은 표기뿐이다. 값을 시작할 수 있는 것이 뒤에 있으면 응답을 신뢰하지 않는다."""
         body = json.dumps(_response([VALID_REQUIREMENT]))
-        _refused(self, body + " and that is everything I found.", message="not JSON")
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body + " and that is everything I found.")
 
     def test_a_second_object_is_refused_rather_than_silently_dropped(self) -> None:
         """두 번째 객체를 조용히 버리면 그 안의 요구사항이 사라진다."""
         body = json.dumps(_response([VALID_REQUIREMENT]))
-        _refused(self, body + body, message="not JSON")
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body + body)
 
     def test_a_truncated_object_is_refused(self) -> None:
         body = json.dumps(_response([VALID_REQUIREMENT]))
-        _refused(self, body[: len(body) // 2], message="not JSON")
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract(body[: len(body) // 2])
 
     def test_a_non_json_response_is_refused(self) -> None:
         """자유 텍스트에서 값을 캐내지 않는다. JSON이 아니면 응답 전체가 신뢰할 수 없다."""
-        _refused(self, "Here are the requirements I found: ...", message="not JSON")
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            _extract("Here are the requirements I found: ...")
 
     def test_an_unexpected_top_level_key_is_refused(self) -> None:
-        _refused(self, {"requirements": [], "notes": "extra"}, message="fields are invalid")
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
+            _extract({"requirements": [], "notes": "extra"})
 
     def test_the_locator_accounting_field_is_required(self) -> None:
-        _refused(self, {"requirements": []}, message="fields are invalid", complete=False)
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
+            _extract({"requirements": []}, complete=False)
 
     def test_an_evaluation_outcome_field_rejects_the_whole_response(self) -> None:
         """조용히 버리면 모델이 판정을 시도했다는 사실 자체가 사라진다."""
@@ -282,14 +258,15 @@ class ResponseGateTest(unittest.TestCase):
                 ):
                     _extract({"requirements": [entry]})
 
-    def test_an_unknown_requirement_field_refuses_the_whole_response(self) -> None:
-        """한 요구사항이 모르는 필드를 달고 오면 같은 응답의 나머지도 믿지 않는다."""
+    def test_an_unknown_requirement_field_fails_the_run(self) -> None:
         bad = {**VALID_REQUIREMENT, "confidence": 0.9, "source_locators": [DATABASE_LOCATOR]}
-        _refused(self, {"requirements": [VALID_REQUIREMENT, bad]}, message="fields are invalid")
+        with self.assertRaisesRegex(BedrockExtractionError, "fields are invalid"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
-    def test_an_invented_locator_refuses_the_whole_response(self) -> None:
+    def test_an_invented_locator_fails_the_run(self) -> None:
         bad = {**VALID_REQUIREMENT, "source_locators": ["heading/invented/item/1"]}
-        _refused(self, {"requirements": [VALID_REQUIREMENT, bad]}, message="outside this chunk")
+        with self.assertRaisesRegex(BedrockExtractionError, "outside this chunk"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
     def test_a_requirement_outside_the_catalog_survives_extraction_for_the_builder_to_reject(
         self,
@@ -321,27 +298,27 @@ class ResponseGateTest(unittest.TestCase):
         ]
         for bad in outside:
             with self.subTest(field=sorted(set(bad) - set(VALID_REQUIREMENT)) or "overridden"):
-                requirements, _unclassified, _client = _extract(
-                    {"requirements": [VALID_REQUIREMENT, bad]}
-                )
+                requirements, _client = _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
                 # 두 요구사항 모두 남는다. 하나가 카탈로그 밖이라고 다른 하나를 잃지 않는다.
                 self.assertEqual(len(requirements), 2)
 
-    def test_an_overlong_field_refuses_the_whole_response(self) -> None:
+    def test_an_overlong_field_fails_the_run(self) -> None:
         bad = {
             **VALID_REQUIREMENT,
             "requirement": "x" * 5000,
             "source_locators": [DATABASE_LOCATOR],
         }
-        _refused(self, {"requirements": [VALID_REQUIREMENT, bad]}, message="longer than")
+        with self.assertRaisesRegex(BedrockExtractionError, "longer than"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
     def test_too_many_requirements_in_one_chunk_are_refused(self) -> None:
         entries = [
             {**VALID_REQUIREMENT, "requirement": f"Requirement number {index}."}
             for index in range(MAX_REQUIREMENTS_PER_CHUNK + 1)
         ]
-        _refused(self, {"requirements": entries}, message="more requirements")
+        with self.assertRaisesRegex(BedrockExtractionError, "more requirements"):
+            _extract({"requirements": entries})
 
     def test_a_shape_the_classification_invariants_reject_is_refused(self) -> None:
         """분류가 말하는 것과 채워진 필드가 어긋나면 부분 결과를 남기지 않는다."""
@@ -350,9 +327,8 @@ class ResponseGateTest(unittest.TestCase):
             "classification": "UNSUPPORTED",
             "source_locators": [DATABASE_LOCATOR],
         }
-        _refused(
-            self, {"requirements": [VALID_REQUIREMENT, bad]}, message="invalid requirement shape"
-        )
+        with self.assertRaisesRegex(BedrockExtractionError, "invalid requirement shape"):
+            _extract({"requirements": [VALID_REQUIREMENT, bad]})
 
     def test_every_policy_unit_must_be_classified(self) -> None:
         payload = {
@@ -360,13 +336,8 @@ class ResponseGateTest(unittest.TestCase):
             "non_requirement_locators": [DATABASE_LOCATOR],
         }
 
-        _refused(
-            self,
-            payload,
-            message="classify every policy unit",
-            reason=UnclassifiedReason.INCOMPLETE_CLASSIFICATION,
-            complete=False,
-        )
+        with self.assertRaisesRegex(BedrockExtractionError, "classify every policy unit"):
+            _extract(payload, complete=False)
 
     def test_a_locator_cannot_be_requirement_and_non_requirement(self) -> None:
         payload = _response([VALID_REQUIREMENT])
@@ -375,26 +346,21 @@ class ResponseGateTest(unittest.TestCase):
             STORAGE_LOCATOR,
         ]
 
-        _refused(
-            self,
-            payload,
-            message="both a requirement",
-            reason=UnclassifiedReason.INCOMPLETE_CLASSIFICATION,
-            complete=False,
-        )
+        with self.assertRaisesRegex(BedrockExtractionError, "both a requirement"):
+            _extract(payload, complete=False)
 
     def test_non_requirement_locators_cannot_repeat_or_be_invented(self) -> None:
+        all_locators = [locator for locator, _kind, _text in UNIT_TEXTS]
         for invalid, message in (
-            ([*ALL_LOCATORS, ALL_LOCATORS[0]], "must not repeat"),
-            ([*ALL_LOCATORS, "heading/invented/item/1"], "outside this chunk"),
+            ([*all_locators, all_locators[0]], "must not repeat"),
+            ([*all_locators, "heading/invented/item/1"], "outside this chunk"),
         ):
             with self.subTest(message=message):
-                _refused(
-                    self,
-                    {"requirements": [], "non_requirement_locators": invalid},
-                    message=message,
-                    complete=False,
-                )
+                with self.assertRaisesRegex(BedrockExtractionError, message):
+                    _extract(
+                        {"requirements": [], "non_requirement_locators": invalid},
+                        complete=False,
+                    )
 
 
 class ChunkingTest(unittest.TestCase):
@@ -439,22 +405,17 @@ class ChunkingTest(unittest.TestCase):
             chunk_overlap=1,
         )
 
-        outcome = extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
+        requirements = extractor.extract(
+            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+        )
 
         self.assertEqual(len(client.calls), 3)
-        self.assertEqual(len(outcome.requirements), 1)
-        self.assertEqual(outcome.unclassified, ())
+        self.assertEqual(len(requirements), 1)
 
-    def test_a_failed_middle_chunk_leaves_its_units_unclassified(self) -> None:
-        """청크 하나가 끝내 실패해도 나머지 청크의 후보는 남는다 — 유실이 아니라 미분류다.
-
-        예전에는 이 자리에서 문서 전체가 실패했다. 그 규칙은 요구사항이 조용히 사라지는 것을
-        막으려던 것이었지만, 67 청크짜리 ISMS-P 문서에서는 "아무것도 저장하지 못함"을 뜻했다.
-        게이트는 그대로다: 실패한 청크에서는 후보가 하나도 나오지 않고, 그 unit들이 이름으로
-        기록되어 리뷰어에게 보인다.
-        """
+    def test_one_failed_middle_chunk_fails_the_whole_document(self) -> None:
+        """청크 하나가 끝내 실패하면 문서 전체가 실패한다. 재시도가 그 규칙을 바꾸지 않는다."""
         client = FakeBedrock(
-            _response([VALID_REQUIREMENT], [UNIT_TEXTS[0][0], UNIT_TEXTS[1][0]]),
+            _response([], [UNIT_TEXTS[0][0], UNIT_TEXTS[1][0]]),
             "truncated response",
         )
         extractor = BedrockPolicyCandidateExtractor(
@@ -464,18 +425,10 @@ class ChunkingTest(unittest.TestCase):
             chunk_overlap=1,
         )
 
-        outcome = extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
-
-        # 첫 청크 1회 + 남은 두 청크 각 3회. 재시도 횟수는 그대로다.
-        self.assertEqual(len(client.calls), 7)
-        self.assertEqual(len(outcome.requirements), 1)
-        # 첫 청크가 분류한 u0·u1은 목록에 없다. 겹침으로 이미 분류된 unit은 놓친 것이 아니다.
-        left_out = {locator for entry in outcome.unclassified for locator in entry.locators}
-        self.assertEqual(left_out, {UNIT_TEXTS[2][0], UNIT_TEXTS[3][0]})
-        self.assertEqual(
-            {entry.reason for entry in outcome.unclassified},
-            {UnclassifiedReason.MODEL_RESPONSE_INVALID},
-        )
+        with self.assertRaisesRegex(BedrockExtractionError, "not JSON"):
+            extractor.extract(document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG)
+        # 첫 청크 1회 + 두 번째 청크 3회. 세 번 다 쓸 수 없는 응답이라 문서가 실패한다.
+        self.assertEqual(len(client.calls), 4)
 
     def test_the_merged_order_does_not_depend_on_the_model_output_order(self) -> None:
         second = {
@@ -487,8 +440,8 @@ class ChunkingTest(unittest.TestCase):
             "required_evidence": ["RDS.STORAGE_ENCRYPTED"],
         }
 
-        forward, _unclassified, _client = _extract({"requirements": [VALID_REQUIREMENT, second]})
-        reverse, _unclassified, _client = _extract({"requirements": [second, VALID_REQUIREMENT]})
+        forward, _client = _extract({"requirements": [VALID_REQUIREMENT, second]})
+        reverse, _client = _extract({"requirements": [second, VALID_REQUIREMENT]})
 
         self.assertEqual([entry.digest for entry in forward], [entry.digest for entry in reverse])
 
@@ -499,7 +452,8 @@ class RejectionLoggingTest(unittest.TestCase):
     def test_the_rejection_reason_is_logged_without_the_policy_sentence(self) -> None:
         bad = {**VALID_REQUIREMENT, "classification": "UNSUPPORTED"}
         with self.assertLogs("governance.authoring", level="WARNING") as logs:
-            _extract({"requirements": [bad, VALID_REQUIREMENT]})
+            with self.assertRaises(BedrockExtractionError):
+                _extract({"requirements": [bad, VALID_REQUIREMENT]})
         rejection = next(line for line in logs.output if "requirement rejected" in line)
         self.assertIn("must not carry rule semantics", rejection)
         self.assertNotIn(VALID_REQUIREMENT["requirement"], rejection)
@@ -545,12 +499,11 @@ class ChunkRepairTest(unittest.TestCase):
     def test_an_omitted_locator_is_re_asked_and_the_chunk_succeeds(self) -> None:
         client = FakeBedrock(self._incomplete(), _response([VALID_REQUIREMENT]))
 
-        outcome = self._extractor(client).extract(
+        requirements = self._extractor(client).extract(
             document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
         )
 
-        self.assertEqual(len(outcome.requirements), 1)
-        self.assertEqual(outcome.unclassified, ())
+        self.assertEqual(len(requirements), 1)
         self.assertEqual(len(client.calls), 2)
 
     def test_the_repair_request_names_exactly_the_locators_that_were_left_out(self) -> None:
@@ -567,34 +520,25 @@ class ChunkRepairTest(unittest.TestCase):
         self.assertEqual(repair["unclassified_locators"], [DATABASE_LOCATOR])
         self.assertEqual(repair["policy_units"], first["policy_units"])
 
-    def test_a_chunk_that_keeps_omitting_yields_no_candidate(self) -> None:
-        """마지막 시도까지 누락이 남으면 게이트는 그대로 거부한다 — 부분 답을 받아들이지 않는다.
-
-        달라진 것은 그 거부가 문서를 죽이는 대신 미분류로 기록된다는 것뿐이다. 응답에 들어
-        있던 요구사항은 하나도 후보가 되지 못한다.
-        """
+    def test_a_chunk_that_keeps_omitting_still_fails_the_document(self) -> None:
+        """마지막 시도까지 누락이 남으면 예전과 똑같이 실패한다. 게이트는 그대로다."""
         client = FakeBedrock(self._incomplete())
 
-        outcome = self._extractor(client).extract(
-            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
-        )
+        with self.assertRaises(ChunkAccountingError):
+            self._extractor(client).extract(
+                document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+            )
 
-        self.assertEqual(outcome.requirements, ())
-        self.assertEqual([entry.locators for entry in outcome.unclassified], [ALL_LOCATORS])
-        self.assertEqual(
-            outcome.unclassified[0].reason, UnclassifiedReason.INCOMPLETE_CLASSIFICATION
-        )
         self.assertEqual(len(client.calls), 3)
 
-    def test_a_single_attempt_asks_once(self) -> None:
+    def test_a_single_attempt_restores_the_old_behaviour(self) -> None:
         client = FakeBedrock(self._incomplete())
 
-        outcome = self._extractor(client, max_chunk_attempts=1).extract(
-            document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
-        )
+        with self.assertRaises(ChunkAccountingError):
+            self._extractor(client, max_chunk_attempts=1).extract(
+                document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
+            )
 
-        self.assertEqual(outcome.requirements, ())
-        self.assertEqual([entry.locators for entry in outcome.unclassified], [ALL_LOCATORS])
         self.assertEqual(len(client.calls), 1)
 
     def test_a_locator_in_both_lists_is_named_back_and_repaired(self) -> None:
@@ -606,11 +550,11 @@ class ChunkRepairTest(unittest.TestCase):
         }
         client = FakeBedrock(both, _response([VALID_REQUIREMENT]))
 
-        outcome = self._extractor(client).extract(
+        requirements = self._extractor(client).extract(
             document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
         )
 
-        self.assertEqual(len(outcome.requirements), 1)
+        self.assertEqual(len(requirements), 1)
         repair = json.loads(client.calls[1]["messages"][0]["content"][0]["text"])
         self.assertEqual(repair["double_classified_locators"], [STORAGE_LOCATOR])
 
@@ -618,11 +562,11 @@ class ChunkRepairTest(unittest.TestCase):
         """잘린 JSON에는 알려줄 내용이 없다. 실패가 생성 쪽이므로 같은 요청을 다시 보낸다."""
         client = FakeBedrock("truncated", _response([VALID_REQUIREMENT]))
 
-        outcome = self._extractor(client).extract(
+        requirements = self._extractor(client).extract(
             document=DOCUMENT, units=_units(), catalog=MVP_CONTROL_CATALOG
         )
 
-        self.assertEqual(len(outcome.requirements), 1)
+        self.assertEqual(len(requirements), 1)
         second = json.loads(client.calls[1]["messages"][0]["content"][0]["text"])
         self.assertNotIn("unclassified_locators", second)
         self.assertNotIn("double_classified_locators", second)

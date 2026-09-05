@@ -172,16 +172,3 @@ readiness에서는 **숫자 평균만** 제외한다(`_NON_SCORING_PERSPECTIVES`
   없는 기존 Rule item은 bootstrap을 다시 실행해 갱신한다.
 - 자동 승인과, 같은 source version을 다른 모델로 재추출하는 것은 이번 범위에 없다. 후자는
   fail-closed한다.
-
-## 보완 2026-09-05 — 전부-아니면-전무 게이트는 chunk 단위로 좁아진다
-
-§4의 "부분 후보를 저장하는 fail-soft 경로는 허용하지 않는다"는 **ADR-0025로 좁혀졌다.**
-
-이 규칙이 쓰인 시점의 문서는 20 unit(4 chunk)이었다. 334 unit / 67 chunk짜리 ISMS-P 점검표에서
-chunk 최종 실패율이 17–33%로 관측됐고, 그 규칙 아래 완주 확률은 0.0004%다
-(`docs/evaluations/data/authoring-isms-p-20260905.md`). 규칙이 "요구사항이 조용히 사라지는 것을
-막는다"에서 "아무것도 저장하지 못한다"로 바뀐 것이다.
-
-허용하지 않는 것은 이제 *미완료를 감춘 채* 부분 후보를 저장하는 것이다. 실패한 chunk의 locator는
-`UnclassifiedUnits`로 결과·저장소·API·화면에 실린다. 청크 안에서의 게이트는 그대로다 — 거부된
-응답은 후보를 하나도 내지 못하고, `PoisonedResponseError`는 여전히 실행 전체를 세운다.

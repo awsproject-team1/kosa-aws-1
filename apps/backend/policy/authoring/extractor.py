@@ -23,32 +23,8 @@ from packages.contracts import (
     ExtractedRequirement,
     GovernanceControlCatalog,
     NormalizedPolicyDocument,
-    UnclassifiedUnits,
 )
 from packages.contracts._validation import require_non_empty_string
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ExtractionOutcome:
-    """What one extraction pass produced, including the units it could not answer for.
-
-    반환 타입이 요구사항 목록 하나였을 때는 "답하지 못한 unit"을 표현할 자리가 없어서, chunk
-    하나가 실패하면 실행 전체를 예외로 끝내는 수밖에 없었다. 그 규칙이 334 unit 문서에서
-    "아무것도 저장하지 못함"을 뜻하게 되어(0.0004% 완주), 실패를 값으로 나른다.
-
-    `unclassified`가 비어 있으면 예전과 완전히 같은 의미다 — 문서의 모든 unit이 분류됐다.
-    """
-
-    requirements: tuple[ExtractedRequirement, ...] = ()
-    unclassified: tuple[UnclassifiedUnits, ...] = ()
-
-    def __post_init__(self) -> None:
-        for entry in self.requirements:
-            if not isinstance(entry, ExtractedRequirement):
-                raise TypeError("requirements must contain ExtractedRequirement values")
-        for entry in self.unclassified:
-            if not isinstance(entry, UnclassifiedUnits):
-                raise TypeError("unclassified must contain UnclassifiedUnits values")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -109,7 +85,7 @@ class PolicyCandidateExtractor(Protocol):
         document: NormalizedPolicyDocument,
         units: tuple[ExtractionUnit, ...],
         catalog: GovernanceControlCatalog,
-    ) -> ExtractionOutcome: ...
+    ) -> tuple[ExtractedRequirement, ...]: ...
 
 
 class FakePolicyCandidateExtractor:
@@ -124,13 +100,11 @@ class FakePolicyCandidateExtractor:
         results: Sequence[ExtractedRequirement] = (),
         *,
         identity: ExtractorIdentity | None = None,
-        unclassified: Sequence[UnclassifiedUnits] = (),
     ) -> None:
         for entry in results:
             if not isinstance(entry, ExtractedRequirement):
                 raise TypeError("results must contain ExtractedRequirement values")
         self._results = tuple(results)
-        self._unclassified = tuple(unclassified)
         self._identity = identity or ExtractorIdentity(
             extractor_id="fake-policy-candidate-extractor",
             extractor_version="1.0.0",
@@ -151,7 +125,7 @@ class FakePolicyCandidateExtractor:
         document: NormalizedPolicyDocument,
         units: tuple[ExtractionUnit, ...],
         catalog: GovernanceControlCatalog,
-    ) -> ExtractionOutcome:
+    ) -> tuple[ExtractedRequirement, ...]:
         if not isinstance(document, NormalizedPolicyDocument):
             raise TypeError("document must be a NormalizedPolicyDocument")
         if not isinstance(catalog, GovernanceControlCatalog):
@@ -161,4 +135,4 @@ class FakePolicyCandidateExtractor:
         self.calls.append(
             (document.source_id, document.source_version, len(units), catalog.version)
         )
-        return ExtractionOutcome(requirements=self._results, unclassified=self._unclassified)
+        return self._results

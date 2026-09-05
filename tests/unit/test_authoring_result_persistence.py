@@ -22,17 +22,11 @@ from apps.backend.policy.authoring import (
 from apps.backend.policy.control_catalog import MVP_CONTROL_CATALOG
 from apps.backend.repositories.errors import RepositoryError
 from apps.backend.repositories.policy_approval import (
-    AUTHORING_RESULT_SEGMENTS,
     MAX_AUTHORING_RESULTS_PER_RUN,
     DynamoDbPolicyApprovalRepository,
-    _authoring_child_items,
+    _manifest_from_item,
 )
-from packages.contracts import (
-    AuthoringRunStatus,
-    PolicyAuthoringResult,
-    UnclassifiedReason,
-    UnclassifiedUnits,
-)
+from packages.contracts import AuthoringRunStatus, PolicyAuthoringResult
 from tests.authoring_fixtures import UNIT_TEXTS, normalized_artifact_bytes, ready_document
 from tests.unit.test_policy_authoring_pipeline import automatable, manual, unsupported
 
@@ -178,11 +172,7 @@ class _Source:
         return {"Body": BytesIO(normalized_artifact_bytes())}
 
 
-def _result(
-    *,
-    prompt_version: str = "policy-authoring/fake",
-    unclassified: tuple[UnclassifiedUnits, ...] = (),
-) -> PolicyAuthoringResult:
+def _result(*, prompt_version: str = "policy-authoring/fake") -> PolicyAuthoringResult:
     identity = ExtractorIdentity(
         extractor_id="fake-policy-candidate-extractor",
         extractor_version="1.0.0",
@@ -195,21 +185,12 @@ def _result(
         document=DOCUMENT,
         artifact_reader=NormalizedArtifactReader(reader=_Source(), bucket="artifacts"),  # type: ignore[arg-type]
         extractor=FakePolicyCandidateExtractor(
-            (automatable(), manual(), unsupported()),
-            identity=identity,
-            unclassified=unclassified,
+            (automatable(), manual(), unsupported()), identity=identity
         ),
         catalog=MVP_CONTROL_CATALOG,
         authoring_run_id="run-1",
         requested_at="2026-09-03T00:00:00+00:00",
     )
-
-
-UNCLASSIFIED = (
-    UnclassifiedUnits(
-        locators=(UNIT_TEXTS[3][0],), reason=UnclassifiedReason.MODEL_RESPONSE_INVALID
-    ),
-)
 
 
 def store_ingestion_item(table: FakeTable, *, customer_id: str = CUSTOMER) -> None:
@@ -253,49 +234,6 @@ class WriteOrderTest(unittest.TestCase):
         self.assertEqual(manifest.counts["unsupported"], 1)
         self.assertEqual(sum("#CANDIDATE#" in suffix for suffix in suffixes), 2)
         self.assertEqual(sum("#UNSUPPORTED#" in suffix for suffix in suffixes), 1)
-
-    def test_units_the_extraction_could_not_answer_for_are_stored_and_counted(self) -> None:
-        """분류하지 못한 unit은 실행에서 사라지지 않는다 — 후보와 같은 자리에 남는다.
-
-        조용한 유실이면 리뷰어는 "후보 3개"만 보고 문서를 다 훑었다고 읽는다. 이 item과
-        `counts["unclassified"]`가 그 오해를 막는다.
-        """
-        manifest = self.repository.record_authoring_result(
-            customer_id=CUSTOMER, result=_result(unclassified=UNCLASSIFIED)
-        )
-
-        stored = [sk for _pk, sk in self.table.items if "#UNCLASSIFIED#" in sk]
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(manifest.counts["unclassified"], 1)
-
-    def test_a_retry_writes_the_same_unclassified_item(self) -> None:
-        """digest를 locator 집합에서 유도하므로 at-least-once 재시도가 중복을 만들지 않는다."""
-        result = _result(unclassified=UNCLASSIFIED)
-
-        self.repository.record_authoring_result(customer_id=CUSTOMER, result=result)
-        before = dict(self.table.items)
-        self.repository.record_authoring_result(customer_id=CUSTOMER, result=result)
-
-        self.assertEqual(self.table.items, before)
-
-    def test_every_segment_the_writer_emits_is_a_segment_the_reader_queries(self) -> None:
-        """손으로 유지하는 목록이 조용히 뒤처지지 않게 한다.
-
-        `AUTHORING_RESULT_SEGMENTS`에 없는 segment로 item을 쓰면 write-back 검증이 그 item을
-        읽지 못하고, 결과를 하나도 저장할 수 없게 된다 — UNCLASSIFIED를 더할 때 실제로 그랬다.
-        """
-        result = _result(unclassified=UNCLASSIFIED)
-        prefix = (
-            f"POLICY_SOURCE#{result.document.source_id}#VERSION#{result.document.source_version}"
-        )
-
-        written = {
-            str(item["SK"]).removeprefix(f"{prefix}#").split("#")[0]
-            for item in _authoring_child_items(CUSTOMER, result, prefix)
-        }
-
-        self.assertTrue(written)
-        self.assertLessEqual(written, set(AUTHORING_RESULT_SEGMENTS))
 
     def test_the_manifest_ends_ready_and_carries_the_result_digest(self) -> None:
         result = _result()
@@ -439,3 +377,45 @@ class TextContainmentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoredManifestCompatibilityTest(unittest.TestCase):
+    """A READY manifest stored by an earlier revision must still read back.
+
+    2026-09-05에 count key 하나(`unclassified`)를 **필수**로 더했더니, 그 이전에 저장된 사내 문서
+    두 건의 후보 조회가 `503 policy authoring manifest is invalid`로 실패했다(ADR-0025 철회).
+    저장된 item은 바뀌지 않는다 — 계약이 바뀌면 읽기 경로가 옛 모양을 받아야 한다. 이 테스트는
+    라이브에 실제로 저장돼 있던 모양을 그대로 고정한다.
+    """
+
+    def test_a_ready_manifest_with_the_four_original_counts_reads_back(self) -> None:
+        stored = {
+            "PK": f"CUSTOMER#{CUSTOMER}",
+            "SK": "POLICY_SOURCE#src-4f3fcf7d#VERSION#ver-58c8a54a#AUTHORING",
+            "entity_type": "POLICY_AUTHORING_RUN",
+            "customer_id": CUSTOMER,
+            "version": 1,
+            "source_id": "src-4f3fcf7d",
+            "source_version": "ver-58c8a54a",
+            "normalized_sha256": "a" * 64,
+            "status": "READY",
+            "result_digest": "b" * 64,
+            "counts": {"accepted": 3, "manual": 2, "unsupported": 1, "rejected": 0},
+            "provenance": {
+                "extractor_id": "bedrock-policy-candidate-extractor",
+                "extractor_version": "1.0.0",
+                "model_id": "amazon.nova-lite-v1:0",
+                "model_version": "1",
+                "prompt_version": "policy-authoring/2026-09-04.5",
+                "candidate_schema_version": "policy-candidate/1",
+                "control_catalog_version": "governance-control-catalog/2026-09-03",
+                "authoring_run_id": "authoring-1",
+                "requested_at": "2026-09-04T12:00:00+00:00",
+            },
+        }
+
+        manifest = _manifest_from_item(stored)
+
+        self.assertIs(manifest.status, AuthoringRunStatus.READY)
+        self.assertTrue(manifest.is_reviewable)
+        self.assertEqual(sum(manifest.counts.values()), 6)

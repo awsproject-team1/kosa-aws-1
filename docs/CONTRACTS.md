@@ -345,16 +345,12 @@ expected_profile_version=...)`은 그 판본 item을 직접 읽으므로, 실행
   돌려준다. 평가 결과 필드(`FORBIDDEN_EXTRACTION_FIELDS`)는 정의되지 않는다.
 - Bedrock 응답은 `requirements`와 `non_requirement_locators`의 exact schema다. 청크의 모든 입력
   locator가 둘 중 정확히 한쪽에 포함돼야 하며, 후보/청크 일부를 버리고 성공시키는 경로는 없다.
-  거부된 청크는 후보를 하나도 내지 못하고 `UnclassifiedUnits`로 기록된다 — 버려지지 않는다.
 - `AcceptedRequirement`: Rule로 변환한 뒤에도 원 Requirement·분류·매핑 이유·read-only
   `proposed_severity`를 잃지 않게 둘을 함께 보존한다.
 - `RejectedRequirement` / `CandidateRejectionCode`: 거절 사유는 자유 문장이 아니라 열거값이다.
   Artifact 자체의 무결성 실패는 후보 하나의 문제가 아니므로 `ArtifactReadFailureCode`로 분리한다.
-- `UnclassifiedUnits` / `UnclassifiedReason`: 추출이 답하지 못한 unit. chunk 하나가 모든 시도를
-  소진하면 그 locator가 사유 코드와 함께 결과에 남는다 — 조용한 유실이 아니라 보이는 미완료다
-  (ADR-0025). 같은 locator가 두 항목에 나타날 수 없다.
 - `AuthoringManifest` / `AuthoringRunStatus`: 한 추출 실행의 완결 경계. Review와 Approval은
-  `READY`만 읽는다. READY manifest는 `unclassified`를 포함한 모든 count를 실어야 한다.
+  `READY`만 읽는다.
 - `CandidateReviewEntry`: 리뷰 화면이 받는 값. `proposed_severity`는 read-only이고 locator는 서버가
   만든 `SourceReference`다.
 

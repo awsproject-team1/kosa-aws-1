@@ -27,7 +27,6 @@ from packages.contracts import (
 from tests.authoring_fixtures import UNIT_TEXTS, ready_document
 from tests.unit.test_authoring_result_persistence import (
     DOCUMENT,
-    UNCLASSIFIED,
     FakeTable,
     _repository,
     _result,
@@ -162,11 +161,8 @@ class ListCandidatesTest(unittest.TestCase):
         self.queue = RecordingQueue()
         self.service = _service(self.table, self.queue)
 
-    def _store_ready_run(self, **kwargs: object) -> None:
-        _repository(self.table).record_authoring_result(
-            customer_id=CUSTOMER,
-            result=_result(**kwargs),  # type: ignore[arg-type]
-        )
+    def _store_ready_run(self) -> None:
+        _repository(self.table).record_authoring_result(customer_id=CUSTOMER, result=_result())
 
     def _list(self, **kwargs: object):
         return self.service.list_candidates(
@@ -191,33 +187,6 @@ class ListCandidatesTest(unittest.TestCase):
         unit = ready_document().unit(entry.locators[0].locator)
         assert unit is not None
         self.assertEqual(entry.locators[0].content_sha256, unit.text_sha256)
-
-    def test_the_page_names_the_units_the_extraction_could_not_answer_for(self) -> None:
-        """READY는 "문서를 다 훑었다"가 아니다. 리뷰어가 그 차이를 화면에서 본다.
-
-        미분류 목록과 `counts["unclassified"]`가 함께 나가지 않으면, 리뷰어는 후보 목록만 보고
-        문서 전체가 후보로 변환됐다고 읽는다.
-        """
-        self._store_ready_run(unclassified=UNCLASSIFIED)
-
-        page = self._list()
-
-        self.assertEqual(len(page.unclassified), 1)
-        self.assertEqual(page.unclassified[0].locators, UNCLASSIFIED[0].locators)
-        self.assertEqual(page.counts["unclassified"], 1)  # type: ignore[index]
-        self.assertEqual(
-            [entry["locators"] for entry in page.to_dict()["unclassified"]],  # type: ignore[index,union-attr]
-            [list(UNCLASSIFIED[0].locators)],
-        )
-
-    def test_an_unclassified_entry_carries_no_source_sentence(self) -> None:
-        """미분류도 원문을 나르지 않는다 — locator와 사유 코드뿐이다(ADR-0004)."""
-        self._store_ready_run(unclassified=UNCLASSIFIED)
-
-        body = repr(self._list().to_dict())
-
-        for _locator, _kind, text in UNIT_TEXTS:
-            self.assertNotIn(text, body)
 
     def test_the_proposed_severity_is_the_catalog_value(self) -> None:
         """리뷰어는 등급을 고르지 않는다. Catalog가 정한 값을 승인하거나 후보를 거절한다."""

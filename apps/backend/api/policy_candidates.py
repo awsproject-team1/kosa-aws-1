@@ -23,7 +23,6 @@ from apps.backend.policy.authoring.serialization import (
     accepted_from_dict,
     rejected_from_dict,
     requirement_from_dict,
-    unclassified_from_dict,
 )
 from packages.common.errors import AuthoringRunNotFound, PolicySourceNotFound
 from packages.contracts import (
@@ -33,7 +32,6 @@ from packages.contracts import (
     ExtractedRequirement,
     PolicyAuthoringRequest,
     RejectedRequirement,
-    UnclassifiedUnits,
 )
 
 #: 한 페이지가 돌려주는 결과 수의 상한. 상한이 없으면 응답 크기가 문서 크기를 따라간다.
@@ -90,9 +88,6 @@ class PolicyCandidatePage:
     candidates: tuple[CandidateReviewEntry, ...] = ()
     unsupported: tuple[ExtractedRequirement, ...] = ()
     rejected: tuple[RejectedRequirement, ...] = ()
-    #: 추출이 답하지 못한 unit. 비어 있지 않은 READY 실행은 "다 훑었다"가 아니라 "훑은
-    #: 만큼이 완전하다"는 뜻이므로, 리뷰어가 승인 전에 이 목록을 본다.
-    unclassified: tuple[UnclassifiedUnits, ...] = ()
     counts: dict[str, int] | None = None
     provenance: dict[str, object] | None = None
     cursor: str | None = None
@@ -105,7 +100,6 @@ class PolicyCandidatePage:
             "candidates": [entry.to_dict() for entry in self.candidates],
             "unsupported": [entry.to_dict() for entry in self.unsupported],
             "rejected": [entry.to_dict() for entry in self.rejected],
-            "unclassified": [entry.to_dict() for entry in self.unclassified],
             "cursor": self.cursor,
         }
 
@@ -200,7 +194,6 @@ class PolicyCandidateApiService:
         candidates: list[CandidateReviewEntry] = []
         unsupported: list[ExtractedRequirement] = []
         rejected: list[RejectedRequirement] = []
-        unclassified: list[UnclassifiedUnits] = []
         for item in window:
             entity = str(item.get("entity_type", ""))
             if entity.endswith("_CANDIDATE"):
@@ -209,14 +202,11 @@ class PolicyCandidateApiService:
                 unsupported.append(requirement_from_dict(item.get("requirement")))
             elif entity.endswith("_REJECTED"):
                 rejected.append(rejected_from_dict(item))
-            elif entity.endswith("_UNCLASSIFIED"):
-                unclassified.append(unclassified_from_dict(item))
         return PolicyCandidatePage(
             status=manifest.status,
             candidates=tuple(candidates),
             unsupported=tuple(unsupported),
             rejected=tuple(rejected),
-            unclassified=tuple(unclassified),
             counts=dict(manifest.counts),
             provenance=manifest.provenance.to_dict(),
             cursor=next_cursor,

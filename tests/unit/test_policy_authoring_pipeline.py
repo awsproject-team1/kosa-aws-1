@@ -332,8 +332,7 @@ class FakeExtractorTest(unittest.TestCase):
             catalog=MVP_CONTROL_CATALOG,
         )
 
-        self.assertEqual(result.requirements, injected)
-        self.assertEqual(result.unclassified, ())
+        self.assertEqual(result, injected)
         self.assertEqual(
             extractor.calls,
             [(DOCUMENT.source_id, DOCUMENT.source_version, 4, CONTROL_CATALOG_VERSION)],
@@ -383,8 +382,7 @@ class PipelineTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            result.counts,
-            {"accepted": 1, "manual": 1, "unsupported": 1, "rejected": 1, "unclassified": 0},
+            result.counts, {"accepted": 1, "manual": 1, "unsupported": 1, "rejected": 1}
         )
 
     def test_only_automatable_and_manual_reach_the_approvable_candidate_set(self) -> None:

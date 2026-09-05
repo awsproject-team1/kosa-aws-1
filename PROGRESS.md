@@ -1730,3 +1730,17 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - 평가에서 101개 Rule은 `MANUAL_REVIEW` 좌표가 되어 준비도 평균에서 빠진다(ADR-0024 §2). 기준선은
     점수가 아니라 심사원이 검토할 좌표를 만든다. Bedrock 호출 0회.
   - 검증: unit 1533 / contract 248 / integration 23 / security 119, ruff, `--check` OK.
+
+- **ADR-0025 구현을 되돌렸다 — 사내 문서 후보 조회 503 회귀 (2026-09-05).**
+  - 증상: 잘 되던 사내 정책 문서 두 건의 후보 조회가 `503 EXECUTION_ERROR`. API 로그:
+    `RepositoryError: policy authoring manifest is invalid` (`list_candidates`).
+  - 원인: `1857d08`이 READY manifest의 count 집합에 `unclassified`를 **필수**로 더했다. 그 이전에
+    저장된 manifest 두 건은 네 count만 갖고 있어 `AuthoringManifest`가 거부했다. 저장된 item은
+    바뀌지 않는데 계약만 좁힌 것이다 — additive 필드는 읽기 경로가 기본값으로 채워야 한다.
+  - 처리: `git revert 1857d08`. ISMS-P는 ADR-0026으로 추출 경로를 떠났으므로 chunk 단위 미분류
+    기록이 풀 문제가 지금은 없고, 남은 사내 문서(4 chunk)는 원래 게이트로 완주한다. ADR-0025는
+    파일을 남기고 **철회** 상태를 머리에 적었다. 라이브에 `UNCLASSIFIED` item은 0건이라 고아 데이터
+    없음.
+  - 회귀 테스트: 라이브에 실제로 저장돼 있던 네 count 모양의 READY manifest가 `_manifest_from_item`을
+    통과한다(`StoredManifestCompatibilityTest`).
+

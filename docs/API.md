@@ -103,12 +103,6 @@ Worker이며(ADR-0023), 승인·게시의 검토 read는 **READY authoring manif
 `cursor == null`이 될 때까지 모든 페이지를 읽는다. 승인 가능한 `candidates`, `unsupported`,
 `rejected`는 서로 다른 섹션으로 표시하며 첫 50건만 보여주고 나머지를 숨기지 않는다.
 
-응답은 `unclassified[]`도 나른다 — 추출이 답하지 못한 unit의 `locators`와 사유 코드
-(`MODEL_RESPONSE_INVALID` / `INCOMPLETE_CLASSIFICATION`)이며, 정책 원문은 담지 않는다.
-비어 있지 않으면 **`READY`는 "문서를 전부 훑었다"가 아니라 "훑은 만큼의 후보가 완전하다"**는
-뜻이다(ADR-0025). 콘솔은 이 목록과 `counts["unclassified"]`를 승인 화면에 먼저 표시한다 —
-후보 목록만 보고 문서 전체가 변환됐다고 읽는 승인을 막는다.
-
 후보 항목은 모델이 쓴 재진술(`requirement`, `requirement_summary`, `mapping_reason`), 매핑된
 Control과 실행 유형, evidence capability, 그리고 **서버가 만든** locator + `content_sha256`를
 담는다. `proposed_severity`는 Governance Control Catalog가 정한 read-only 값이며, 리뷰어는 그것을

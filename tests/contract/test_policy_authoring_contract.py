@@ -499,8 +499,7 @@ class AuthoringResultTest(unittest.TestCase):
 
         self.assertEqual(len(result.candidates), 1)
         self.assertEqual(
-            result.counts,
-            {"accepted": 1, "manual": 0, "unsupported": 1, "rejected": 1, "unclassified": 0},
+            result.counts, {"accepted": 1, "manual": 0, "unsupported": 1, "rejected": 1}
         )
 
     def test_an_unsupported_requirement_cannot_be_filed_as_accepted(self) -> None:

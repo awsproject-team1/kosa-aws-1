@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from apps.backend.policy.authoring.artifact_reader import ExtractionUnit
-from apps.backend.policy.authoring.extractor import ExtractionOutcome, ExtractorIdentity
+from apps.backend.policy.authoring.extractor import ExtractorIdentity
 from packages.contracts import (
     FORBIDDEN_EXTRACTION_FIELDS,
     CandidateClassification,
@@ -39,8 +39,6 @@ from packages.contracts import (
     ModelProfileRole,
     NormalizedPolicyDocument,
     RuleEvaluationType,
-    UnclassifiedReason,
-    UnclassifiedUnits,
 )
 from packages.contracts.policy_authoring import (
     MAX_LOCATORS_PER_REQUIREMENT,
@@ -253,7 +251,7 @@ class BedrockPolicyCandidateExtractor:
         document: NormalizedPolicyDocument,
         units: tuple[ExtractionUnit, ...],
         catalog: GovernanceControlCatalog,
-    ) -> ExtractionOutcome:
+    ) -> tuple[ExtractedRequirement, ...]:
         if not isinstance(document, NormalizedPolicyDocument):
             raise TypeError("document must be a NormalizedPolicyDocument")
         if not isinstance(catalog, GovernanceControlCatalog):
@@ -262,41 +260,11 @@ class BedrockPolicyCandidateExtractor:
             raise ValueError("units must not be empty")
 
         merged: dict[str, ExtractedRequirement] = {}
-        unclassified: list[UnclassifiedUnits] = []
-        classified: set[str] = set()
         chunks = list(_chunks(units, self._units_per_chunk, self._chunk_overlap))
         for chunk in chunks:
-            try:
-                chunk_requirements = self._extract_chunk(chunk, catalog)
-            except PoisonedResponseError:
-                # 모델이 판정을 시도한 응답이다. 확률적 실수가 아니라 경계를 넘으려 한 사실이고,
-                # 그것을 "분류하지 못한 unit"으로 적어 넘기면 그 사실이 사라진다. 실행 전체를 세운다.
-                raise
-            except BedrockExtractionError as error:
-                # 이 chunk는 모든 시도를 소진했다. 예전에는 여기서 실행 전체가 끝났고, 그 규칙은
-                # 요구사항이 조용히 사라지는 것을 막으려던 것이었다. 그러나 67 chunk 문서에서는
-                # 같은 규칙이 "아무것도 저장하지 못함"을 뜻했다(측정: chunk 실패율 17–33%,
-                # 완주 확률 0.0004%). 그래서 유실을 없애는 대신 **보이게** 만든다.
-                # 마지막 시도의 사유는 `_log_retry`가 적지 않는다(그건 버린 시도만 적는다).
-                # 여기서 적지 않으면 이 청크가 왜 미분류로 남았는지가 로그에서 사라진다.
-                logging.getLogger("governance.authoring").warning(
-                    "chunk left unclassified after %d attempts: %s: %s",
-                    self._max_chunk_attempts,
-                    type(error).__name__,
-                    error,
-                )
-                unclassified.append(
-                    UnclassifiedUnits(
-                        locators=tuple(unit.locator for unit in chunk),
-                        reason=(
-                            UnclassifiedReason.INCOMPLETE_CLASSIFICATION
-                            if isinstance(error, ChunkAccountingError)
-                            else UnclassifiedReason.MODEL_RESPONSE_INVALID
-                        ),
-                    )
-                )
-                continue
-            classified.update(unit.locator for unit in chunk)
+            # 한 청크라도 누락되면 문서 전체를 추출했다고 말할 수 없다. 호출자가 재시도할 수
+            # 있도록 오류를 그대로 올리고, 부분 결과를 READY로 저장하지 않는다.
+            chunk_requirements = self._extract_chunk(chunk, catalog)
             for requirement in chunk_requirements:
                 # deterministic merge: 겹치는 unit에서 같은 Requirement가 두 번 나올 수 있다.
                 # digest가 같으면 같은 것이므로 먼저 본 것을 유지한다.
@@ -305,18 +273,8 @@ class BedrockPolicyCandidateExtractor:
                     raise BedrockExtractionError(
                         "the model proposed more requirements than one document may carry"
                     )
-        # chunk는 1 unit씩 겹친다. 실패한 chunk의 경계 unit이 이웃 chunk에서 분류됐다면 그것은
-        # 놓친 것이 아니므로 목록에서 뺀다 — 빼지 않으면 미분류 수가 겹침만큼 부풀려진다.
-        recovered = [
-            UnclassifiedUnits(locators=remaining, reason=entry.reason)
-            for entry in unclassified
-            if (remaining := tuple(loc for loc in entry.locators if loc not in classified))
-        ]
         # canonical order: digest 순. 모델의 출력 순서에 의존하지 않는다.
-        return ExtractionOutcome(
-            requirements=tuple(merged[digest] for digest in sorted(merged)),
-            unclassified=tuple(recovered),
-        )
+        return tuple(merged[digest] for digest in sorted(merged))
 
     def _extract_chunk(
         self, chunk: tuple[ExtractionUnit, ...], catalog: GovernanceControlCatalog
