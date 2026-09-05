@@ -378,6 +378,9 @@ class GeneratorTest(unittest.TestCase):
             documents = module.build(digest)
         except digest.PolicySourceUnavailableError:
             self.skipTest("policy original not available locally (ADR-0004)")
+        except OSError as error:
+            # 다른 프로그램이 파일을 잠근 경우. Registry의 문제가 아니라 환경의 문제다.
+            self.skipTest(f"policy original not readable: {error}")
         self.assertEqual(module.check(documents), [])
 
 

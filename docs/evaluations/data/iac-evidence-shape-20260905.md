@@ -81,3 +81,27 @@ prompt는 "Every evidence reference must come from allowed_evidence_references"�
 ```bash
 AWS_PROFILE=mfa python scratchpad/replay_iac.py 2   # 좌표 5개 × 2회, 원문 응답 출력
 ```
+
+## 5. prompt로 고치려던 시도 — 측정으로 기각
+
+남은 거부(capability key 인용, RDS 암호화 좌표에서 3/3)를 prompt에서 막으려고 v4 문장을
+시험했다: "evidence_references must be an array of plain strings, each copied exactly from
+allowed_evidence_references (...). Do not wrap a reference in an object, do not cite a file name
+or line on its own, and do not cite required_evidence or optional_evidence keys". 판정 기준 문장은
+그대로 두고 형식 지시만 더했다. 같은 harness(`measure_score_consistency.py --repetitions 3`)와
+같은 좌표 재생으로 v3와 나란히 쟀다.
+
+| | v3 (현행) | v4 (시험) |
+| --- | --- | --- |
+| harness 모델 판정 30회 중 계약 위반 | **0** | **5** |
+| harness 기대 status 정확도 (모델) | 0.9 | 0.9 |
+| 라이브 좌표 5개 × 3회 재생 수락 (표기 보정 포함) | **9 / 15** | **5 / 15** |
+
+v4에서 모델은 "plain strings"를 **HCL 조각을 문자열로 붙이라**는 뜻으로 읽었다 —
+`resource "aws_db_instance" "assessment" {... storage_encrypted = false... }` 같은 문자열이
+근거로 왔고, 그것은 locator가 아니라 원문이다. 형식을 더 자세히 지시할수록 이 모델은 지시의
+어휘를 출력에 되풀이한다(§3의 객체 인용도 같은 성격이다). 그래서 prompt는 v3 그대로 두고,
+표기 차이는 응답 쪽 보정(§4-1)으로만 푼다. v4 원 측정값: `score-consistency-20260905-v4-raw.md`.
+
+이 문서 기준으로 남는 것: RDS 암호화 좌표의 capability key 인용은 v3에서도 반복되며(3/3), 그
+좌표는 두 번의 시도가 모두 그렇게 끝나면 `EXECUTION_ERROR`로 남는다 — rationale에 사유가 적힌다.

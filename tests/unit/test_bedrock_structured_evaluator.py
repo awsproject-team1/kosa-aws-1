@@ -673,10 +673,19 @@ class EvidenceNotationTest(unittest.TestCase):
         with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
             self._evaluate(["secrets.tf"])
 
-    def test_an_object_without_a_locator_is_still_refused(self) -> None:
-        """`{"file": "main.tf", "line": 105}`에는 locator key가 없다. 지어내지 않는다."""
-        with self.assertRaisesRegex(BedrockEvaluationError, "must be a non-empty string"):
+    def test_a_file_and_line_inside_an_approved_file_becomes_an_anchor(self) -> None:
+        """`{"file": "main.tf", "line": 105}`는 승인된 파일 안의 위치다 — `terraform:main.tf#L105`."""
+        result = self._evaluate([{"file": "main.tf", "line": 105, "content": "storage = false"}])
+
+        self.assertEqual(result.evidence_references, ("terraform:main.tf#L105",))
+
+    def test_a_file_outside_the_approved_set_is_refused_even_with_a_line(self) -> None:
+        with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
             self._evaluate([{"file": "multiresource.tf", "line": 105}])
+
+    def test_an_object_with_neither_locator_nor_file_is_refused(self) -> None:
+        with self.assertRaisesRegex(BedrockEvaluationError, "must be a non-empty string"):
+            self._evaluate([{"evidence": "storage_encrypted = false", "line": 105}])
 
     def test_a_capability_key_cited_as_evidence_is_refused(self) -> None:
         """`RDS.STORAGE_ENCRYPTED`는 Rule이 요구한 capability이지 근거의 위치가 아니다."""

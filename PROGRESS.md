@@ -1781,6 +1781,14 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     문자열일 수 있어 싣지 않는다.
   - prompt는 바꾸지 않았다. "array of strings"를 명시하면 빈도가 더 줄겠지만 그 prompt는 측정으로
     정해진 것이라(`_SYSTEM_PROMPT` 주석) 회귀 측정과 함께 바꿔야 한다.
+  - **후속(같은 날).** 배포 뒤 평가 `asm-596a899d`에서 남은 `EXECUTION_ERROR` 4건(RDS 암호화·RDS
+    로그 IAC + 파생 DRIFT)은 rationale에 사유가 적혀 나왔다. 재생: RDS 암호화는 capability key
+    `RDS.STORAGE_ENCRYPTED`를 근거로 인용(3/3), RDS 로그는 `{"file": ..., "line": ...}`(1/3).
+    후자는 승인된 파일 안의 위치이므로 `terraform:multiresource.tf#L106`으로 읽게 했다(파일이
+    허용 목록에 없으면 여전히 거부). 전자를 prompt(v4: "array of plain strings ...")로 막으려던
+    시도는 **같은 harness로 재고 기각했다** — 계약 위반 0/30 → 5/30, 재생 수락 9/15 → 5/15. 모델이
+    HCL 조각을 문자열로 붙이기 시작했다. prompt는 v3 그대로.
+
 
 - **ISMS-P 기준선 Finding이 전부 "조치 불가"였던 이유 — 허용 범위 미등록 (2026-09-05, ADR-0026 §6).**
   - 평가 `asm-43948139`: 점수 14는 저장된 29개 판정 좌표를 severity 가중(1/2/4/8)으로 재계산해

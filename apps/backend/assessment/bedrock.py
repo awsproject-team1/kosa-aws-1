@@ -246,6 +246,13 @@ _SYSTEM_PROMPT = (
     "reference must come from allowed_evidence_references. Do not wrap the JSON in code "
     "fences or add prose."
 )
+#: **근거 인용 형식을 prompt로 고치려던 시도는 측정으로 기각됐다 (2026-09-05).** 모델이 locator를
+#: 객체 안에 넣거나 capability key를 인용해 근거 게이트에 거부되는 것을 보고, "evidence_references
+#: must be an array of plain strings, each copied exactly from allowed_evidence_references ..."를
+#: 더한 v4를 같은 harness로 쟀다. 결과: 계약 위반 0/30 → 5/30, 라이브 좌표 재생 수락 9/15 → 5/15 —
+#: 모델이 "plain strings"를 HCL 조각을 그대로 붙이라는 뜻으로 읽었다. 그래서 문장은 v3 그대로이고,
+#: 표기 차이는 `_evidence_entry`·`_terraform_prefixed`가 응답 쪽에서 푼다
+#: (`docs/evaluations/data/iac-evidence-shape-20260905.md` §5).
 
 #: **이 문단은 측정으로 정해졌다.** 처음에는 판정 아닌 status 셋(MANUAL_REVIEW,
 #: INSUFFICIENT_EVIDENCE, OUT_OF_SCOPE)을 prompt에서 다시 열거하고 각각 score 0을 지시했다.
@@ -392,14 +399,32 @@ def _normalized_score(status: EvaluationStatus) -> float:
 _EVIDENCE_OBJECT_KEYS = ("reference", "locator", "evidence_reference")
 
 
+#: 모델이 파일과 줄로 근거를 적을 때 쓰는 key. `{"file": "multiresource.tf", "line": 106}`은
+#: 승인된 파일 안의 위치이므로 `multiresource.tf#L106`으로 읽고, 접두사와 허용 목록 검사는 아래
+#: `_terraform_prefixed`·`_is_allowed`가 그대로 한다. 파일이 허용 목록에 없으면 거부된다.
+_EVIDENCE_FILE_KEYS = ("file", "path")
+_EVIDENCE_LINE_KEYS = ("line", "line_number")
+
+
 def _evidence_entry(entry: object) -> object:
-    """Unwrap `{"reference": "<locator>", ...}` to its locator; leave everything else as is."""
+    """Unwrap `{"reference": "<locator>", ...}` or `{"file": ..., "line": ...}` to a locator.
+
+    표기만 푼다. 결과 문자열은 허용 목록 검사를 그대로 받으므로, 여기서 새 근거가 생기지 않는다.
+    """
     if not isinstance(entry, Mapping):
         return entry
     for key in _EVIDENCE_OBJECT_KEYS:
         value = entry.get(key)
         if isinstance(value, str) and value.strip():
             return value
+    for key in _EVIDENCE_FILE_KEYS:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            for line_key in _EVIDENCE_LINE_KEYS:
+                line = entry.get(line_key)
+                if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+                    return f"{value.strip()}#L{line}"
+            return value.strip()
     return entry
 
 
