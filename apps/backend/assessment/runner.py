@@ -11,6 +11,7 @@
 미완료**로 남고, 나머지 평가는 살아남는다.
 """
 
+import logging
 from typing import Protocol
 
 from apps.backend.policy import PolicyContext
@@ -143,10 +144,20 @@ def _execution_error(
 ) -> EvaluationResult:
     """Record that this coordinate could not be evaluated, without claiming anything about it.
 
-    rationale에는 예외의 **종류**만 담는다. 예외 문구에는 모델이 지어낸 locator처럼 응답에서 온
-    문자열이 들어 있고, 그것을 결과에 실으면 거부한 값을 그대로 저장하는 셈이다. 근거는 비운다 —
-    관찰한 것이 없다.
+    rationale에는 예외의 **종류**와 사유의 고정 문구만 담는다. 예외 문구의 콜론 뒤에는 모델이
+    지어낸 locator처럼 응답에서 온 문자열이 올 수 있고(`evidence reference is outside approved
+    evidence: ...`), 그것을 결과에 실으면 거부한 값을 그대로 저장하는 셈이다. 콜론 앞은 이 코드가
+    쓴 고정 문장이라 안전하다. 근거는 비운다 — 관찰한 것이 없다.
     """
+    reason = str(error).split(":", 1)[0].strip()
+    logging.getLogger("governance.assessment").warning(
+        "coordinate not evaluated: rule=%s perspective=%s resource=%s: %s: %s",
+        rule.rule_id,
+        perspective.value,
+        resource_id,
+        type(error).__name__,
+        error,
+    )
     return EvaluationResult(
         resource_id=resource_id,
         rule_id=rule.rule_id,
@@ -155,8 +166,9 @@ def _execution_error(
         severity=rule.severity.value,
         score=score_for_status(EvaluationStatus.EXECUTION_ERROR),
         rationale=(
-            f"The evaluation did not complete: {type(error).__name__}. "
-            "This coordinate is not counted as covered and no judgment is recorded for it."
+            f"The evaluation did not complete: {type(error).__name__}"
+            + (f" ({reason})" if reason else "")
+            + ". This coordinate is not counted as covered and no judgment is recorded for it."
         ),
         evidence_references=(),
         rule_version=rule.version,

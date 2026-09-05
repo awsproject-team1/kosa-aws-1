@@ -1763,4 +1763,24 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - 화면 문구가 정확해야 한다: "ISMS-P 준비도"가 아니라 "자동 판정 가능한 11개 항목(15 Rule) 기준
     점수 · 101개 항목은 사람 검토 대기". 나머지 75%는 사람 검토 기록 기능(다음 작업)이 답이다.
 
+- **IAC 관점 `EXECUTION_ERROR` 8건의 원인 — 근거 표기 (2026-09-05).** 기록은
+  `docs/evaluations/data/iac-evidence-shape-20260905.md`.
+  - 증상: ISMS-P 기준선 v2로 평가하니 IAC 좌표 4개가 `BedrockEvaluationError`, 파생 DRIFT 4개가
+    같이 `EXECUTION_ERROR`. 사유는 어디에도 없었다 — `_judged`는 첫 시도 예외를 조용히 버리고,
+    runner는 예외 **종류**만 rationale에 남기며, worker 로그에는 WARNING이 한 줄도 없었다.
+  - 재생(같은 prompt·문서·Rule·profile, `attempts=1`, 10회): **7회**가 `evidence_references`를
+    문자열 배열이 아니라 객체 배열(`[{"reference": "terraform:main.tf", "evidence": "..."}]`)로
+    보냈다. 판정(FAIL/PASS)과 인용 locator는 옳았고 표기만 달랐다. 이전 legacy Rule(RDS-ENCRYPT,
+    ALB-LOGGING)의 같은 실패도 같은 원인이다 — 기준선이 새로 만든 문제가 아니라 다시 드러낸 문제.
+  - 처리: (1) 객체에서 locator 문자열(`reference`/`locator`/`evidence_reference`)만 꺼내고, 접두사
+    없는 `main.tf`는 그 파일이 허용 목록에 있을 때만 `terraform:main.tf`로 읽어 **같은** 허용 목록
+    검사를 받게 했다. `_strip_json_fence`·`_unescaped`와 같은 표기 보정이며 허용 목록은 그대로다 —
+    locator 없는 객체·capability key(`RDS.STORAGE_ENCRYPTED`)·미승인 파일은 여전히 거부.
+    보정 후 재생: 수락 3/10 → 6/10, 남은 4건은 전부 정당한 거부. (2) 버린 시도와 최종 실패를
+    WARNING으로 남긴다. (3) rationale에 사유의 고정 문구(콜론 앞)를 싣는다 — 콜론 뒤는 모델
+    문자열일 수 있어 싣지 않는다.
+  - prompt는 바꾸지 않았다. "array of strings"를 명시하면 빈도가 더 줄겠지만 그 prompt는 측정으로
+    정해진 것이라(`_SYSTEM_PROMPT` 주석) 회귀 측정과 함께 바꿔야 한다.
+
+
 

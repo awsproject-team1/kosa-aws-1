@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from typing import Protocol
@@ -181,6 +182,15 @@ class BedrockStructuredEvaluator:
                     _response_evidence(output.get("evidence_references"), allowed_evidence),
                 )
             except BedrockEvaluationError as error:
+                # 사유를 남긴다. 남기지 않으면 EXECUTION_ERROR가 "왜"를 잃는다 — 라이브에서
+                # 8건이 그렇게 이유 없이 남았고, 재생해서야 표기 문제였음이 드러났다.
+                logging.getLogger("governance.assessment").warning(
+                    "model attempt discarded: rule=%s perspective=%s resource=%s: %s",
+                    rule.rule_id,
+                    self._perspective.value,
+                    resource_id,
+                    error,
+                )
                 last = error
         assert last is not None  # 루프는 성공 반환이나 예외 저장 없이 끝나지 않는다.
         raise last
@@ -373,11 +383,45 @@ def _normalized_score(status: EvaluationStatus) -> float:
     return score_for_status(status)
 
 
+#: 모델이 근거를 객체로 감쌀 때 locator를 담는 key. 라이브 재생(2026-09-05, 10회 중 7회)에서
+#: Nova는 `"evidence_references": [{"reference": "terraform:main.tf", "evidence": "..."}]`처럼
+#: 허용된 locator를 객체 **안에** 넣어 보냈고, 게이트는 문자열이 아니라는 이유로 응답 전체를
+#: 거부했다 — 판정(FAIL/PASS)과 인용은 옳았는데 표기가 달랐다. `_strip_json_fence`·`_unescaped`와
+#: 같은 성격의 표기 보정이다: 객체에서 locator 문자열만 꺼내고, 그 문자열은 그대로 허용 목록
+#: 검사를 받는다. 허용 목록 자체는 넓어지지 않는다.
+_EVIDENCE_OBJECT_KEYS = ("reference", "locator", "evidence_reference")
+
+
+def _evidence_entry(entry: object) -> object:
+    """Unwrap `{"reference": "<locator>", ...}` to its locator; leave everything else as is."""
+    if not isinstance(entry, Mapping):
+        return entry
+    for key in _EVIDENCE_OBJECT_KEYS:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return entry
+
+
+def _terraform_prefixed(entry: object, allowed: tuple[str, ...]) -> object:
+    """`main.tf` → `terraform:main.tf` when exactly that file is an approved locator.
+
+    라이브 재생에서 모델은 허용 목록의 `terraform:main.tf`를 `main.tf`로 줄여 인용했다. 가리키는
+    파일이 허용 목록에 그대로 있으므로 같은 근거의 다른 표기다. 허용 목록에 없는 파일은 그대로
+    두어 아래 검사에서 거부된다 — 새 근거를 받아들이는 것이 아니다.
+    """
+    if not isinstance(entry, str) or _is_allowed(entry, allowed):
+        return entry
+    prefixed = f"terraform:{entry.strip()}"
+    return prefixed if _is_allowed(prefixed, allowed) else entry
+
+
 def _response_evidence(value: object, allowed: tuple[str, ...]) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise BedrockEvaluationError("evidence_references must be a list")
     evidence = _unique_non_empty_strings(
-        tuple(_unescaped(entry) for entry in value), "evidence_references"
+        tuple(_terraform_prefixed(_unescaped(_evidence_entry(entry)), allowed) for entry in value),
+        "evidence_references",
     )
     outside = [reference for reference in evidence if not _is_allowed(reference, allowed)]
     if outside:

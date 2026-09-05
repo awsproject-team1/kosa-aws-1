@@ -628,3 +628,57 @@ class KoreanLocatorEvidenceTest(unittest.TestCase):
     def test_a_locator_outside_the_rule_is_still_refused(self) -> None:
         with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
             self._evaluate("src-e1ca1051@ver-1#heading/사내-클라우드-인프라-보안-표준/item/9")
+
+
+class EvidenceNotationTest(unittest.TestCase):
+    """The model may wrap or shorten a locator; the locator still has to be approved.
+
+    라이브 재생(2026-09-05, `docs/evaluations/data/iac-evidence-shape-20260905.md`): 10회 중 7회가
+    `[{"reference": "terraform:main.tf", "evidence": "..."}]` 꼴이었고, 보정 뒤에는 `main.tf`처럼
+    접두사를 뺀 인용이 남았다. 판정은 옳았다. 객체에서 locator만 꺼내고 접두사만 붙여 **같은**
+    허용 목록 검사를 받게 한다 — 허용 목록은 그대로다.
+    """
+
+    def _evaluate(self, evidence: list[object]):
+        client = Client(response({**VALID_BODY, "evidence_references": evidence}))
+        evaluator = BedrockStructuredEvaluator(
+            client=client,  # type: ignore[arg-type]
+            perspective=EvaluationPerspective.IAC,
+            resource_document={"files": []},
+            evidence_references=("terraform:main.tf",),
+            attempts=1,
+        )
+        return evaluator.evaluate(
+            resource_id="tfsbx-bucket", rule=RULE, context=CONTEXT, model_profile=PROFILE
+        )
+
+    def test_an_approved_locator_inside_an_object_is_accepted(self) -> None:
+        result = self._evaluate(
+            [{"reference": "terraform:main.tf", "evidence": "No access_logs block is present."}]
+        )
+
+        self.assertEqual(result.evidence_references, ("terraform:main.tf",))
+
+    def test_a_locator_key_variant_with_an_anchor_is_accepted(self) -> None:
+        result = self._evaluate([{"locator": "terraform:main.tf#L1-L30"}])
+
+        self.assertEqual(result.evidence_references, ("terraform:main.tf#L1-L30",))
+
+    def test_a_bare_path_of_an_approved_file_is_prefixed(self) -> None:
+        result = self._evaluate(["main.tf"])
+
+        self.assertEqual(result.evidence_references, ("terraform:main.tf",))
+
+    def test_a_bare_path_of_an_unapproved_file_is_refused(self) -> None:
+        with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
+            self._evaluate(["secrets.tf"])
+
+    def test_an_object_without_a_locator_is_still_refused(self) -> None:
+        """`{"file": "main.tf", "line": 105}`에는 locator key가 없다. 지어내지 않는다."""
+        with self.assertRaisesRegex(BedrockEvaluationError, "must be a non-empty string"):
+            self._evaluate([{"file": "multiresource.tf", "line": 105}])
+
+    def test_a_capability_key_cited_as_evidence_is_refused(self) -> None:
+        """`RDS.STORAGE_ENCRYPTED`는 Rule이 요구한 capability이지 근거의 위치가 아니다."""
+        with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
+            self._evaluate([{"reference": "RDS.STORAGE_ENCRYPTED", "evidence": "..."}])
