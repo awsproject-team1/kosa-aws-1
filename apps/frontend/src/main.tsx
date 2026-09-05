@@ -87,7 +87,7 @@ type GraphNodeId = "parent" | "policy_qa" | "assessment" | "remediation" | "depl
 type QueueJob = { id: string; label: string; queue: string; state: LightState; meta?: string };
 type PipelineStep = { key: string; label: string; state: LightState };
 type RepoScope = { repository_id: string; github_repository?: string; aws_account_id?: string };
-type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null; repos: RepoScope[]; userProfiles: { email: string; profile: string | null }[] };
+type Observer = { nodeStates: Partial<Record<GraphNodeId, LightState>>; jobs: QueueJob[]; pipeline: PipelineStep[] | null; repos: RepoScope[]; userProfiles: { email: string; profile: string | null; profiles?: string[] }[] };
 const OBS_DEFAULT: Observer = { nodeStates: {}, jobs: [], pipeline: null, repos: [], userProfiles: [] };
 
 function useObserver() {
@@ -102,7 +102,7 @@ function useObserver() {
     setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
     patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
     setRepos(repos: RepoScope[]) { setObs(o => ({ ...o, repos })); },
-    setUserProfiles(userProfiles: { email: string; profile: string | null }[]) { setObs(o => ({ ...o, userProfiles })); },
+    setUserProfiles(userProfiles: { email: string; profile: string | null; profiles?: string[] }[]) { setObs(o => ({ ...o, userProfiles })); },
   }), []);
   return { obs, ...api };
 }
@@ -146,7 +146,15 @@ function passwordProblems(pw: string): string[] {
   if (!/[\^$*.\[\]{}()?"!@#%&/\\,><':;|_~`=+\-]/.test(pw)) out.push("기호");
   return out;
 }
-type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null; profile: string | null };
+/* `profiles`는 관리자가 지정한 Policy Profile 전부(쉼표 목록을 token에서 읽음). `profile`은 그 첫 값 —
+ * 하나만 알던 코드와의 호환용이다. */
+type Session = { accessToken: string; email: string; groups: string[]; sub: string; customerId: string | null; profile: string | null; profiles: string[] };
+function splitProfiles(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const out: string[] = [];
+  for (const part of value.split(",")) { const item = part.trim(); if (item && !out.includes(item)) out.push(item); }
+  return out;
+}
 function decodeJwt(token: string): Record<string, unknown> {
   const json = atob(token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"));
   return JSON.parse(decodeURIComponent(escape(json)));
@@ -167,7 +175,8 @@ async function exchangeCallback(): Promise<Session | null> {
   history.replaceState({}, "", window.location.pathname);
   const claims = decodeJwt(tok.id_token);
   const groups = Array.isArray(claims["cognito:groups"]) ? (claims["cognito:groups"] as string[]) : [];
-  return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null, profile: (claims["profile"] as string) ?? null };
+  const profiles = splitProfiles(claims["profile"]);
+  return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null, profile: profiles[0] ?? null, profiles };
 }
 
 /* =========================================================================
@@ -298,7 +307,7 @@ function ObserverPanel({ obs }: { obs: Observer }) {
     <div className="obs-title">사용자 · 지정 Profile</div>
     {obs.userProfiles.length === 0
       ? <div className="obs-empty">등록된 사용자가 없습니다.</div>
-      : obs.userProfiles.map(u => <div key={u.email} className="queue-item"><span className={`light ${u.profile ? "done" : "pending"}`} /><span className="q-label">{u.email}</span><span className="q-meta">{u.profile ?? "미지정"}</span></div>)}
+      : obs.userProfiles.map(u => <div key={u.email} className="queue-item"><span className={`light ${(u.profiles?.length ?? (u.profile ? 1 : 0)) ? "done" : "pending"}`} /><span className="q-label">{u.email}</span><span className="q-meta">{(u.profiles && u.profiles.length ? u.profiles : (u.profile ? [u.profile] : [])).join(", ") || "미지정"}</span></div>)}
   </aside>;
 }
 
@@ -1125,9 +1134,12 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
  * Admin: user registration, list, and per-user profile assignment (backend)
  * =======================================================================*/
 function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
-  type User = { username: string; email: string; customer_id: string; profile: string | null; status: string; enabled: boolean };
+  type User = { username: string; email: string; customer_id: string; profile: string | null; profiles?: string[]; status: string; enabled: boolean };
   const [users, setUsers] = useState<User[]>([]);
-  const [profiles] = useState<string[]>(loadProfiles());
+  // 지정 가능한 Profile은 게시된 것 전부다. 이 브라우저에서 게시한 것(loadProfiles)은 그 부분집합이라
+  // 백엔드 목록을 못 읽을 때의 대체로만 쓴다.
+  const [profiles, setProfiles] = useState<string[]>(loadProfiles());
+  const assigned = (u: User) => u.profiles && u.profiles.length ? u.profiles : (u.profile ? [u.profile] : []);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("User");
   const [pw, setPw] = useState("");
@@ -1137,8 +1149,10 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
-    try { const r = await api<{ users: User[] }>("/admin/users", session.accessToken); setUsers(r.users); obs.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile }))); }
+    try { const r = await api<{ users: User[] }>("/admin/users", session.accessToken); setUsers(r.users); obs.setUserProfiles(r.users.map(u => ({ email: u.email, profile: u.profile, profiles: assigned(u) }))); }
     catch (e) { setError((e as Error).message); }
+    try { const r = await api<{ profiles: PublishedProfile[] }>("/policy-profiles", session.accessToken); setProfiles(r.profiles.map(p => p.policy_profile_id)); }
+    catch { /* 목록을 못 읽으면 이 브라우저에서 게시한 것으로 대체 */ }
   };
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
 
@@ -1158,10 +1172,18 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
     setError(null); setNotice(null);
     if (!assignEmail.trim() || !assignPid) { setError("사용자와 Profile을 선택하세요."); return; }
     try {
-      await api("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: assignEmail.trim(), policy_profile_id: assignPid }) });
-      setNotice(`${assignEmail.trim()} → ${assignPid} 지정 완료 (다음 로그인부터 적용)`);
+      const r = await api<{ profiles: string[] }>("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: assignEmail.trim(), policy_profile_id: assignPid, action: "add" }) });
+      setNotice(`${assignEmail.trim()} ← ${assignPid} 추가 (현재 ${r.profiles.length}개 · 다음 로그인부터 적용)`);
       await refresh();
     } catch (e) { setError(`지정 실패: ${(e as Error).message}`); }
+  }
+  async function unassign(u: User, pid: string) {
+    setError(null); setNotice(null);
+    try {
+      const r = await api<{ profiles: string[] }>("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: u.email, policy_profile_id: pid, action: "remove" }) });
+      setNotice(`${u.email}에서 ${pid} 해제 (남은 Profile ${r.profiles.length}개 · 다음 로그인부터 적용)`);
+      await refresh();
+    } catch (e) { setError(`해제 실패: ${(e as Error).message}`); }
   }
   async function deleteUser(u: User) {
     setError(null); setNotice(null);
@@ -1189,14 +1211,15 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
       <h2>사용자 목록 · Profile 지정</h2>
       <div className="row">
         <label style={{ flex: 2 }}>사용자<select value={assignEmail} onChange={e => setAssignEmail(e.target.value)}><option value="">선택</option>{users.map(u => <option key={u.username} value={u.email}>{u.email}</option>)}</select></label>
-        <label style={{ flex: 2 }}>Profile<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
-        <button onClick={() => void assign()}>지정</button>
+        <label style={{ flex: 2 }}>Profile<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.filter(p => { const u = users.find(x => x.email === assignEmail.trim()); return !u || !assigned(u).includes(p); }).map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+        <button onClick={() => void assign()}>추가</button>
       </div>
+      <p className="hint">한 사용자에게 여러 Profile을 지정할 수 있습니다 — 사내 정책과 ISMS-P 기준선을 따로 평가해 보려면 둘 다 지정하세요. 이미 지정된 Profile은 목록에서 빠지고, ✕로 해제합니다. 변경은 그 사용자의 다음 로그인부터 적용됩니다.</p>
       <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 Profile</th><th></th></tr></thead>
-        <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td><td>{u.profile ? <code>{u.profile}</code> : "-"}</td>
+        <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td>
+          <td>{assigned(u).length === 0 ? "-" : <span className="chips">{assigned(u).map(pid => <span key={pid} className="chip"><code>{pid}</code><button className="chip-x" title={`${pid} 해제`} aria-label={`${pid} 해제`} onClick={() => void unassign(u, pid)}>✕</button></span>)}</span>}</td>
           <td><button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} disabled={u.email === session.email} onClick={() => void deleteUser(u)}>삭제</button></td></tr>)}
           {users.length === 0 && <tr><td colSpan={4} className="obs-empty">사용자가 없습니다.</td></tr>}</tbody></table>
-      <p className="hint">Profile 목록은 이 브라우저에서 게시한 것을 보여줍니다(백엔드 list-profiles 미구현).</p>
     </div>
     {notice && <p className="status">{notice}</p>}
     {error && <p className="alert">{error}</p>}
@@ -1302,7 +1325,9 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
       catch { /* 목록을 못 읽어도 지정된 Profile로는 실행할 수 있다 */ }
     })();
   }, [isAdmin, session.accessToken]);
-  const effectiveProfile = isAdmin ? selectedProfile : (profileId ?? "");
+  const [userChoice, setUserChoice] = useState<string>(profileId ?? "");
+  useEffect(() => { setUserChoice(profileId ?? ""); }, [profileId]);
+  const effectiveProfile = isAdmin ? selectedProfile : userChoice;
   async function start() {
     setError(null);
     if (!repositoryId) { setError("연결된 리포지토리가 없습니다. 관리자에게 리포지토리 연결을 요청하세요."); return; }
@@ -1339,7 +1364,9 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
               {profileId && !published.some(p => p.policy_profile_id === profileId) && <option value={profileId}>{profileId} (지정됨)</option>}
               {published.map(p => <option key={p.policy_profile_id} value={p.policy_profile_id}>{p.policy_profile_id}@{p.version} · Rule {p.rule_count}개{p.policy_profile_id === profileId ? " (지정됨)" : ""}</option>)}
             </select>
-          : <input value={profileId ?? "지정된 Profile 없음"} readOnly />}
+          : session.profiles.length > 1
+            ? <select value={userChoice} onChange={e => setUserChoice(e.target.value)}>{session.profiles.map(p => <option key={p} value={p}>{p}</option>)}</select>
+            : <input value={profileId ?? "지정된 Profile 없음"} readOnly />}
       </label>
       <button disabled={busy || !repositoryId || !effectiveProfile} onClick={() => void start()}>{busy ? "요청 중…" : "평가 실행"}</button>
     </div>
@@ -1585,15 +1612,25 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
   }
 
   const code = start?.decision.manual_review_code;
+  // 사람 검토 좌표(MANUAL 관점)에는 자동 조치가 없다 — 조치 판정은 언제나 MANUAL_REVIEW로 끝난다.
+  // 그중 "지원 예정"은 검토할 일도 아니고 카탈로그가 넓어질 일이다. 상태 배지와 버튼이 그렇게 말해야 한다.
+  const notYetSupported = isNotYetSupported(f);
+  const humanReview = f.perspective === "MANUAL";
+  const statusLabel = notYetSupported ? "지원 예정" : f.status;
+  const statusClass = notYetSupported ? "status-not_yet_supported" : `status-${f.status.toLowerCase()}`;
   return <article className="candidate">
-    <div className="candidate-badges"><span className="badge severity">{f.severity}</span><span className={`badge status-${f.status.toLowerCase()}`}>{f.status}</span><span className="badge">{f.perspective}</span><span className="badge">score {f.score}</span>{suppression && <span className="badge">억제됨 · {suppression.reason}</span>}</div>
+    <div className="candidate-badges"><span className="badge severity">{f.severity}</span><span className={`badge ${statusClass}`}>{statusLabel}</span><span className="badge">{humanReview ? "사람 검토" : f.perspective}</span>{!humanReview && <span className="badge">score {f.score}</span>}{suppression && <span className="badge">억제됨 · {suppression.reason}</span>}</div>
     <h3><code>{f.resource_id}</code> · {f.rule_id}@{f.rule_version}</h3>
     <p style={{ margin: "6px 0" }}>{f.rationale}</p>
     <dl className="candidate-fields"><div className="candidate-field wide"><dt>Evidence</dt><dd><CodeValues values={f.evidence_references} /></dd></div></dl>
-    <div className="finding-actions row">
-      <button className="ghost" disabled={busy || !!suppression} onClick={() => void request()}>{busy ? "조치 판정 중…" : "조치 요청"}</button>
-      {start && <span className="hint">판정: <strong>{start.decision.action}</strong>{code ? ` (${code})` : ""}{start.job ? ` · job ${start.job.job_id}` : " · Job 없음(사람 검토)"}</span>}
-    </div>
+    {humanReview
+      ? <p className="hint">{notYetSupported
+          ? "이 항목은 기술 통제이지만 근거 카탈로그가 아직 읽지 못합니다. 조치가 아니라 카탈로그 확장 대상이며, 그때까지 담당자가 증적으로 판정합니다."
+          : "사람이 증적을 검토해 판정하는 항목입니다. 자동 조치 대상이 아닙니다."}</p>
+      : <div className="finding-actions row">
+          <button className="ghost" disabled={busy || !!suppression} onClick={() => void request()}>{busy ? "조치 판정 중…" : "조치 요청"}</button>
+          {start && <span className="hint">판정: <strong>{start.decision.action}</strong>{code ? ` (${code})` : ""}{start.job ? ` · job ${start.job.job_id}` : " · Job 없음(사람 검토)"}</span>}
+        </div>}
     {start && start.decision.action === "MANUAL_REVIEW" && <p className="hint">자동 조치 대상이 아닙니다{code === "RULE_NOT_IN_SCOPE" ? " — 이 Rule은 자동 patch 허용 범위(remediation eligibility)에 등록되어 있지 않습니다" : code === "RULE_MANUAL_ONLY" ? " — 이 Rule만으로는 안전한 목표 상태가 유일하게 정해지지 않거나 리소스 교체·데이터 손실이 필요해 자동 patch를 열지 않습니다(ADR-0017). IaC를 사람이 고친 뒤 재평가하면 ACTUAL_SYNC 경로는 열립니다" : ""}. 담당자가 직접 검토합니다.</p>}
     {view && <div className="remediation-result">
       <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : " · Worker 결과 대기 중"}</div>
@@ -1654,6 +1691,7 @@ function App() {
     window.addEventListener("gov:session-expired", onExpired);
     return () => window.removeEventListener("gov:session-expired", onExpired);
   }, []);
+  const [activeProfile, setActiveProfile] = useState<string | null>(null);
   const observer = useObserver();
   // 토큰 교환은 새 로그인에서만 일어난다(code 파라미터). 그때 이전 로그인의 기록을 비운다.
   useEffect(() => { exchangeCallback().then(s => { if (s) { clearAssessmentStorage(); setSession(s); } }).catch(e => setError((e as Error).message)); }, []);
@@ -1695,7 +1733,8 @@ function App() {
     /* eslint-disable-next-line */
   }, [session, isAdmin]);
   if (!session) return <Login error={error} />;
-  const myProfile = session.profile;
+  // 지정된 Profile이 여럿이면 그중 하나를 골라 평가한다(사내 정책 vs ISMS-P 기준선). 기본은 첫 값.
+  const myProfile = activeProfile ?? session.profiles[0] ?? session.profile;
   const nav: { id: View; label: string; admin?: boolean }[] = [
     { id: "chat", label: "챗봇" },
     { id: "report", label: "Assessment 결과" },
@@ -1712,7 +1751,10 @@ function App() {
           {nav.filter(n => !n.admin || isAdmin).map(n => <button key={n.id} className={view === n.id ? "active" : ""} onClick={() => setView(n.id)}>{n.label}</button>)}
         </nav>
         <span className="spacer" />
-        <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
+        {session.profiles.length > 1
+          ? <label className="profile-pick">Profile<select value={myProfile ?? ""} onChange={e => setActiveProfile(e.target.value)}>{session.profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+          : null}
+        <span className="who">{session.email}{myProfile && session.profiles.length <= 1 ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
       {sessionExpired && <p className="alert" style={{ margin: "8px 16px", display: "flex", alignItems: "center", gap: 12 }}>

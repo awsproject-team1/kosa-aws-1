@@ -202,10 +202,16 @@ class JobHttpHandler:
                     )
                     email = _non_empty_string(body.get("email"), "email")
                     pid = _non_empty_string(body.get("policy_profile_id"), "policy_profile_id")
+                    action = body.get("action", "add")
+                    if action not in ("add", "remove", "set"):
+                        raise ValueError("action must be add, remove, or set")
                 except (TypeError, ValueError, json.JSONDecodeError) as error:
                     raise RequestValidationError("profile assign body is invalid") from error
                 return _response(
-                    200, self._users.assign_profile(principal, email=email, policy_profile_id=pid)
+                    200,
+                    self._users.assign_profile(
+                        principal, email=email, policy_profile_id=pid, action=str(action)
+                    ),
                 )
             if method == "DELETE" and path == "/admin/users":
                 if self._users is None:

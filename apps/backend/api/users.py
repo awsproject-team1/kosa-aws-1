@@ -185,6 +185,7 @@ class UserManagementService:
                         "email": attrs.get("email"),
                         "customer_id": attrs.get("custom:customer_id"),
                         "profile": attrs.get("profile"),
+                        "profiles": split_profiles(attrs.get("profile")),
                         "status": user.get("UserStatus"),
                         "enabled": user.get("Enabled"),
                     }
@@ -196,20 +197,49 @@ class UserManagementService:
         return tuple(users)
 
     def assign_profile(
-        self, principal: Principal, *, email: str, policy_profile_id: str
+        self,
+        principal: Principal,
+        *,
+        email: str,
+        policy_profile_id: str,
+        action: str = "add",
     ) -> dict[str, object]:
+        """Add, remove, or set one Policy Profile on a user, keeping the list free of repeats.
+
+        한 사용자가 여러 Profile을 가질 수 있다 — 사내 정책 Profile과 ISMS-P 기준선 Profile을 따로
+        평가해 보는 것이 그 이유다. Cognito 표준 `profile` 속성 하나에 쉼표로 이어 저장하므로
+        사용자는 로그인 시 자기 token에서 목록을 그대로 읽는다. `add`는 이미 있으면 그대로 두고,
+        `remove`는 없으면 그대로 두며, `set`은 예전 동작(하나로 교체)이다.
+        """
         _require(principal)
         authorize(principal, Action.MANAGE_USERS)
         email = normalize_email(email)
         if not isinstance(policy_profile_id, str) or not policy_profile_id.strip():
             raise UserManagementError("policy_profile_id is invalid")
+        if "," in policy_profile_id:
+            raise UserManagementError("policy_profile_id must not contain a comma")
+        if action not in ("add", "remove", "set"):
+            raise UserManagementError("action must be add, remove, or set")
         self._require_same_customer(principal, email)
+        current = self._current_profiles(email)
+        wanted = policy_profile_id.strip()
+        if action == "set":
+            profiles = [wanted]
+        elif action == "remove":
+            profiles = [p for p in current if p != wanted]
+        else:
+            profiles = current if wanted in current else [*current, wanted]
         self._client.admin_update_user_attributes(
             UserPoolId=self._pool,
             Username=email,
-            UserAttributes=[{"Name": "profile", "Value": policy_profile_id}],
+            UserAttributes=[{"Name": "profile", "Value": join_profiles(profiles)}],
         )
-        return {"email": email, "profile": policy_profile_id}
+        return {"email": email, "profile": join_profiles(profiles), "profiles": profiles}
+
+    def _current_profiles(self, email: str) -> list[str]:
+        user = self._client.admin_get_user(UserPoolId=self._pool, Username=email)
+        attrs = {a["Name"]: a["Value"] for a in user.get("UserAttributes", [])}
+        return split_profiles(attrs.get("profile"))
 
     def delete_user(self, principal: Principal, *, email: str) -> dict[str, object]:
         """Permanently delete a user in the caller's own customer partition.
@@ -253,6 +283,22 @@ class UserManagementService:
                 owner = attribute.get("Value")
         if owner is None or owner != principal.customer_id:
             raise AuthorizationDenied("the user is not in the caller's customer")
+
+
+def split_profiles(value: object) -> list[str]:
+    """The stored `profile` attribute as a list: comma-separated, trimmed, no repeats, order kept."""
+    if not isinstance(value, str):
+        return []
+    seen: list[str] = []
+    for part in value.split(","):
+        item = part.strip()
+        if item and item not in seen:
+            seen.append(item)
+    return seen
+
+
+def join_profiles(profiles: list[str]) -> str:
+    return ",".join(profiles)
 
 
 def _require(principal: object) -> None:

@@ -1815,6 +1815,17 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     sessionStorage에 남겨 클릭으로 되돌아가고, 새 로그인(토큰 교환)과 로그아웃에서 비운다 —
     앞선 PR의 localStorage 단일 id 보존(재로그인 유지)은 이 요구와 반대라 대체했다.
 
+- **사용자당 여러 Profile 지정 · "지원 예정" 카드 (2026-09-05).**
+  - 사용자는 지정된 Profile 하나로만 평가할 수 있었다. 사내 정책 Profile과 ISMS-P 기준선 Profile을
+    따로 돌려 보려면 둘 다 가져야 한다. `POST /admin/users/profile`에 `action`(`add` 기본·`remove`·
+    `set`)을 더해 Cognito `profile` 속성에 쉼표 목록으로 저장하고(중복 없음), `GET /admin/users`와
+    token이 `profiles[]`를 준다. 새 route 없음. 사용자 관리 화면은 chip + ✕(해제), 이미 지정된 것은
+    선택지에서 빠진다. topbar와 평가 실행 카드에서 지정된 Profile 중 하나를 골라 평가한다.
+  - "지원 예정" 좌표가 여전히 `MANUAL_REVIEW` 배지와 "조치 요청" 버튼을 달고 있었다. 사람 검토
+    좌표(MANUAL 관점)에는 조치 버튼을 두지 않고, 지원 예정은 배지·문구로 카탈로그 확장 대상임을
+    말한다.
+
+
 
 
 

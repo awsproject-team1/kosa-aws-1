@@ -96,13 +96,13 @@ class FakeCognito:
         email = kwargs["Username"]
         if email not in self.users:
             raise ClientError("UserNotFoundException")
-        return {
-            "Username": email,
-            "UserAttributes": [
-                {"Name": "email", "Value": email},
-                {"Name": "custom:customer_id", "Value": self.users[email]},
-            ],
-        }
+        attributes = [
+            {"Name": "email", "Value": email},
+            {"Name": "custom:customer_id", "Value": self.users[email]},
+        ]
+        if email in self.profiles:
+            attributes.append({"Name": "profile", "Value": self.profiles[email]})
+        return {"Username": email, "UserAttributes": attributes}
 
     def list_users(self, **kwargs):
         self.calls.append(("list_users", kwargs))
@@ -255,7 +255,85 @@ class AssignProfileTest(unittest.TestCase):
             ADMIN, email="a@example.com", policy_profile_id="profile-1"
         )
         self.assertEqual(client.profiles["a@example.com"], "profile-1")
-        self.assertEqual(result, {"email": "a@example.com", "profile": "profile-1"})
+        self.assertEqual(
+            result, {"email": "a@example.com", "profile": "profile-1", "profiles": ["profile-1"]}
+        )
+
+    def test_a_second_profile_is_added_without_dropping_the_first(self) -> None:
+        """사내 정책 Profile과 ISMS-P 기준선 Profile을 따로 평가해 보려면 둘 다 가져야 한다."""
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.profiles["a@example.com"] = "profile-1"
+
+        result = _service(client).assign_profile(
+            ADMIN, email="a@example.com", policy_profile_id="profile-2"
+        )
+
+        self.assertEqual(client.profiles["a@example.com"], "profile-1,profile-2")
+        self.assertEqual(result["profiles"], ["profile-1", "profile-2"])
+
+    def test_assigning_an_already_assigned_profile_does_not_repeat_it(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.profiles["a@example.com"] = "profile-1,profile-2"
+
+        result = _service(client).assign_profile(
+            ADMIN, email="a@example.com", policy_profile_id="profile-1"
+        )
+
+        self.assertEqual(result["profiles"], ["profile-1", "profile-2"])
+
+    def test_a_profile_can_be_removed_leaving_the_others(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.profiles["a@example.com"] = "profile-1,profile-2"
+
+        result = _service(client).assign_profile(
+            ADMIN, email="a@example.com", policy_profile_id="profile-1", action="remove"
+        )
+
+        self.assertEqual(client.profiles["a@example.com"], "profile-2")
+        self.assertEqual(result["profiles"], ["profile-2"])
+
+    def test_set_replaces_the_whole_list(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.profiles["a@example.com"] = "profile-1,profile-2"
+
+        result = _service(client).assign_profile(
+            ADMIN, email="a@example.com", policy_profile_id="profile-3", action="set"
+        )
+
+        self.assertEqual(result["profiles"], ["profile-3"])
+
+    def test_an_unknown_action_and_a_comma_are_client_errors(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        with self.assertRaises(UserManagementError):
+            _service(client).assign_profile(
+                ADMIN, email="a@example.com", policy_profile_id="p", action="replace"
+            )
+        with self.assertRaises(UserManagementError):
+            _service(client).assign_profile(ADMIN, email="a@example.com", policy_profile_id="a,b")
+        self.assertEqual(client.profiles, {})
+
+    def test_the_listing_splits_the_stored_profiles(self) -> None:
+        client = FakeCognito({"a@example.com": "cust-a"})
+        client.pages = [
+            {
+                "Users": [
+                    {
+                        "Username": "a@example.com",
+                        "UserStatus": "CONFIRMED",
+                        "Enabled": True,
+                        "Attributes": [
+                            {"Name": "email", "Value": "a@example.com"},
+                            {"Name": "custom:customer_id", "Value": "cust-a"},
+                            {"Name": "profile", "Value": "profile-1, profile-2,profile-1"},
+                        ],
+                    }
+                ]
+            }
+        ]
+
+        (user,) = _service(client).list_users(ADMIN)
+
+        self.assertEqual(user["profiles"], ["profile-1", "profile-2"])
 
     def test_another_customers_user_cannot_be_reassigned(self) -> None:
         """The regression this pins: a write aimed at a foreign account by address alone."""

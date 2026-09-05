@@ -203,3 +203,12 @@ button.linklike { background: none; border: 0; padding: 0; color: var(--accent);
 .history-list button { display: flex; gap: 12px; align-items: center; justify-content: flex-start; width: 100%; text-align: left; padding: 8px 12px; font-weight: 500; }
 .history-list .history-when { font-variant-numeric: tabular-nums; min-width: 150px; }
 .history-list .history-meta { color: inherit; opacity: .75; font-size: 12px; }
+
+/* 사용자별 지정 Profile chip과 topbar Profile 선택 */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 6px 2px 8px; background: var(--panel-2); }
+.chip-x { padding: 0 4px; border: 0; background: transparent; color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; }
+.chip-x:hover { color: var(--err); filter: none; }
+.profile-pick { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--muted); }
+.profile-pick select { display: inline-block; width: auto; margin: 0; padding: 4px 8px; font-size: 12px; }
+.badge.status-not_yet_supported { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
