@@ -322,6 +322,17 @@ const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 
  * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
  * 동일하게 브라우저 세션 종료 시 함께 비워지도록 하기 위함이다. */
 const chatKey = (sub: string) => `gov.chat.${sub}`;
+/* 마지막으로 열람한 Assessment id를 사용자별로 localStorage에 보관한다. 결과 자체는 백엔드에
+ * 영구 저장돼 있고 여기 저장하는 것은 "어느 평가를 보고 있었는지"뿐이라, 재로그인·새로고침 후에도
+ * 결과 탭이 그 평가를 다시 불러오도록 한다. sessionStorage가 아니라 localStorage인 이유는
+ * 재로그인(세션 종료)을 넘어 유지되어야 하기 때문이다. */
+const assessmentKey = (sub: string) => `gov.assessment.${sub}`;
+function loadAssessmentId(sub: string): string | null {
+  try { return localStorage.getItem(assessmentKey(sub)); } catch { return null; }
+}
+function saveAssessmentId(sub: string, id: string | null): void {
+  try { if (id) localStorage.setItem(assessmentKey(sub), id); else localStorage.removeItem(assessmentKey(sub)); } catch { /* 저장 실패는 무시 */ }
+}
 function loadTurns(sub: string): Turn[] {
   try {
     const raw = sessionStorage.getItem(chatKey(sub));
@@ -1453,6 +1464,11 @@ function App() {
   const [completedAssessmentId, setCompletedAssessmentId] = useState<string | null>(null);
   const observer = useObserver();
   useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
+  // 세션이 설정되면 그 사용자가 마지막으로 보던 Assessment id를 복원한다. 결과 자체는 백엔드에
+  // 있으므로 id만 되살리면 결과 탭이 GET /assessments/{id}로 다시 불러온다.
+  useEffect(() => { if (session) setAssessmentId(prev => prev ?? loadAssessmentId(session.sub)); }, [session]);
+  // assessmentId가 바뀌면 사용자별로 저장한다(세션이 있을 때만).
+  useEffect(() => { if (session) saveAssessmentId(session.sub, assessmentId); }, [session, assessmentId]);
   const isAdmin = !!session?.groups.includes("Admin");
   useEffect(() => {
     if (!session) return;
