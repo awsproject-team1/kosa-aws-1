@@ -118,6 +118,26 @@ bootstrap이 current pointer만 조건부로 옮긴다(`current_version = :curre
 같은 규칙). 같은 판본에 다른 내용이면 여전히 fail-closed하고, 동시에 옮겨진 pointer는 덮어쓰지
 않는다.
 
+### 6. 자동 조치 허용 범위는 통제에서 물려받는다 (2026-09-05 보완)
+
+기준선 v2로 평가하자 FAIL Finding 23건이 전부 `MANUAL_REVIEW (RULE_NOT_IN_SCOPE)`였다. 조치
+판정이 legacy Registry의 `remediation.json`만 읽었고, 기준선 Rule은 어디에도 등록돼 있지 않았기
+때문이다 — ADR-0017대로 등록 없는 Rule은 모든 자동 조치가 닫힌다(옳은 기본값이지만, 잊어서 닫힌
+것과 판단해서 닫힌 것은 다르다).
+
+- 허용 범위는 Rule이 아니라 **통제**에 대한 판단이다(Rule만으로 유일한 안전 상태가 정해지고
+  교체·데이터 손실이 없는가). 같은 통제를 구현하는 기준선 Rule은 legacy Rule의 판단을 **그대로
+  물려받는다** — 생성 스크립트가 `LEGACY_RULE_CONTROL_KEYS`로 legacy `remediation.json`을 통제별로
+  읽어 `fixtures/baselines/isms-p-2023/remediation.json`을 만든다. 물려받을 판단이 없는 통제는
+  생성이 실패한다(조용히 닫히지 않게).
+- 결과: `AUTOMATIC` = S3 public access block · S3 ACL 비활성 · S3 TLS · RDS 비공개(4). 나머지 11개는
+  `MANUAL_ONLY` — bucket policy의 의도한 범위, 로그 목적지, 암호화 키, SG의 허용 출처, 공인 IP
+  제거 후의 접근 경로는 Rule이 정하지 않고, EBS·RDS 저장 암호화는 교체가 필요하다.
+- MANUAL Rule 101개는 허용 범위를 갖지 않는다. FAIL Finding을 만들지 않으므로(항상 `MANUAL_REVIEW`)
+  판단할 조치가 없다.
+- API의 조치 판정은 두 Registry의 범위를 합쳐 본다(`load_remediation_policy`). Rule id가 겹치면
+  거부한다 — 어느 판단이 이기는지 말할 수 없다.
+
 ## Consequences
 
 - ISMS-P 평가는 Bedrock을 부르지 않는다. 고객 수와 무관하게 같은 101개 좌표가 만들어진다.

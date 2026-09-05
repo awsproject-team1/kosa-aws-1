@@ -47,6 +47,7 @@ from apps.backend.policy.authoring.rule_builder import APPLICABLE_PHASES  # noqa
 from apps.backend.policy.control_catalog import (  # noqa: E402 - repo root must precede.
     CONTROL_CATALOG_VERSION,
     GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
+    LEGACY_RULE_CONTROL_KEYS,
     MANUAL_CONTROL_KEY,
     MVP_CONTROL_CATALOG,
 )
@@ -176,6 +177,28 @@ def _legacy_source() -> dict[str, object]:
         if entry.get("source_id") == SOURCE_ID and entry.get("version") == SOURCE_VERSION:
             return dict(entry)
     raise LookupError(f"{SOURCE_ID}@{SOURCE_VERSION} is not declared in the legacy registry")
+
+
+def _inherited_eligibility() -> dict[str, str]:
+    """Remediation eligibility per catalog control, inherited from the legacy scope.
+
+    자동 patch 허용 범위는 Rule이 아니라 **통제**에 대한 판단이다(ADR-0017: Rule만으로 유일한
+    안전 상태가 정해지고 교체·데이터 손실이 없는가). legacy Rule마다 그 판단이 이미 커밋돼 있고
+    (`fixtures/rules/remediation.json`), 같은 통제를 구현하는 기준선 Rule은 같은 판단을 물려받는다.
+    여기서 새로 정하면 같은 통제가 Registry에 따라 다른 허용 범위를 갖는다.
+
+    한 통제를 구현하는 legacy Rule이 여럿이고 판단이 갈리면 물려받을 것이 없으므로 실패한다.
+    """
+    scopes = json.loads((LEGACY_REGISTRY_DIR / "remediation.json").read_text(encoding="utf-8"))
+    by_control: dict[str, str] = {}
+    for scope in scopes:
+        control_key = LEGACY_RULE_CONTROL_KEYS.get(scope["rule_id"])
+        if control_key is None:
+            continue
+        previous = by_control.setdefault(control_key, scope["eligibility"])
+        if previous != scope["eligibility"]:
+            raise ValueError(f"legacy rules disagree on remediation eligibility for {control_key}")
+    return by_control
 
 
 def _require_mapping_targets(controls: list[Control]) -> None:
@@ -312,11 +335,27 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
             }
         ],
     }
+    # 자동 판정 Rule만 허용 범위를 갖는다. MANUAL Rule은 FAIL Finding을 만들지 않으므로(항상
+    # MANUAL_REVIEW) 판단할 조치가 없다. 항목이 없는 자동 Rule은 ADR-0017대로 모든 자동 조치가
+    # 닫힌다 — 그래서 물려받을 판단이 없는 통제는 여기서 실패시켜 조용히 닫히지 않게 한다.
+    inherited = _inherited_eligibility()
+    remediation: list[dict[str, str]] = []
+    for control_key in sorted(AUTOMATABLE_MAPPING):
+        if control_key not in inherited:
+            raise ValueError(f"no legacy remediation eligibility to inherit for {control_key}")
+        remediation.append(
+            {
+                "rule_id": f"ISMSP-{control_key}",
+                "version": SOURCE_VERSION,
+                "eligibility": inherited[control_key],
+            }
+        )
     return {
         "sources.json": [source],
         "controls.json": control_entries,
         RULE_FILE: rules,
         "profiles.json": [profile],
+        "remediation.json": remediation,
     }
 
 

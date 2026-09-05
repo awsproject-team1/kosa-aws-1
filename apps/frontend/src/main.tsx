@@ -1401,7 +1401,7 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
       <button className="ghost" disabled={busy || !!suppression} onClick={() => void request()}>{busy ? "조치 판정 중…" : "조치 요청"}</button>
       {start && <span className="hint">판정: <strong>{start.decision.action}</strong>{code ? ` (${code})` : ""}{start.job ? ` · job ${start.job.job_id}` : " · Job 없음(사람 검토)"}</span>}
     </div>
-    {start && start.decision.action === "MANUAL_REVIEW" && <p className="hint">자동 조치 대상이 아닙니다{code === "RULE_NOT_IN_SCOPE" ? " — 이 Rule은 자동 patch 허용 범위(remediation eligibility)에 등록되어 있지 않습니다" : ""}. 담당자가 직접 검토합니다.</p>}
+    {start && start.decision.action === "MANUAL_REVIEW" && <p className="hint">자동 조치 대상이 아닙니다{code === "RULE_NOT_IN_SCOPE" ? " — 이 Rule은 자동 patch 허용 범위(remediation eligibility)에 등록되어 있지 않습니다" : code === "RULE_MANUAL_ONLY" ? " — 이 Rule만으로는 안전한 목표 상태가 유일하게 정해지지 않거나 리소스 교체·데이터 손실이 필요해 자동 patch를 열지 않습니다(ADR-0017). IaC를 사람이 고친 뒤 재평가하면 ACTUAL_SYNC 경로는 열립니다" : ""}. 담당자가 직접 검토합니다.</p>}
     {view && <div className="remediation-result">
       <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : " · Worker 결과 대기 중"}</div>
       {view.result?.patch && <div className="hint">변경 파일: <CodeValues values={view.result.patch.changed_paths} /> base commit <code>{view.result.patch.base_commit_sha.slice(0, 12)}</code> · patch digest <code>{view.result.patch.artifact.content_sha256.slice(0, 16)}</code></div>}

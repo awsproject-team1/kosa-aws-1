@@ -1,0 +1,77 @@
+[
+  {
+    "rule_id": "ISMSP-ALB_ACCESS_LOGGING",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-ALB_HTTPS_ONLY",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-EC2_EBS_ENCRYPTION",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-RDS_ACCESS_RESTRICTED",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-RDS_ENCRYPTION_AT_REST",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-RDS_LOG_EXPORTS",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-RDS_NOT_PUBLIC",
+    "version": "2023-10-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "ISMSP-S3_BLOCK_PUBLIC_ACCESS",
+    "version": "2023-10-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "ISMSP-S3_BUCKET_ACL_DISABLED",
+    "version": "2023-10-31",
+    "eligibility": "AUTOMATIC"
+  },
+  {
+    "rule_id": "ISMSP-S3_BUCKET_POLICY_RESTRICTED",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-S3_ENCRYPTION_AT_REST",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-S3_SERVER_ACCESS_LOGGING",
+    "version": "2023-10-31",
+    "eligibility": "MANUAL_ONLY"
+  },
+  {
+    "rule_id": "ISMSP-S3_TLS_ONLY",
+    "version": "2023-10-31",
+    "eligibility": "AUTOMATIC"
+  }
+]

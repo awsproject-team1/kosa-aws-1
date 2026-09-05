@@ -129,3 +129,17 @@ decision, which is the intended direction of failure.
 The boundary judges; it does not persist. A binds the decision to the Job state
 and audit record, and D still validates that a generated patch matches the
 Finding and snapshot it was asked for.
+
+## 보완 2026-09-05 — 허용 범위는 Registry마다 커밋되고, 판정은 전부를 합쳐 본다
+
+"The classification lives in `fixtures/rules/remediation.json` next to the Rules it judges"는
+Registry가 하나였을 때의 문장이다. ISMS-P 기준선(ADR-0026)이 두 번째 Registry가 되면서 두 가지가
+정해졌다.
+
+- 허용 범위는 **각 Registry 안에서** 그 Registry의 Rule에 대해 커밋된다(loader가 다른 Registry의
+  Rule을 가리키는 항목을 거부하므로). 조치 판정은 runtime이 게시하는 모든 Registry의 범위를 합쳐
+  본다(`load_remediation_policy`). 한쪽만 읽으면 다른 쪽 Rule이 전부 "등록되지 않음"이 된다 —
+  라이브에서 기준선 Rule 15개가 정확히 그렇게 `RULE_NOT_IN_SCOPE`로 닫혔다.
+- 판단의 단위는 Rule version이지만 그 **근거**는 통제다. 같은 통제를 구현하는 Rule이 Registry마다
+  다른 허용 범위를 가지면 같은 변경이 한쪽에서는 자동, 다른 쪽에서는 수동이 된다. 그래서 기준선
+  Rule은 같은 통제의 legacy 판단을 물려받고(생성 스크립트가 강제), 새 판단은 legacy 쪽에서 내린다.

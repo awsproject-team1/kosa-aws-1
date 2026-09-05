@@ -29,6 +29,7 @@ from apps.backend.policy.registry import (
     ControlRuleCoverage,
     PolicyRegistry,
     PolicyRegistryError,
+    load_remediation_policy,
     load_rule_registry,
 )
 from apps.backend.policy.remediation import (
@@ -63,6 +64,7 @@ __all__ = [
     "annotate_suppressed_findings",
     "approve_source",
     "load_m0_fixture_catalog",
+    "load_remediation_policy",
     "load_rule_registry",
     "normalize_upload",
     "ProfileBaseline",

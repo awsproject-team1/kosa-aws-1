@@ -1782,5 +1782,20 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - prompt는 바꾸지 않았다. "array of strings"를 명시하면 빈도가 더 줄겠지만 그 prompt는 측정으로
     정해진 것이라(`_SYSTEM_PROMPT` 주석) 회귀 측정과 함께 바꿔야 한다.
 
+- **ISMS-P 기준선 Finding이 전부 "조치 불가"였던 이유 — 허용 범위 미등록 (2026-09-05, ADR-0026 §6).**
+  - 평가 `asm-43948139`: 점수 14는 저장된 29개 판정 좌표를 severity 가중(1/2/4/8)으로 재계산해
+    확인했다(1600/114 = 14.0). EXECUTION_ERROR 0건(146/146), 미판정 1건은 `RDS_LOG_EXPORTS`의 AWS
+    관점 — read 투영에 `EnabledCloudwatchLogsExports`가 없어 fail-closed(카탈로그 어댑터 공백).
+  - FAIL 23건이 전부 `MANUAL_REVIEW (RULE_NOT_IN_SCOPE)`: 조치 판정이 legacy `remediation.json`만
+    읽었다. 기준선 Rule(과 authoring `CUST-` Rule)은 등록된 적이 없다.
+  - 처리: 생성 스크립트가 legacy 판단을 통제별로 물려받아 기준선 `remediation.json`을 만든다
+    (AUTOMATIC 4: S3 public block · S3 ACL · S3 TLS · RDS 비공개, MANUAL_ONLY 11). API는
+    `load_remediation_policy(legacy, baseline)`로 두 범위를 합쳐 본다(id 겹침은 거부). 콘솔은
+    `RULE_MANUAL_ONLY`에 이유를 붙인다.
+  - 이 평가에서 자동 patch가 열리는 것은 CRITICAL 두 통제(S3 public block, RDS 비공개)의 IAC·AWS
+    Finding 4건이다. 나머지 HIGH/MEDIUM은 ADR-0017 기준(Rule만으로 유일한 안전 상태·무손실)에 따라
+    사람이 IaC를 고치고 재평가하는 경로다 — 그건 등록 누락이 아니라 판단이다.
+
+
 
 

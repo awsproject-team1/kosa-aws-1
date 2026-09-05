@@ -42,7 +42,10 @@ from apps.backend.jobs import (
     SqsRemediationWorkflowDispatcher,
     SqsWorkflowDispatcher,
 )
-from apps.backend.policy import DynamoDbPolicyCatalog, load_rule_registry
+from apps.backend.policy import (
+    DynamoDbPolicyCatalog,
+    load_remediation_policy,
+)
 from apps.backend.repositories import (
     DynamoDbAssessmentWorkflowRepository,
     DynamoDbAuditEventRepository,
@@ -338,7 +341,9 @@ def _remediation_components(
     except ImportError as error:  # pragma: no cover - boto3는 Lambda 런타임이 제공한다.
         raise RuntimeError("AWS Lambda boto3 runtime is required") from error
     queue_url = _required_string(os.environ.get("REMEDIATION_QUEUE_URL"), "REMEDIATION_QUEUE_URL")
-    remediation_policy = load_rule_registry(_rules_path()).remediation
+    # legacy Registry와 ISMS-P 기준선의 허용 범위를 함께 본다. 한쪽만 읽으면 기준선 Rule의
+    # 모든 Finding이 RULE_NOT_IN_SCOPE로 닫힌다 — 라이브에서 그랬다.
+    remediation_policy = load_remediation_policy(_rules_path(), _isms_p_baseline_path())
     context_reader = DynamoDbRemediationContextReader(_metadata_table())
     dispatcher = SqsRemediationWorkflowDispatcher(boto3.client("sqs"), queue_url=queue_url)
     return RemediationApiService(
@@ -356,6 +361,10 @@ def _remediation_components(
 
 def _rules_path() -> Path:
     return Path(__file__).parents[3] / "fixtures" / "rules"
+
+
+def _isms_p_baseline_path() -> Path:
+    return Path(__file__).parents[3] / "fixtures" / "baselines" / "isms-p-2023"
 
 
 def _orchestration_components() -> object | None:

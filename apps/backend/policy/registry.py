@@ -291,3 +291,22 @@ def _require_known_remediation_rules(
                 f"remediation scope references an unavailable rule "
                 f"{scope.rule_id!r} version {scope.version!r}"
             )
+
+
+def load_remediation_policy(*directories: Path) -> RemediationPolicy:
+    """The remediation scope committed across every registry the runtime publishes.
+
+    허용 범위는 Registry마다 그 Registry의 Rule에 대해 커밋된다(`_require_known_remediation_rules`).
+    runtime은 legacy Registry와 ISMS-P 기준선을 함께 게시하므로(ADR-0026), 조치 판정도 두 범위를
+    함께 보아야 한다 — 한쪽만 읽으면 다른 쪽 Rule은 전부 "등록되지 않음"이 되어 `RULE_NOT_IN_SCOPE`로
+    닫힌다. 라이브에서 기준선 Rule 15개가 정확히 그렇게 됐다.
+
+    Rule id는 Registry 사이에서도 겹치지 않아야 한다. 겹치면 어느 판단이 이기는지 말할 수 없으므로
+    `RemediationPolicy`가 중복으로 거부한다.
+    """
+    if not directories:
+        raise ValueError("at least one registry directory is required")
+    scopes: list[RemediationRuleScope] = []
+    for directory in directories:
+        scopes.extend(load_rule_registry(directory).remediation.scopes)
+    return RemediationPolicy(scopes)
