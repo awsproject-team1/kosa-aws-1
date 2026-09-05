@@ -191,3 +191,9 @@ button.linklike { background: none; border: 0; padding: 0; color: var(--accent);
 .badge.status-pass { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .badge.status-manual_review, .badge.status-insufficient_evidence { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .badge.status-execution_error { color: var(--err); }
+
+/* 결과 상태 필터. 선택된 그룹만 채운다 — 수가 아니라 상태가 먼저 읽히게 */
+.status-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.status-filters button { padding: 6px 12px; font-size: 12px; }
+.status-filters button strong { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.panel > .panel { margin: 0; }

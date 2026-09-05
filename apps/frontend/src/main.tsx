@@ -1209,6 +1209,116 @@ async function fetchFullReport(token: string, assessmentId: string): Promise<Rep
 
 function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
 
+/* 결과를 상태별로 나눠 본다. Finding 목록 하나에 FAIL과 사람 검토 101건이 섞이면 조치할 것이
+ * 검토할 것 사이에 묻힌다. 분류 기준은 status이고, 사람 검토는 다시 "ISMS-P 항목(사람이 판정)"과
+ * "판정 없음으로 인한 검토(drift 등)"로 갈라 센다 — 둘은 성격이 다르다. */
+const STATUS_GROUPS: { key: string; label: string; statuses: string[]; hint: string }[] = [
+  { key: "FAIL", label: "FAIL", statuses: ["FAIL"], hint: "판정된 위반. 조치 요청의 대상입니다." },
+  { key: "MANUAL_REVIEW", label: "수동 검토", statuses: ["MANUAL_REVIEW"], hint: "사람이 판정해야 하는 좌표. 점수를 깎지 않으며 미판정으로 따로 셉니다." },
+  { key: "INSUFFICIENT_EVIDENCE", label: "근거 부족", statuses: ["INSUFFICIENT_EVIDENCE"], hint: "읽은 문서에 판정할 값이 없어 코드가 fail-closed한 좌표. 위반이 아닙니다." },
+  { key: "EXECUTION_ERROR", label: "실행 오류", statuses: ["EXECUTION_ERROR"], hint: "평가가 실행되지 못한 좌표. rationale에 사유가 적힙니다." },
+  { key: "PASS", label: "PASS", statuses: ["PASS"], hint: "판정된 준수." },
+  { key: "OTHER", label: "기타", statuses: ["OUT_OF_SCOPE"], hint: "Rule이 이 리소스에 적용되지 않음." },
+];
+
+function ResultsByStatus({ rep, complete, suppressed, session, obs, isAdmin }: { rep: Report; complete: boolean; suppressed: Map<string, Suppression>; session: Session; obs: ObserverApi; isAdmin: boolean }) {
+  const [group, setGroup] = useState<string>("FAIL");
+  const findingByCoordinate = new Map(rep.findings.map(f => [`${f.resource_id}|${f.rule_id}|${f.perspective}`, f]));
+  const counts = new Map(STATUS_GROUPS.map(g => [g.key, rep.results.filter(r => g.statuses.includes(r.status)).length]));
+  const active = STATUS_GROUPS.find(g => g.key === group) ?? STATUS_GROUPS[0];
+  const rows = rep.results
+    .filter(r => active.statuses.includes(r.status))
+    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || a.rule_id.localeCompare(b.rule_id) || a.resource_id.localeCompare(b.resource_id) || a.perspective.localeCompare(b.perspective));
+  const manualItems = rep.results.filter(r => r.status === "MANUAL_REVIEW" && r.perspective === "MANUAL").length;
+  const manualOther = (counts.get("MANUAL_REVIEW") ?? 0) - manualItems;
+  return <div className="card"><h2>결과 분류 ({rep.results.length})</h2>
+    <p className="hint">상태별로 나눠 봅니다. FAIL·수동 검토·근거 부족은 Finding으로 조치·검토 대상이 되고, PASS는 판정된 준수입니다.</p>
+    <div className="status-filters" role="tablist" aria-label="결과 상태 필터">
+      {STATUS_GROUPS.map(g => <button key={g.key} role="tab" aria-selected={group === g.key} className={group === g.key ? "active" : "ghost"} onClick={() => setGroup(g.key)}>{g.label} <strong>{counts.get(g.key) ?? 0}</strong></button>)}
+    </div>
+    <p className="hint">{active.hint}{active.key === "MANUAL_REVIEW" && manualItems > 0 && ` — ISMS-P 항목(사람 판정) ${manualItems}건${manualOther > 0 ? ` · 판정 없음으로 인한 검토 ${manualOther}건` : ""}. 자동 근거가 있는 항목도 확인사항 일부만 자동 판정되므로 항목 자체는 검토 목록에 남습니다.`}</p>
+    {rows.map(r => {
+      const finding = findingByCoordinate.get(`${r.resource_id}|${r.rule_id}|${r.perspective}`);
+      return finding
+        ? <FindingCard key={finding.finding_id} finding={finding} suppression={suppressed.get(finding.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />
+        : <article key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} className="candidate">
+            <div className="candidate-badges"><span className="badge severity">{r.severity}</span><span className={`badge status-${r.status.toLowerCase()}`}>{r.status}</span><span className="badge">{r.perspective}</span><span className="badge">판정 {r.decided_by === "CODE" ? "코드" : "모델"}</span></div>
+            <h3><code>{r.resource_id}</code> · {r.rule_id}@{r.rule_version}</h3>
+            <p style={{ margin: "6px 0" }}>{r.rationale}</p>
+          </article>;
+    })}
+    {rows.length === 0 && <p className="obs-empty">{complete ? `${active.label} 결과가 없습니다.` : `아직 ${active.label} 결과가 없습니다 (평가 진행 중).`}</p>}
+  </div>;
+}
+
+function severityRank(severity: string): number {
+  return ({ CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 } as Record<string, number>)[severity] ?? 0;
+}
+
+/* Assessment 결과 탭에서 버튼으로 평가를 시작한다. 챗봇의 startAssessment와 같은 API·같은
+ * 관측 job 생명주기를 쓴다 — 두 경로가 다른 요청을 보내면 어느 쪽이 맞는지 말할 수 없다.
+ * 리포지토리는 /scope의 연결 목록에서, Profile은 사용자에게 지정된 것(관리자는 게시된 Profile 중
+ * 선택)을 쓴다. */
+function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; isAdmin: boolean; onAssessment: (id: string) => void }) {
+  const repos = obs.obs.repos;
+  const [repositoryId, setRepositoryId] = useState<string>("");
+  const [published, setPublished] = useState<PublishedProfile[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<string>(profileId ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { if (!repositoryId && repos.length > 0) setRepositoryId(repos[0].repository_id); }, [repos, repositoryId]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    void (async () => {
+      try { const r = await api<{ profiles: PublishedProfile[] }>("/policy-profiles", session.accessToken); setPublished(r.profiles); }
+      catch { /* 목록을 못 읽어도 지정된 Profile로는 실행할 수 있다 */ }
+    })();
+  }, [isAdmin, session.accessToken]);
+  const effectiveProfile = isAdmin ? selectedProfile : (profileId ?? "");
+  async function start() {
+    setError(null);
+    if (!repositoryId) { setError("연결된 리포지토리가 없습니다. 관리자에게 리포지토리 연결을 요청하세요."); return; }
+    if (!effectiveProfile) { setError("지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요."); return; }
+    setBusy(true);
+    obs.resetNodes({ assessment: "active" });
+    const jobId = "assess-" + Date.now();
+    obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "active" });
+    try {
+      const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: effectiveProfile }) });
+      if (!r.assessment_id) throw new Error("assessment_id 없음");
+      obs.lightNode("assessment", "done");
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "done", meta: r.assessment_id.slice(0, 12) });
+      onAssessment(r.assessment_id);
+    } catch (e) {
+      obs.lightNode("assessment", "failed");
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "failed", meta: "실패" });
+      setError(`평가 시작 실패: ${(e as Error).message}`);
+    } finally { setBusy(false); }
+  }
+  return <div className="card"><h2>평가 실행</h2>
+    <p className="hint">연결된 리포지토리를 지정된 정책 Profile로 평가합니다. 챗봇에서 요청하는 것과 같은 평가이며, 결과는 이 화면에 표시됩니다.</p>
+    <div className="row">
+      <label style={{ flex: 1, marginBottom: 0 }}>리포지토리
+        <select value={repositoryId} onChange={e => setRepositoryId(e.target.value)} disabled={repos.length === 0}>
+          {repos.length === 0 && <option value="">연결된 리포지토리 없음</option>}
+          {repos.map(r => <option key={r.repository_id} value={r.repository_id}>{r.repository_id}{r.github_repository ? ` · ${r.github_repository}` : ""}</option>)}
+        </select>
+      </label>
+      <label style={{ flex: 1, marginBottom: 0 }}>정책 Profile
+        {isAdmin
+          ? <select value={selectedProfile} onChange={e => setSelectedProfile(e.target.value)}>
+              {!selectedProfile && <option value="">선택</option>}
+              {profileId && !published.some(p => p.policy_profile_id === profileId) && <option value={profileId}>{profileId} (지정됨)</option>}
+              {published.map(p => <option key={p.policy_profile_id} value={p.policy_profile_id}>{p.policy_profile_id}@{p.version} · Rule {p.rule_count}개{p.policy_profile_id === profileId ? " (지정됨)" : ""}</option>)}
+            </select>
+          : <input value={profileId ?? "지정된 Profile 없음"} readOnly />}
+      </label>
+      <button disabled={busy || !repositoryId || !effectiveProfile} onClick={() => void start()}>{busy ? "요청 중…" : "평가 실행"}</button>
+    </div>
+    {error && <p className="alert">{error}</p>}
+  </div>;
+}
+
 function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; isAdmin: boolean }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1284,11 +1394,7 @@ function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { sess
       <p className="hint">Model Profile: {[...modelProfiles].join(", ") || "-"}</p>
     </div>
 
-    <div className="card"><h2>Findings ({rep.findings.length})</h2>
-      <p className="hint">FAIL·MANUAL_REVIEW·INSUFFICIENT_EVIDENCE 결과만 Finding이 됩니다. Evidence는 평가기가 인용한 정책 locator와 read-only IaC/AWS 조회 locator입니다.</p>
-      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />)}
-      {rep.findings.length === 0 && <p className="obs-empty">{complete ? "Finding이 없습니다." : "아직 Finding이 없습니다 (평가 진행 중)."}</p>}
-    </div>
+    <ResultsByStatus rep={rep} complete={complete} suppressed={suppressed} session={session} obs={obs} isAdmin={isAdmin} />
 
     <div className="card"><h2>Resource × Rule × Perspective 결과 ({rep.results.length})</h2>
       <div style={{ overflowX: "auto" }}>
@@ -1523,9 +1629,12 @@ function App() {
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} completedAssessmentId={completedAssessmentId} onAssessment={id => { setAssessmentId(id); setCompletedAssessmentId(null); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
-      {view === "report" && (assessmentId
-        ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} isAdmin={isAdmin} />
-        : <div className="panel"><div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div></div>)}
+      {view === "report" && <div className="panel">
+        <StartAssessmentCard session={session} obs={observer} profileId={myProfile} isAdmin={isAdmin} onAssessment={id => { setAssessmentId(id); setCompletedAssessmentId(null); }} />
+        {assessmentId
+          ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} isAdmin={isAdmin} />
+          : <div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 위에서 '평가 실행'을 누르거나 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div>}
+      </div>}
     </div>
   </div>;
 }
