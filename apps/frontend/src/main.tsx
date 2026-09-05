@@ -93,6 +93,10 @@ function useObserver() {
   const [obs, setObs] = useState<Observer>(OBS_DEFAULT);
   const api = useMemo(() => ({
     lightNode(node: GraphNodeId, state: LightState) { setObs(o => ({ ...o, nodeStates: { ...o.nodeStates, [node]: state } })); },
+    // 새 턴이 시작되면 이전 턴에서 켜둔 노드 불을 모두 끄고 지정한 노드만 남긴다. 노드 상태는
+    // 누적 맵이라, 리셋하지 않으면 한 번 사용한 그래프가 계속 초록불로 남아 "지금 어떤 그래프가
+    // 도는지"를 알 수 없다.
+    resetNodes(next: Partial<Record<GraphNodeId, LightState>> = {}) { setObs(o => ({ ...o, nodeStates: { ...next } })); },
     upsertJob(job: QueueJob) { setObs(o => ({ ...o, jobs: [job, ...o.jobs.filter(j => j.id !== job.id)].slice(0, 8) })); },
     setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
     patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
@@ -310,28 +314,127 @@ function Login({ error }: { error: string | null }) {
 /* =========================================================================
  * Chat (Parent Orchestrator)
  * =======================================================================*/
-type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision };
-function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; onAssessment: (id: string) => void }) {
-  const [turns, setTurns] = useState<Turn[]>([{ role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\" 또는 정책 관련 질문." }]);
+type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision; remediable?: FindingRow[] };
+const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\", \"평가 결과 요약해줘\", \"CRITICAL 문제 고쳐줘\" 또는 정책 관련 질문." };
+/* Chat 내역은 사용자별로 sessionStorage에 저장한다. 탭 이동(Chat 언마운트)이나 새로고침에도
+ * 대화가 리셋되지 않도록 초기값을 저장소에서 복원하고, 변경마다 다시 쓴다. 키를 `session.sub`로
+ * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
+ * 동일하게 브라우저 세션 종료 시 함께 비워지도록 하기 위함이다. */
+const chatKey = (sub: string) => `gov.chat.${sub}`;
+function loadTurns(sub: string): Turn[] {
+  try {
+    const raw = sessionStorage.getItem(chatKey(sub));
+    if (!raw) return [CHAT_GREETING];
+    const parsed = JSON.parse(raw) as Turn[];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [CHAT_GREETING];
+  } catch { return [CHAT_GREETING]; }
+}
+
+/* 챗봇을 평가 결과와 연결한다(방안 1, 프론트엔드 통합). Parent는 결과에 접근하지 않으므로,
+ * "요약/조치" 같은 결과-지향 요청은 백엔드 라우팅(/orchestrate) 대신 프론트엔드가 이미 있는
+ * 결과 API(GET /assessments/{id})와 조치 API(POST /findings/{id}/remediations)로 결정적으로
+ * 처리한다. 안전 경계(사용자 확인 후 실행)는 그대로 유지한다 — 조치는 버튼으로만 실행된다. */
+type ChatLocalIntent = "summary" | "remediate" | "none";
+function detectLocalIntent(text: string): ChatLocalIntent {
+  const t = text.toLowerCase();
+  const remediate = /(고쳐|고침|조치|리메디|remediat|수정해|패치|fix)/.test(t);
+  if (remediate) return "remediate";
+  const summary = /(요약|정리|결과.*(어때|어떻|보여|알려)|(어때|어떻|보여|알려).*결과|summary|summarize)/.test(t);
+  if (summary) return "summary";
+  return "none";
+}
+/** 조치 요청에서 심각도 필터를 뽑는다. 없으면 전체 대상. */
+function severityFilter(text: string): Set<string> | null {
+  const t = text.toLowerCase();
+  const picked = new Set<string>();
+  if (/(critical|크리티컬|심각)/.test(t)) picked.add("CRITICAL");
+  if (/(high|하이|높음)/.test(t)) picked.add("HIGH");
+  if (/(medium|미디엄|중간)/.test(t)) picked.add("MEDIUM");
+  if (/(low|로우|낮음)/.test(t)) picked.add("LOW");
+  return picked.size > 0 ? picked : null;
+}
+/** 보고서를 사람이 읽을 요약 문자열로. LLM 없이 결정적 집계. */
+function summarizeReport(rep: Report): string {
+  const count = (s: string) => rep.results.filter(r => r.status === s).length;
+  const severe = rep.findings.filter(f => f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH")).length;
+  const cov = rep.coverage;
+  const complete = cov.completed_evaluations >= cov.planned_evaluations;
+  const score = rep.readiness_score ? `${rounded(rep.readiness_score.score)}/100` : (complete ? "계산 불가" : "계산 대기");
+  const lines = [
+    `평가 ${rep.assessment_id} 요약${complete ? "" : " (진행 중)"}:`,
+    `- 실행률 ${rounded(cov.percentage)}% (${cov.completed_evaluations}/${cov.planned_evaluations})`,
+    `- Readiness ${score}`,
+    `- Findings ${rep.findings.length}건 · CRITICAL/HIGH FAIL ${severe}건`,
+    `- FAIL ${count("FAIL")} · 수동검토 ${count("MANUAL_REVIEW")} · 근거부족 ${count("INSUFFICIENT_EVIDENCE")} · PASS ${count("PASS")}`,
+  ];
+  if (rep.findings.length > 0) lines.push('조치가 필요하면 "CRITICAL 문제 고쳐줘"처럼 요청하세요.');
+  return lines.join("\n");
+}
+function Chat({ session, obs, profileId, assessmentId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; assessmentId: string | null; onAssessment: (id: string) => void }) {
+  const [turns, setTurns] = useState<Turn[]>(() => loadTurns(session.sub));
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remediating, setRemediating] = useState<Set<string>>(new Set());
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [turns]);
+  // 대화가 바뀔 때마다 사용자별 키에 저장한다. 초기 인사만 있는 상태도 저장해 두면 다음 마운트에서
+  // 동일하게 복원된다. 저장 실패(용량 초과 등)는 대화 진행을 막지 않도록 조용히 무시한다.
+  useEffect(() => { try { sessionStorage.setItem(chatKey(session.sub), JSON.stringify(turns)); } catch { /* 저장 실패는 무시 */ } }, [turns, session.sub]);
 
   async function send() {
     const text = msg.trim();
     if (!text || busy) return;
     setMsg(""); setBusy(true);
     setTurns(t => [...t, { role: "user", text }]);
-    obs.lightNode("parent", "active");
+
+    // 결과-지향 요청(요약/조치)은 프론트엔드가 결정적으로 처리한다. 현재 열린 Assessment가 있어야
+    // 한다 — 없으면 먼저 평가를 요청하도록 안내한다.
+    const local = detectLocalIntent(text);
+    if (local !== "none") {
+      obs.resetNodes({ assessment: "done" });
+      try {
+        if (!assessmentId) {
+          setTurns(t => [...t, { role: "bot", text: "먼저 평가를 실행해 주세요. 예: \"test 리포지토리를 우리 정책으로 평가해줘\". 평가가 끝나면 결과를 요약하거나 조치를 도와드릴 수 있습니다." }]);
+          return;
+        }
+        const rep = await fetchFullReport(session.accessToken, assessmentId);
+        if (local === "summary") {
+          setTurns(t => [...t, { role: "bot", text: summarizeReport(rep) }]);
+          return;
+        }
+        // remediate: 조치 대상(Finding)만 추린다. 후속 조치가 필요한 상태이면서 억제되지 않은 것.
+        const suppressed = new Set((rep.suppressions ?? []).map(s => s.finding_id));
+        const followUp = new Set(["FAIL", "MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
+        const filter = severityFilter(text);
+        const targets = rep.findings.filter(f =>
+          followUp.has(f.status) && !suppressed.has(f.finding_id) && (!filter || filter.has(f.severity)));
+        if (targets.length === 0) {
+          const scope = filter ? [...filter].join("/") + " " : "";
+          setTurns(t => [...t, { role: "bot", text: `${scope}조치 대상 Finding이 없습니다. (조치 대상은 FAIL·수동검토·근거부족 상태이며 억제되지 않은 Finding입니다.)` }]);
+          return;
+        }
+        const scope = filter ? [...filter].join("/") + " " : "";
+        setTurns(t => [...t, { role: "bot", text: `${scope}조치 대상 ${targets.length}건입니다. 각 항목의 버튼으로 조치를 실행하세요 — 실행 전 확인이 필요하며, 조치는 read-only 진단 후 PR/동기화 제안으로 이어집니다.`, remediable: targets }]);
+      } catch (e) {
+        setTurns(t => [...t, { role: "bot", text: `결과를 가져오지 못했습니다: ${(e as Error).message}` }]);
+      } finally { setBusy(false); }
+      return;
+    }
+
+    // 새 턴이므로 이전 그래프 불을 모두 끄고 parent만 켠다 — 라우팅 결과에 따라 아래에서
+    // 해당 하위 노드만 추가로 켜진다.
+    obs.resetNodes({ parent: "active" });
     try {
       const d = await api<OrchestrationDecision>("/orchestrate", session.accessToken, { method: "POST", body: JSON.stringify(profileId ? { message: text, policy_profile_id: profileId } : { message: text }) });
-      obs.lightNode("parent", "done");
       const sub: Record<string, GraphNodeId> = { POLICY_QA: "policy_qa", ASSESSMENT: "assessment", REMEDIATION: "remediation", DEPLOYMENT: "deployment" };
       const node = sub[d.intent];
-      if (node) obs.lightNode(node, d.intent === "POLICY_QA" ? "done" : "pending");
+      // parent는 라우팅만 담당한다. 라우팅이 끝나면 parent 불을 끄고 넘겨받은 노드만 켜서
+      // "지금 어떤 그래프가 도는지"가 하나만 보이게 한다. POLICY_QA는 답이 이미 완성돼 done,
+      // 워크플로 제안은 사용자 확인 대기라 pending, UNSUPPORTED는 넘길 하위 노드가 없어 parent done.
+      if (node) obs.resetNodes({ [node]: d.intent === "POLICY_QA" ? "done" : "pending" });
+      else obs.resetNodes({ parent: "done" });
       setTurns(t => [...t, { role: "bot", text: d.answer ?? d.rationale, decision: d }]);
-    } catch (e) { obs.lightNode("parent", "failed"); setTurns(t => [...t, { role: "bot", text: `오류: ${(e as Error).message}` }]); }
+    } catch (e) { obs.resetNodes({ parent: "failed" }); setTurns(t => [...t, { role: "bot", text: `오류: ${(e as Error).message}` }]); }
     finally { setBusy(false); }
   }
   async function confirmAssessment(sel: Record<string, unknown> & { repository_id?: string }) {
@@ -358,14 +461,64 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
       setTurns(t => [...t, { role: "bot", text: "지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요." }]);
       return;
     }
-    obs.lightNode("assessment", "active");
-    obs.upsertJob({ id: "assess-" + Date.now(), label: "Assessment 시작", queue: "assessment", state: "active" });
+    obs.resetNodes({ assessment: "active" });
+    const jobId = "assess-" + Date.now();
+    obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "active" });
     try {
       const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: policyProfileId }) });
       if (!r.assessment_id) throw new Error("assessment_id 없음");
       obs.lightNode("assessment", "done");
+      // /assessments는 Job을 큐에 넣는 것으로 끝난다(202). 이 UI job은 "시작 요청"의 수명이므로
+      // 여기서 done으로 닫아야 Queue/Jobs에서 노란불로 영원히 남지 않는다. 실제 평가 진행은
+      // Assessment 결과 화면의 coverage 폴링이 보여준다.
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "done", meta: r.assessment_id.slice(0, 12) });
       onAssessment(r.assessment_id);
-    } catch (e) { obs.lightNode("assessment", "failed"); setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]); }
+    } catch (e) {
+      obs.lightNode("assessment", "failed");
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "failed", meta: "실패" });
+      setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]);
+    }
+  }
+  // 챗봇에서 조치를 실행한다. FindingCard.request와 같은 API·노드/job 라이프사이클을 쓰되,
+  // 결과를 대화에 남긴다. 실행 전 사용자가 버튼을 눌러야 하므로 안전 경계(확인 후 실행)는 유지된다.
+  async function runRemediation(f: FindingRow) {
+    if (remediating.has(f.finding_id)) return;
+    setRemediating(s => new Set(s).add(f.finding_id));
+    const jobId = "remediate-" + f.finding_id;
+    obs.resetNodes({ remediation: "active" });
+    obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "active" });
+    setTurns(t => [...t, { role: "bot", text: `조치 요청 중… ${f.resource_id} · ${f.rule_id}@${f.rule_version}` }]);
+    try {
+      const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
+      const remediationId = r.job?.remediation_id;
+      let view: RemediationView | null = null;
+      if (remediationId) {
+        for (let i = 0; i < 60; i++) {
+          await sleep(3000);
+          try {
+            view = await api<RemediationView>(`/remediations/${enc(remediationId)}`, session.accessToken);
+            if (view.result && (view.result.kind !== "TERRAFORM_PATCH" || view.pull_request)) break;
+          } catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+        }
+      }
+      obs.lightNode("remediation", "done");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
+      const msg =
+        r.decision.action === "MANUAL_REVIEW"
+          ? `판정: 수동 검토${r.decision.manual_review_code ? ` (${r.decision.manual_review_code})` : ""} — 자동 조치 대상이 아닙니다. 담당자가 직접 검토합니다.`
+          : view?.pull_request
+          ? `판정: ${r.decision.action} · Pull Request #${view.pull_request.number} 생성됨 — ${view.pull_request.url} (branch ${view.pull_request.head_branch}). 사람이 검토·머지한 뒤에만 배포 승인/apply로 이어집니다.`
+          : view?.result?.sync_target
+          ? `판정: ${r.decision.action} · IaC는 이미 안전합니다. 배포 대상 commit ${view.result.sync_target.commit_sha.slice(0, 12)}로 Actual 동기화를 제안합니다.`
+          : `판정: ${r.decision.action}${r.job ? ` · job ${r.job.job_id}` : ""} · Worker 결과 대기 중입니다. 잠시 후 Assessment 결과 화면에서 확인하세요.`;
+      setTurns(t => [...t, { role: "bot", text: `${f.rule_id}@${f.rule_version} 조치 결과 — ${msg}` }]);
+    } catch (e) {
+      obs.lightNode("remediation", "failed");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "failed", meta: "실패" });
+      setTurns(t => [...t, { role: "bot", text: `조치 실패 (${f.rule_id}): ${(e as Error).message}` }]);
+    } finally {
+      setRemediating(s => { const n = new Set(s); n.delete(f.finding_id); return n; });
+    }
   }
   return <div className="chat">
     <div className="chat-log" ref={logRef}>
@@ -373,7 +526,15 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
         <div className={`avatar ${t.role === "user" ? "me" : "bot"}`}>{t.role === "user" ? "나" : "AI"}</div>
         <div className="bubble">
           {t.decision && <span className="intent-tag">{t.decision.intent}</span>}
-          <div>{t.text}</div>
+          <div style={{ whiteSpace: "pre-line" }}>{t.text}</div>
+          {t.remediable && t.remediable.length > 0 && <div className="confirm">
+            {t.remediable.map(f => <div key={f.finding_id} className="row" style={{ alignItems: "center", gap: 8, marginTop: 6 }}>
+              <span className="badge severity">{f.severity}</span>
+              <span className={`badge status-${f.status.toLowerCase()}`}>{f.status}</span>
+              <code style={{ flex: 1 }}>{f.resource_id} · {f.rule_id}@{f.rule_version}</code>
+              <button disabled={remediating.has(f.finding_id)} onClick={() => void runRemediation(f)}>{remediating.has(f.finding_id) ? "조치 중…" : "이 조치 실행"}</button>
+            </div>)}
+          </div>}
           {t.decision?.intent === "ASSESSMENT" && t.decision.selector && (() => {
             const connected = obs.obs.repos.map(r => r.repository_id);
             const proposed = t.decision.selector.repository_id;
@@ -552,6 +713,9 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       { key: "poll", label: "4. 후보 조회", state: "pending" },
     ]);
     obs.lightNode("authoring", "pending");
+    // job id를 try 밖에 두어, 어느 단계에서 실패하든 이미 생성된 authoring job을 catch에서
+    // failed로 닫을 수 있게 한다. upload 세션 생성 전 실패면 sourceId가 없어 닫을 job도 없다.
+    let authoringJobId: string | null = null;
     try {
       obs.patchPipeline("upload", "active");
       const s = await api<UploadSession>("/policy-sources/uploads", session.accessToken, { method: "POST", body: JSON.stringify({ filename: file.name, declared_media_type: mt, byte_size: file.size }) });
@@ -573,7 +737,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         throw new Error(`추출 결과 확인이 필요합니다 (${doc.warnings.join(", ")}). 문서 목록에서 '검토 확인'을 누르면 ${doc.units.length}개 단위로 추출을 진행합니다.`);
       }
       obs.patchPipeline("extract", "active"); obs.lightNode("authoring", "active");
-      obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active" });
+      authoringJobId = "auth-" + s.source_id;
+      obs.upsertJob({ id: authoringJobId, label: "후보 추출", queue: "authoring", state: "active" });
       await api(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
       obs.patchPipeline("extract", "done");
       obs.patchPipeline("poll", "active");
@@ -599,7 +764,13 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       setOpenDoc(s.source_id);
       setNotice(`추출 완료 · 승인 가능 ${result.candidates.length}개 · 미지원 ${result.unsupported.length}개 · 거절 ${result.rejected.length}개.`);
       await refresh();
-    } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("authoring", "failed");
+      // 추출 job이 이미 생성돼 active로 남아 있으면 failed로 닫는다 — 타임아웃·FAILED·조회 오류
+      // 어느 경로로 throw되든 Queue/Jobs에 노란불로 남지 않도록 한다.
+      if (authoringJobId) obs.upsertJob({ id: authoringJobId, label: "후보 추출", queue: "authoring", state: "failed", meta: "실패" });
+    }
     finally { setRunning(false); }
   }
 
@@ -639,6 +810,9 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "active" });
     try {
       await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
+      // 추출 요청(POST)의 수명은 여기서 끝난다 — 실제 후보 생성은 비동기다. 요청 job을 done으로
+      // 닫지 않으면 Queue/Jobs에 노란불로 영원히 남는다. 완료는 '후보 조회'가 보여준다.
+      obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "done", meta: "요청됨" });
       setNotice(`추출을 요청했습니다: ${d.filename}. 완료되면 '후보 조회'에 결과가 나옵니다.`);
       await loadCandidates(d);
     } catch (e) {
@@ -940,7 +1114,7 @@ async function fetchFullReport(token: string, assessmentId: string): Promise<Rep
 
 function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
 
-function ReportPanel({ session, assessmentId }: { session: Session; assessmentId: string }) {
+function ReportPanel({ session, assessmentId, obs }: { session: Session; assessmentId: string; obs: ObserverApi }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -1017,7 +1191,7 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
 
     <div className="card"><h2>Findings ({rep.findings.length})</h2>
       <p className="hint">FAIL·MANUAL_REVIEW·INSUFFICIENT_EVIDENCE 결과만 Finding이 됩니다. Evidence는 평가기가 인용한 정책 locator와 read-only IaC/AWS 조회 locator입니다.</p>
-      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} />)}
+      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} obs={obs} />)}
       {rep.findings.length === 0 && <p className="obs-empty">{complete ? "Finding이 없습니다." : "아직 Finding이 없습니다 (평가 진행 중)."}</p>}
     </div>
 
@@ -1039,7 +1213,7 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
   </div>;
 }
 
-function FindingCard({ finding: f, suppression, session }: { finding: FindingRow; suppression?: Suppression; session: Session }) {
+function FindingCard({ finding: f, suppression, session, obs }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi }) {
   const [start, setStart] = useState<RemediationStart | null>(null);
   const [view, setView] = useState<RemediationView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1047,6 +1221,11 @@ function FindingCard({ finding: f, suppression, session }: { finding: FindingRow
 
   async function request() {
     setBusy(true); setError(null); setStart(null); setView(null);
+    // 조치 요청은 remediation 그래프로 넘어가는 동작이다. 현재 실행 중인 노드만 보이도록
+    // resetNodes로 remediation만 켠다. job은 finding별 안정 id로 열고 종료 시 닫는다.
+    const jobId = "remediate-" + f.finding_id;
+    obs.resetNodes({ remediation: "active" });
+    obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "active" });
     try {
       const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
       setStart(r);
@@ -1062,8 +1241,18 @@ function FindingCard({ finding: f, suppression, session }: { finding: FindingRow
             if (v.result && (v.result.kind !== "TERRAFORM_PATCH" || v.pull_request)) break;
           } catch (e) { const msg = (e as Error).message; if (!msg.includes("404")) throw e; }
         }
+        obs.lightNode("remediation", "done");
+        obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
+      } else {
+        // Job이 없는 판정(MANUAL_REVIEW 등)은 자동 조치 대상이 아니므로 여기서 판정으로 끝난다.
+        obs.lightNode("remediation", "done");
+        obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
       }
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("remediation", "failed");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "failed", meta: "실패" });
+    }
     finally { setBusy(false); }
   }
 
@@ -1141,10 +1330,10 @@ function App() {
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
-      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
+      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
-      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} />}
+      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} obs={observer} />}
     </div>
   </div>;
 }
