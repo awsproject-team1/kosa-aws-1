@@ -329,8 +329,8 @@ function Login({ error }: { error: string | null }) {
 /* =========================================================================
  * Chat (Parent Orchestrator)
  * =======================================================================*/
-type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision };
-const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\" 또는 정책 관련 질문." };
+type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision; remediable?: FindingRow[] };
+const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\", \"평가 결과 요약해줘\", \"CRITICAL 문제 고쳐줘\" 또는 정책 관련 질문." };
 /* Chat 내역은 사용자별로 sessionStorage에 저장한다. 탭 이동(Chat 언마운트)이나 새로고침에도
  * 대화가 리셋되지 않도록 초기값을 저장소에서 복원하고, 변경마다 다시 쓴다. 키를 `session.sub`로
  * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
@@ -344,10 +344,52 @@ function loadTurns(sub: string): Turn[] {
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : [CHAT_GREETING];
   } catch { return [CHAT_GREETING]; }
 }
-function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; onAssessment: (id: string) => void }) {
+
+/* 챗봇을 평가 결과와 연결한다(방안 1, 프론트엔드 통합). Parent는 결과에 접근하지 않으므로,
+ * "요약/조치" 같은 결과-지향 요청은 백엔드 라우팅(/orchestrate) 대신 프론트엔드가 이미 있는
+ * 결과 API(GET /assessments/{id})와 조치 API(POST /findings/{id}/remediations)로 결정적으로
+ * 처리한다. 안전 경계(사용자 확인 후 실행)는 그대로 유지한다 — 조치는 버튼으로만 실행된다. */
+type ChatLocalIntent = "summary" | "remediate" | "none";
+function detectLocalIntent(text: string): ChatLocalIntent {
+  const t = text.toLowerCase();
+  const remediate = /(고쳐|고침|조치|리메디|remediat|수정해|패치|fix)/.test(t);
+  if (remediate) return "remediate";
+  const summary = /(요약|정리|결과.*(어때|어떻|보여|알려)|(어때|어떻|보여|알려).*결과|summary|summarize)/.test(t);
+  if (summary) return "summary";
+  return "none";
+}
+/** 조치 요청에서 심각도 필터를 뽑는다. 없으면 전체 대상. */
+function severityFilter(text: string): Set<string> | null {
+  const t = text.toLowerCase();
+  const picked = new Set<string>();
+  if (/(critical|크리티컬|심각)/.test(t)) picked.add("CRITICAL");
+  if (/(high|하이|높음)/.test(t)) picked.add("HIGH");
+  if (/(medium|미디엄|중간)/.test(t)) picked.add("MEDIUM");
+  if (/(low|로우|낮음)/.test(t)) picked.add("LOW");
+  return picked.size > 0 ? picked : null;
+}
+/** 보고서를 사람이 읽을 요약 문자열로. LLM 없이 결정적 집계. */
+function summarizeReport(rep: Report): string {
+  const count = (s: string) => rep.results.filter(r => r.status === s).length;
+  const severe = rep.findings.filter(f => f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH")).length;
+  const cov = rep.coverage;
+  const complete = cov.completed_evaluations >= cov.planned_evaluations;
+  const score = rep.readiness_score ? `${rounded(rep.readiness_score.score)}/100` : (complete ? "계산 불가" : "계산 대기");
+  const lines = [
+    `평가 ${rep.assessment_id} 요약${complete ? "" : " (진행 중)"}:`,
+    `- 실행률 ${rounded(cov.percentage)}% (${cov.completed_evaluations}/${cov.planned_evaluations})`,
+    `- Readiness ${score}`,
+    `- Findings ${rep.findings.length}건 · CRITICAL/HIGH FAIL ${severe}건`,
+    `- FAIL ${count("FAIL")} · 수동검토 ${count("MANUAL_REVIEW")} · 근거부족 ${count("INSUFFICIENT_EVIDENCE")} · PASS ${count("PASS")}`,
+  ];
+  if (rep.findings.length > 0) lines.push('조치가 필요하면 "CRITICAL 문제 고쳐줘"처럼 요청하세요.');
+  return lines.join("\n");
+}
+function Chat({ session, obs, profileId, assessmentId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; assessmentId: string | null; onAssessment: (id: string) => void }) {
   const [turns, setTurns] = useState<Turn[]>(() => loadTurns(session.sub));
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remediating, setRemediating] = useState<Set<string>>(new Set());
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [turns]);
   // 대화가 바뀔 때마다 사용자별 키에 저장한다. 초기 인사만 있는 상태도 저장해 두면 다음 마운트에서
@@ -359,6 +401,41 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
     if (!text || busy) return;
     setMsg(""); setBusy(true);
     setTurns(t => [...t, { role: "user", text }]);
+
+    // 결과-지향 요청(요약/조치)은 프론트엔드가 결정적으로 처리한다. 현재 열린 Assessment가 있어야
+    // 한다 — 없으면 먼저 평가를 요청하도록 안내한다.
+    const local = detectLocalIntent(text);
+    if (local !== "none") {
+      obs.resetNodes({ assessment: "done" });
+      try {
+        if (!assessmentId) {
+          setTurns(t => [...t, { role: "bot", text: "먼저 평가를 실행해 주세요. 예: \"test 리포지토리를 우리 정책으로 평가해줘\". 평가가 끝나면 결과를 요약하거나 조치를 도와드릴 수 있습니다." }]);
+          return;
+        }
+        const rep = await fetchFullReport(session.accessToken, assessmentId);
+        if (local === "summary") {
+          setTurns(t => [...t, { role: "bot", text: summarizeReport(rep) }]);
+          return;
+        }
+        // remediate: 조치 대상(Finding)만 추린다. 후속 조치가 필요한 상태이면서 억제되지 않은 것.
+        const suppressed = new Set((rep.suppressions ?? []).map(s => s.finding_id));
+        const followUp = new Set(["FAIL", "MANUAL_REVIEW", "INSUFFICIENT_EVIDENCE"]);
+        const filter = severityFilter(text);
+        const targets = rep.findings.filter(f =>
+          followUp.has(f.status) && !suppressed.has(f.finding_id) && (!filter || filter.has(f.severity)));
+        if (targets.length === 0) {
+          const scope = filter ? [...filter].join("/") + " " : "";
+          setTurns(t => [...t, { role: "bot", text: `${scope}조치 대상 Finding이 없습니다. (조치 대상은 FAIL·수동검토·근거부족 상태이며 억제되지 않은 Finding입니다.)` }]);
+          return;
+        }
+        const scope = filter ? [...filter].join("/") + " " : "";
+        setTurns(t => [...t, { role: "bot", text: `${scope}조치 대상 ${targets.length}건입니다. 각 항목의 버튼으로 조치를 실행하세요 — 실행 전 확인이 필요하며, 조치는 read-only 진단 후 PR/동기화 제안으로 이어집니다.`, remediable: targets }]);
+      } catch (e) {
+        setTurns(t => [...t, { role: "bot", text: `결과를 가져오지 못했습니다: ${(e as Error).message}` }]);
+      } finally { setBusy(false); }
+      return;
+    }
+
     // 새 턴이므로 이전 그래프 불을 모두 끄고 parent만 켠다 — 라우팅 결과에 따라 아래에서
     // 해당 하위 노드만 추가로 켜진다.
     obs.resetNodes({ parent: "active" });
@@ -417,13 +494,62 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
       setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]);
     }
   }
+  // 챗봇에서 조치를 실행한다. FindingCard.request와 같은 API·노드/job 라이프사이클을 쓰되,
+  // 결과를 대화에 남긴다. 실행 전 사용자가 버튼을 눌러야 하므로 안전 경계(확인 후 실행)는 유지된다.
+  async function runRemediation(f: FindingRow) {
+    if (remediating.has(f.finding_id)) return;
+    setRemediating(s => new Set(s).add(f.finding_id));
+    const jobId = "remediate-" + f.finding_id;
+    obs.resetNodes({ remediation: "active" });
+    obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "active" });
+    setTurns(t => [...t, { role: "bot", text: `조치 요청 중… ${f.resource_id} · ${f.rule_id}@${f.rule_version}` }]);
+    try {
+      const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
+      const remediationId = r.job?.remediation_id;
+      let view: RemediationView | null = null;
+      if (remediationId) {
+        for (let i = 0; i < 60; i++) {
+          await sleep(3000);
+          try {
+            view = await api<RemediationView>(`/remediations/${enc(remediationId)}`, session.accessToken);
+            if (view.result && (view.result.kind !== "TERRAFORM_PATCH" || view.pull_request)) break;
+          } catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+        }
+      }
+      obs.lightNode("remediation", "done");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
+      const msg =
+        r.decision.action === "MANUAL_REVIEW"
+          ? `판정: 수동 검토${r.decision.manual_review_code ? ` (${r.decision.manual_review_code})` : ""} — 자동 조치 대상이 아닙니다. 담당자가 직접 검토합니다.`
+          : view?.pull_request
+          ? `판정: ${r.decision.action} · Pull Request #${view.pull_request.number} 생성됨 — ${view.pull_request.url} (branch ${view.pull_request.head_branch}). 사람이 검토·머지한 뒤에만 배포 승인/apply로 이어집니다.`
+          : view?.result?.sync_target
+          ? `판정: ${r.decision.action} · IaC는 이미 안전합니다. 배포 대상 commit ${view.result.sync_target.commit_sha.slice(0, 12)}로 Actual 동기화를 제안합니다.`
+          : `판정: ${r.decision.action}${r.job ? ` · job ${r.job.job_id}` : ""} · Worker 결과 대기 중입니다. 잠시 후 Assessment 결과 화면에서 확인하세요.`;
+      setTurns(t => [...t, { role: "bot", text: `${f.rule_id}@${f.rule_version} 조치 결과 — ${msg}` }]);
+    } catch (e) {
+      obs.lightNode("remediation", "failed");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "failed", meta: "실패" });
+      setTurns(t => [...t, { role: "bot", text: `조치 실패 (${f.rule_id}): ${(e as Error).message}` }]);
+    } finally {
+      setRemediating(s => { const n = new Set(s); n.delete(f.finding_id); return n; });
+    }
+  }
   return <div className="chat">
     <div className="chat-log" ref={logRef}>
       {turns.map((t, i) => <div key={i} className={`msg ${t.role === "user" ? "user" : ""}`}>
         <div className={`avatar ${t.role === "user" ? "me" : "bot"}`}>{t.role === "user" ? "나" : "AI"}</div>
         <div className="bubble">
           {t.decision && <span className="intent-tag">{t.decision.intent}</span>}
-          <div>{t.text}</div>
+          <div style={{ whiteSpace: "pre-line" }}>{t.text}</div>
+          {t.remediable && t.remediable.length > 0 && <div className="confirm">
+            {t.remediable.map(f => <div key={f.finding_id} className="row" style={{ alignItems: "center", gap: 8, marginTop: 6 }}>
+              <span className="badge severity">{f.severity}</span>
+              <span className={`badge status-${f.status.toLowerCase()}`}>{f.status}</span>
+              <code style={{ flex: 1 }}>{f.resource_id} · {f.rule_id}@{f.rule_version}</code>
+              <button disabled={remediating.has(f.finding_id)} onClick={() => void runRemediation(f)}>{remediating.has(f.finding_id) ? "조치 중…" : "이 조치 실행"}</button>
+            </div>)}
+          </div>}
           {t.decision?.intent === "ASSESSMENT" && t.decision.selector && (() => {
             const connected = obs.obs.repos.map(r => r.repository_id);
             const proposed = t.decision.selector.repository_id;
@@ -1237,7 +1363,7 @@ function App() {
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
-      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
+      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
       {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} obs={observer} />}
