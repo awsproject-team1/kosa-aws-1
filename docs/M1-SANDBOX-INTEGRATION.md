@@ -99,6 +99,14 @@ GitHub OIDC deployment role (`permissions: id-token: write` plus `role-to-assume
 jobs re-verify the STS caller account against `EXPECTED_AWS_ACCOUNT_ID`. No long-lived AWS
 access key exists in this repository or its Environments.
 
+A target names the revision to evaluate one of two ways, never both (ADR-0027):
+
+- `branch` — the Worker reads that branch's HEAD when each Assessment starts and pins the
+  whole Assessment (every resource, every result's `assessed_commit_sha`) to it. Use this for
+  a repository that changes: a pinned commit kept evaluating the same stale revision after
+  fixes had merged, so every re-run repeated the old FAIL.
+- `commit_sha` — one reviewed 40-character SHA, fixed until the next deployment.
+
 For one S3 target, the configuration JSON shape is:
 
 ```json
@@ -106,7 +114,7 @@ For one S3 target, the configuration JSON shape is:
   {
     "customer_id": "<Cognito customer claim>",
     "repository_id": "<product repository ID>",
-    "commit_sha": "<reviewed 40-character Git commit SHA>",
+    "branch": "main",
     "github_repository": "<owner>/<repository>",
     "github_token_secret_id": "<GitHub installation-token Secret ARN>",
     "aws_account_id": "<12-digit customer AWS account ID>",
@@ -126,7 +134,7 @@ other, never both:
   {
     "customer_id": "<Cognito customer claim>",
     "repository_id": "<product repository ID>",
-    "commit_sha": "<reviewed 40-character Git commit SHA>",
+    "branch": "main",
     "github_repository": "<owner>/<repository>",
     "github_token_secret_id": "<GitHub installation-token Secret ARN>",
     "aws_account_id": "<12-digit customer AWS account ID>",

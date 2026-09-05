@@ -31,6 +31,30 @@ class GitHubSnapshotNotFoundError(GitHubToolError):
     """요청한 IaC snapshot이 read 상태에 존재하지 않을 때 발생한다."""
 
 
+def require_git_branch_name(value: object) -> str:
+    """Validate one Git branch name the Worker may resolve to a commit (ADR-0027).
+
+    `git check-ref-format --branch` 규칙 중 GitHub API 경로에 그대로 들어가는 이름에 필요한 것만
+    본다: 빈 구간 없음, `..`·`@{`·공백·제어문자·`~^:?*[`·백슬래시 없음, `.`으로 시작하거나
+    `.`/`.lock`으로 끝나는 구간 없음, `-`로 시작하지 않음. 40자 16진수는 commit처럼 읽히므로
+    branch 이름으로 받지 않는다 — 두 필드의 뜻이 섞이지 않게.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Git branch name must be a string")
+    if not value or len(value) > 255 or value != value.strip():
+        raise ValueError("Git branch name is invalid")
+    if value.startswith("-") or ".." in value or "@{" in value:
+        raise ValueError("Git branch name is invalid")
+    if any(ch.isspace() or ord(ch) < 32 or ch in "~^:?*[\\" for ch in value):
+        raise ValueError("Git branch name is invalid")
+    for part in value.split("/"):
+        if not part or part.startswith(".") or part.endswith(".") or part.endswith(".lock"):
+            raise ValueError("Git branch name is invalid")
+    if re.fullmatch(r"[0-9a-f]{40}", value) is not None:
+        raise ValueError("Git branch name must not look like a commit SHA")
+    return value
+
+
 def require_github_repository_full_name(value: object) -> str:
     """Validate one canonical GitHub ``owner/repository`` path identity."""
     if not isinstance(value, str):

@@ -20,7 +20,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from agent.runtime.actual_resource_tool_factory import ACTUAL_READ_RESOURCE_TYPES
-from agent.runtime.github_tool import require_github_repository_full_name
+from agent.runtime.github_tool import (
+    require_git_branch_name,
+    require_github_repository_full_name,
+)
 from apps.backend.api.scope import (
     SCOPE_CONNECTION_FIELDS,
     SCOPE_CONNECTION_RULES,
@@ -28,11 +31,12 @@ from apps.backend.api.scope import (
 )
 
 MODEL_PROFILE_PATH = Path(__file__).parents[1] / "fixtures" / "m1" / "assessment_model_profile.json"
+#: 평가 대상 revision. `commit_sha`(고정) 또는 `branch`(시작 시 HEAD) 중 정확히 하나(ADR-0027).
+REVISION_FIELDS = frozenset({"commit_sha", "branch"})
 COMMON_TARGET_FIELDS = frozenset(
     {
         "customer_id",
         "repository_id",
-        "commit_sha",
         "github_repository",
         "github_token_secret_id",
         "aws_account_id",
@@ -124,10 +128,18 @@ def validate_environment(environment: Mapping[str, str]) -> str:
     external_id_secret_arns: set[str] = set()
     target_read_roles: set[str] = set()
     for target in targets:
-        if COMMIT_SHA.fullmatch(target["commit_sha"]) is None:
-            raise DeploymentConfigurationError(
-                "commit_sha must be a lowercase 40-character Git SHA"
-            )
+        if "commit_sha" in target:
+            if COMMIT_SHA.fullmatch(target["commit_sha"]) is None:
+                raise DeploymentConfigurationError(
+                    "commit_sha must be a lowercase 40-character Git SHA"
+                )
+        else:
+            try:
+                require_git_branch_name(target["branch"])
+            except ValueError as error:
+                raise DeploymentConfigurationError(
+                    "branch must be a valid Git branch name"
+                ) from error
         if ACCOUNT_ID.fullmatch(target["aws_account_id"]) is None:
             raise DeploymentConfigurationError("aws_account_id must be 12 digits")
         if target["aws_account_id"] != expected_account:
@@ -258,10 +270,16 @@ def _targets(raw: str) -> tuple[dict[str, str], ...]:
 def _target_field_names(value: Mapping[str, object]) -> frozenset[str]:
     """Return the string fields to require, refusing a target that declares resources twice."""
     provided = set(value)
-    if provided == COMMON_TARGET_FIELDS | {LEGACY_RESOURCE_FIELD}:
-        return COMMON_TARGET_FIELDS | {LEGACY_RESOURCE_FIELD}
-    if provided == COMMON_TARGET_FIELDS | {RESOURCE_LIST_FIELD}:
-        return COMMON_TARGET_FIELDS
+    revision = provided & REVISION_FIELDS
+    if len(revision) != 1:
+        raise DeploymentConfigurationError(
+            "M1 runtime target must declare exactly one of commit_sha or branch"
+        )
+    rest = provided - revision
+    if rest == COMMON_TARGET_FIELDS | {LEGACY_RESOURCE_FIELD}:
+        return COMMON_TARGET_FIELDS | revision | {LEGACY_RESOURCE_FIELD}
+    if rest == COMMON_TARGET_FIELDS | {RESOURCE_LIST_FIELD}:
+        return COMMON_TARGET_FIELDS | revision
     raise DeploymentConfigurationError("M1 runtime target fields are invalid")
 
 

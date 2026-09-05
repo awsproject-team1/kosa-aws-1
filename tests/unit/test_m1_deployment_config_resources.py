@@ -112,3 +112,30 @@ class M1DeploymentResourceConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+UNPINNED = {name: value for name, value in COMMON.items() if name != "commit_sha"}
+
+
+class M1DeploymentRevisionConfigTest(unittest.TestCase):
+    """A target pins a commit or names a branch — one or the other (ADR-0027)."""
+
+    def test_accepts_a_branch_in_place_of_a_pinned_commit(self) -> None:
+        target = {**UNPINNED, "branch": "main", "s3_bucket_id": "demo-bucket"}
+
+        self.assertEqual(validate_environment(_environment(target)), "live")
+
+    def test_rejects_both_or_neither_revision(self) -> None:
+        both = {**COMMON, "branch": "main", "s3_bucket_id": "demo-bucket"}
+        neither = {**UNPINNED, "s3_bucket_id": "demo-bucket"}
+        for target in (both, neither):
+            with self.assertRaisesRegex(
+                DeploymentConfigurationError, "exactly one of commit_sha or branch"
+            ):
+                validate_environment(_environment(target))
+
+    def test_rejects_a_branch_name_git_would_refuse(self) -> None:
+        target = {**UNPINNED, "branch": "-main", "s3_bucket_id": "demo-bucket"}
+
+        with self.assertRaisesRegex(DeploymentConfigurationError, "valid Git branch name"):
+            validate_environment(_environment(target))

@@ -412,3 +412,101 @@ class ActualResourceToolWiringTest(unittest.TestCase):
 
         self.assertTrue(tool.supports("AWS::S3::Bucket"))
         self.assertFalse(tool.supports("AWS::RDS::DBInstance"))
+
+
+BRANCH_TARGET = {**{k: v for k, v in TARGET.items() if k != "commit_sha"}, "branch": "main"}
+BRANCH_MULTI_TARGET = {
+    **{k: v for k, v in MULTI_TARGET.items() if k != "commit_sha"},
+    "branch": "main",
+}
+
+
+class BranchTargetTest(unittest.TestCase):
+    """A target may name a branch; the Worker then reads its HEAD when the Assessment starts.
+
+    배포 시점에 고정된 commit만 쓰던 동안에는 코드를 고쳐 main이 나아가도 평가가 옛 commit을 읽어
+    같은 FAIL을 반복했다(ADR-0027). 이 파일은 branch target의 형식과, 한 Assessment의 모든 리소스
+    작업이 **한 번 읽은 같은 HEAD**에 고정되는 것을 고정한다.
+    """
+
+    def _configuration(self, target) -> M1RuntimeConfiguration:
+        return M1RuntimeConfiguration.from_json(json.dumps([target]))
+
+    def test_a_branch_target_carries_no_pinned_commit(self) -> None:
+        target = self._configuration(BRANCH_TARGET).resolve(
+            customer_id="cust-001", repository_id="repo-001"
+        )
+
+        self.assertIsNone(target.commit_sha)
+        self.assertEqual(target.branch, "main")
+
+    def test_a_target_declares_exactly_one_revision(self) -> None:
+        both = {**BRANCH_TARGET, "commit_sha": "a" * 40}
+        neither = {k: v for k, v in TARGET.items() if k != "commit_sha"}
+        for broken in (both, neither):
+            with self.assertRaisesRegex(M1RuntimeConfigurationError, "invalid"):
+                self._configuration(broken)
+
+    def test_rejects_a_branch_name_git_would_refuse_or_a_sha_in_disguise(self) -> None:
+        for name in ("", "-main", "a..b", "feature/", "release/v1.lock", "a" * 40, "main branch"):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(M1RuntimeConfigurationError, "invalid"),
+            ):
+                self._configuration({**BRANCH_TARGET, "branch": name})
+
+    def test_the_worker_pins_every_resource_work_to_one_resolved_head(self) -> None:
+        calls: list[str | None] = []
+
+        def resolver(target) -> str:
+            calls.append(target.branch)
+            return "b" * 40
+
+        repository = DynamoM1WorkRepository(
+            _table({}),
+            self._configuration(BRANCH_MULTI_TARGET),
+            model_profile=MODEL_PROFILE,
+            commit_resolver=resolver,
+        )
+
+        works = repository.get_resource_works(job_id="job-001", expected_revision=0)
+        again = repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+        self.assertEqual(len(works), 3)
+        self.assertEqual({work.assessed_commit_sha for work in works}, {"b" * 40})
+        self.assertEqual(calls, ["main"])
+        self.assertIs(again, works)
+
+    def test_a_branch_target_without_a_resolver_fails_closed(self) -> None:
+        repository = DynamoM1WorkRepository(
+            _table({}), self._configuration(BRANCH_TARGET), model_profile=MODEL_PROFILE
+        )
+
+        with self.assertRaisesRegex(M1RuntimeConfigurationError, "commit resolver"):
+            repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+    def test_a_resolver_that_returns_no_sha_is_refused(self) -> None:
+        repository = DynamoM1WorkRepository(
+            _table({}),
+            self._configuration(BRANCH_TARGET),
+            model_profile=MODEL_PROFILE,
+            commit_resolver=lambda target: "main",
+        )
+
+        with self.assertRaisesRegex(M1RuntimeConfigurationError, "not a commit SHA"):
+            repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+    def test_a_pinned_commit_never_asks_the_resolver(self) -> None:
+        def resolver(target) -> str:
+            raise AssertionError("a pinned target must not resolve a branch")
+
+        repository = DynamoM1WorkRepository(
+            _table({}),
+            self._configuration(TARGET),
+            model_profile=MODEL_PROFILE,
+            commit_resolver=resolver,
+        )
+
+        works = repository.get_resource_works(job_id="job-001", expected_revision=0)
+
+        self.assertEqual(works[0].assessed_commit_sha, "a" * 40)

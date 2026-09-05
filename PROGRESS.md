@@ -1868,6 +1868,17 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - 화면: FAILED이면 "Worker 결과 대기 중" 대신 사유를 보인다. 라이브 검증(DLQ 재처리, 열린 PR 20개
     정리)은 MFA 재인증 뒤 — PR·branch 정리는 운영자의 결정이다.
 
+- **평가가 최신 commit을 읽지 않았다 — 배포 시점 고정 commit (2026-09-05, ADR-0027).** 조치를 병합해도
+  평가가 같은 FAIL을 반복했다. `M1_ASSESSMENT_RUNTIME_JSON`의 `commit_sha`가 배포 때 고정된 값이라
+  main이 나아가도 옛 commit을 읽었다. 팀원이 Worker 환경변수를 손으로 최신 commit으로 바꿔 확인했지만,
+  secret에서 오는 값이라 06:49 배포가 되돌렸다.
+  - 처리: target이 `commit_sha`(고정) 또는 `branch`(동적) 중 정확히 하나를 선언한다. `branch`면
+    Worker가 Assessment 시작 시 HEAD를 한 번 읽어(`GitHubRestSnapshotTool.resolve_commit`) 모든
+    리소스 작업·결과의 `assessed_commit_sha`로 고정한다. 배포 gate(`validate_m1_deployment_config`)와
+    runtime config가 같은 규칙으로 거부한다. 기존 고정 commit 설정은 그대로 유효.
+  - 운영자 작업: secret `M1_ASSESSMENT_RUNTIME_JSON`에서 `"commit_sha": "…"`를 `"branch": "main"`으로
+    바꾸고 M0 Foundation을 재배포한다. 코드 배포만으로는 동작이 바뀌지 않는다.
+
 
 
 

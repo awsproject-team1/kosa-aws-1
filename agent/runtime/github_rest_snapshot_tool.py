@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from base64 import b64decode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from agent.runtime.github_tool import (
@@ -107,6 +109,30 @@ class GitHubRestSnapshotTool(GitHubTool):
             commit_sha=revision.commit_sha,
             files=tuple(files),
         )
+
+    def resolve_commit(self, ref: str) -> str:
+        """Resolve a branch (or any Git ref) to the 40-hex commit it points at right now.
+
+        평가는 이 값을 `assessed_commit_sha`로 기록하고 이후의 모든 읽기를 그 commit에 고정한다 —
+        한 Assessment 안에서 HEAD가 움직여도 리소스마다 다른 commit을 읽지 않는다(ADR-0027).
+        없는 branch는 `GitHubSnapshotNotFoundError`다: 설정 오류가 "Terraform 없음"으로 읽히지 않게.
+        """
+        if not isinstance(ref, str) or not ref.strip():
+            raise ValueError("ref must be a non-empty string")
+        encoded = quote(ref, safe="/")
+        try:
+            commit = self._request(
+                f"https://api.github.com/repos/{self._repository_full_name}/commits/{encoded}",
+                self._headers(),
+            )
+        except GitHubSnapshotNotFoundError:
+            raise
+        except Exception as error:
+            raise GitHubToolError("GitHub ref resolution failed") from error
+        sha = _required_string(commit.get("sha"), "GitHub commit sha")
+        if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+            raise GitHubToolError("GitHub commit sha is invalid")
+        return sha
 
     def _read_blob(self, blob_sha: str, headers: Mapping[str, str]) -> str:
         payload = self._request(

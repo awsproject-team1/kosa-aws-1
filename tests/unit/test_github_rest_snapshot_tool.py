@@ -175,3 +175,41 @@ class GitHubRestIaCDocumentTest(unittest.TestCase):
 
     def test_satisfies_the_document_reader_protocol(self) -> None:
         self.assertIsInstance(document_tool(DocumentClient()), IaCDocumentReader)
+
+
+class ResolveCommitTest(unittest.TestCase):
+    """`resolve_commit` turns a branch into the commit it points at right now (ADR-0027)."""
+
+    def _tool(self, client) -> GitHubRestSnapshotTool:
+        return GitHubRestSnapshotTool(
+            customer_id="cust-001",
+            repository_id="repo-001",
+            repository_full_name="customer/iac",
+            token_provider=lambda: "token",
+            request=client.request,
+        )
+
+    def test_resolves_a_branch_through_the_commits_endpoint(self) -> None:
+        client = Client()
+
+        self.assertEqual(self._tool(client).resolve_commit("release/2026-09"), "a" * 40)
+        self.assertEqual(
+            client.calls[0][0],
+            "https://api.github.com/repos/customer/iac/commits/release/2026-09",
+        )
+
+    def test_a_missing_branch_is_not_found_and_a_non_sha_answer_is_refused(self) -> None:
+        class Missing(Client):
+            def request(self, url: str, headers: dict[str, str]) -> dict[str, object]:
+                raise GitHubSnapshotNotFoundError("GitHub revision was not found")
+
+        class Odd(Client):
+            def request(self, url: str, headers: dict[str, str]) -> dict[str, object]:
+                return {"sha": "main"}
+
+        with self.assertRaises(GitHubSnapshotNotFoundError):
+            self._tool(Missing()).resolve_commit("gone")
+        with self.assertRaisesRegex(GitHubToolError, "invalid"):
+            self._tool(Odd()).resolve_commit("main")
+        with self.assertRaises(ValueError):
+            self._tool(Client()).resolve_commit("")

@@ -196,6 +196,12 @@ Repository와 Policy Profile만 받으며, Worker가 그 요청을 승인 목록
 유효하며 `AWS::S3::Bucket` 한 건으로 해석된다. 두 설정 방식을 동시에 선언하는 target은 거부한다 —
 "무엇을 평가할 수 있는가"에 답이 두 개가 되기 때문이다.
 
+평가 대상 revision은 target이 `commit_sha`로 고정하거나 `branch`로 지정한다 — 정확히 하나(ADR-0027).
+`branch`면 Worker가 Assessment 시작 시 그 HEAD를 **한 번** 읽어 모든 리소스 작업과 결과의
+`assessed_commit_sha`로 기록한다. 한 Assessment 안에서 HEAD가 움직여도 리소스마다 다른 commit을
+읽지 않고, Remediation은 그 commit을 base로 patch를 만든다. 2026-09-05까지는 배포 시점의 고정
+commit만 있어, 코드를 고쳐 main이 나아가도 평가가 옛 commit을 읽어 같은 FAIL을 반복했다.
+
 M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule × Perspective` 수를 분모로
 사용한다. 기록된 결과는 status에 관계없이 완료된 평가로 집계한다 — `EXECUTION_ERROR`도 runner가
 사유까지 남긴 기록이다(2026-09-05 이전에는 fallback 계산과 비교 경계만 실행 오류를 빼서 라이브

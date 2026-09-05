@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
@@ -181,6 +182,7 @@ class DynamoM1WorkRepository:
         *,
         model_profile: ModelProfile,
         plan_reader: PlannedEvaluationReader | None = None,
+        commit_resolver: Callable[[M1AssessmentTarget], str] | None = None,
     ) -> None:
         if not isinstance(model_profile, ModelProfile):
             raise TypeError("model_profile must be a ModelProfile")
@@ -188,6 +190,7 @@ class DynamoM1WorkRepository:
         self._configuration = configuration
         self._model_profile = model_profile
         self._plan_reader = plan_reader
+        self._commit_resolver = commit_resolver
         self._targets: dict[tuple[str, int], object] = {}
         self._works: dict[tuple[str, int], tuple[AssessmentResourceWork, ...]] = {}
 
@@ -290,6 +293,7 @@ class DynamoM1WorkRepository:
             resources = target.resources
         if not resources:
             raise M1RuntimeConfigurationError("assessment resolves no approved resources")
+        assessed_commit_sha = self._assessed_commit(target)
         self._targets[(job_id, expected_revision)] = target
         works = tuple(
             AssessmentResourceWork(
@@ -307,12 +311,29 @@ class DynamoM1WorkRepository:
                 model_profile_id=self._model_profile.model_profile_id,
                 planned_coordinates=scope.planned_coordinates,
                 expected_profile_version=scope.expected_profile_version,
-                assessed_commit_sha=target.commit_sha,
+                assessed_commit_sha=assessed_commit_sha,
             )
             for resource in resources
         )
         self._works[(job_id, expected_revision)] = works
         return works
+
+    def _assessed_commit(self, target: M1AssessmentTarget) -> str:
+        """The one commit every resource work of this Assessment reads.
+
+        고정 `commit_sha`면 그것이고, `branch`면 **지금** 그 HEAD다(ADR-0027). works 캐시와 함께
+        Job·revision에 묶이므로 같은 Assessment의 리소스들이 서로 다른 commit을 읽지 않는다.
+        배포 시점에 고정된 commit만 쓰던 동안에는 코드를 고쳐 main이 나아가도 평가가 옛 commit을
+        읽어 같은 FAIL을 반복했다 — 화면은 "조치했는데 왜 아직 FAIL인가"였다.
+        """
+        if target.commit_sha is not None:
+            return target.commit_sha
+        if self._commit_resolver is None:
+            raise M1RuntimeConfigurationError("branch target requires a commit resolver")
+        resolved = self._commit_resolver(target)
+        if not isinstance(resolved, str) or re.fullmatch(r"[0-9a-f]{40}", resolved) is None:
+            raise M1RuntimeConfigurationError("resolved branch head is not a commit SHA")
+        return resolved
 
     def target_for(self, *, job_id: str, expected_revision: int) -> object:
         works = self.get_resource_works(job_id=job_id, expected_revision=expected_revision)
@@ -437,12 +458,15 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
     table = boto3.resource("dynamodb").Table(table_name)
     profile = _model_profile()
     report_store = DynamoDbAssessmentReportStore(table)
+    secrets = boto3.client("secretsmanager")
     for task in _tasks(event):
         work_repository = DynamoM1WorkRepository(
             table,
             configuration,
             model_profile=profile,
             plan_reader=report_store,
+            # branch target은 여기서 HEAD를 한 번 읽어 Assessment 전체에 고정한다(ADR-0027).
+            commit_resolver=lambda target, secrets=secrets: _branch_head(secrets, target),
         )
         target = work_repository.target_for(
             job_id=task.job_id, expected_revision=task.expected_revision
@@ -461,19 +485,7 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
         # resolve해 `NoApplicablePolicyRulesError`로 죽는다 — #89가 계획 단계에서만 막았던
         # 바로 그 재시도·DLQ 경로다.
         works = _evaluable_works(works)
-        secrets = boto3.client("secretsmanager")
-        github = GitHubRestSnapshotTool(
-            customer_id=target.customer_id,
-            repository_id=target.repository_id,
-            repository_full_name=target.github_repository,
-            # 저장된 자격이 App private key면 여기서 installation token을 발급한다. 예전처럼
-            # token이 들어 있으면 그대로 쓴다 — secret 교체와 배포가 서로를 기다리지 않는다.
-            token_provider=GitHubAppTokenProvider(
-                secret_reader=lambda secrets=secrets, secret_id=target.github_token_secret_id: (
-                    _secret_string(secrets, secret_id)
-                )
-            ),
-        )
+        github = _snapshot_tool(secrets, target)
         aws = _actual_resource_tool(
             boto3,
             target=target,
@@ -504,7 +516,8 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                 SnapshotReadRequest(
                     customer_id=target.customer_id,
                     repository_id=target.repository_id,
-                    commit_sha=target.commit_sha,
+                    # work가 가진 commit이다 — target의 고정 commit이거나 시작 시 읽은 HEAD.
+                    commit_sha=_string(work.assessed_commit_sha),
                     aws_account_id=target.aws_account_id,
                     aws_selectors=(
                         AwsResourceSelector(
@@ -547,6 +560,28 @@ def _m1_handler(event: Mapping[str, object], raw_configuration: str) -> None:
                 result_store=result_store,
             )
             worker.handle(task)
+
+
+def _snapshot_tool(secrets: object, target: M1AssessmentTarget) -> GitHubRestSnapshotTool:
+    return GitHubRestSnapshotTool(
+        customer_id=target.customer_id,
+        repository_id=target.repository_id,
+        repository_full_name=target.github_repository,
+        # 저장된 자격이 App private key면 여기서 installation token을 발급한다. 예전처럼
+        # token이 들어 있으면 그대로 쓴다 — secret 교체와 배포가 서로를 기다리지 않는다.
+        token_provider=GitHubAppTokenProvider(
+            secret_reader=lambda secrets=secrets, secret_id=target.github_token_secret_id: (
+                _secret_string(secrets, secret_id)
+            )
+        ),
+    )
+
+
+def _branch_head(secrets: object, target: M1AssessmentTarget) -> str:
+    """Read the branch HEAD this Assessment is pinned to (ADR-0027)."""
+    if target.branch is None:  # pragma: no cover - only branch targets ask for a resolver.
+        raise M1RuntimeConfigurationError("target has no branch to resolve")
+    return _snapshot_tool(secrets, target).resolve_commit(target.branch)
 
 
 def _with_complete_evaluation_plan(

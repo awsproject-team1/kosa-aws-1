@@ -1,7 +1,8 @@
 """Fail-closed, customer-scoped configuration for the live M1 worker path.
 
-This deployment JSON maps an approved customer/repository pair to one exact Git commit, the
-AWS resources that may be evaluated, and secret *references*. Secret values are read only by
+This deployment JSON maps an approved customer/repository pair to one Git revision — a
+pinned `commit_sha`, or a `branch` whose HEAD is read when each Assessment starts (ADR-0027) —
+the AWS resources that may be evaluated, and secret *references*. Secret values are read only by
 the Worker; callers cannot supply them through the public API.
 
 **Policy Profile은 여기 없다.** 두 경계는 다른 질문에 답한다.
@@ -25,7 +26,10 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from agent.runtime.github_tool import require_github_repository_full_name
+from agent.runtime.github_tool import (
+    require_git_branch_name,
+    require_github_repository_full_name,
+)
 from apps.backend.assessment.actual import SUPPORTED_ACTUAL_RESOURCE_TYPES
 
 #: The legacy single-S3 field. A deployment configured before the resource expansion keeps
@@ -60,7 +64,11 @@ class M1AssessmentResource:
 class M1AssessmentTarget:
     customer_id: str
     repository_id: str
-    commit_sha: str
+    #: 정확히 하나만 설정한다. `commit_sha`는 평가 대상 commit을 배포 시점에 고정하고, `branch`는
+    #: Assessment를 시작할 때마다 그 branch의 HEAD를 읽는다(ADR-0027). 고정 commit은 코드가
+    #: 고쳐져 main이 나아가도 옛 commit을 계속 읽어 같은 FAIL을 반복했다(2026-09-05 sandbox).
+    commit_sha: str | None = None
+    branch: str | None = None
     github_repository: str
     github_token_secret_id: str
     aws_account_id: str
@@ -72,7 +80,6 @@ class M1AssessmentTarget:
         for name in (
             "customer_id",
             "repository_id",
-            "commit_sha",
             "github_repository",
             "github_token_secret_id",
             "aws_account_id",
@@ -82,8 +89,15 @@ class M1AssessmentTarget:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
-        if re.fullmatch(r"[0-9a-f]{40}", self.commit_sha) is None:
+        if (self.commit_sha is None) == (self.branch is None):
+            raise ValueError("exactly one of commit_sha or branch must be set")
+        if self.commit_sha is not None and (
+            not isinstance(self.commit_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", self.commit_sha) is None
+        ):
             raise ValueError("commit_sha must be a lowercase 40-character Git SHA")
+        if self.branch is not None:
+            require_git_branch_name(self.branch)
         require_github_repository_full_name(self.github_repository)
         if not self.resources or not all(
             isinstance(resource, M1AssessmentResource) for resource in self.resources
@@ -164,11 +178,13 @@ class M1RuntimeConfiguration:
             ) from None
 
 
+#: 평가 대상 revision을 정하는 두 필드. 정확히 하나만 온다 — 둘 다면 "어느 commit을 읽는가"에
+#: 답이 두 개고, 둘 다 없으면 답이 없다.
+_REVISION_FIELDS = frozenset({"commit_sha", "branch"})
 _COMMON_FIELDS = frozenset(
     {
         "customer_id",
         "repository_id",
-        "commit_sha",
         "github_repository",
         "github_token_secret_id",
         "aws_account_id",
@@ -182,19 +198,23 @@ def _target(value: object) -> M1AssessmentTarget:
     if not isinstance(value, Mapping):
         raise TypeError("M1 assessment target must be an object")
     provided = set(value)
+    revision = provided & _REVISION_FIELDS
+    if len(revision) != 1:
+        raise ValueError("M1 assessment target must declare exactly one of commit_sha or branch")
+    rest = provided - revision
     # Exactly one of the two resource declarations, never both: a target that carries the
     # legacy bucket *and* a resource list has two answers to "what may be evaluated?".
-    if provided == _COMMON_FIELDS | {_LEGACY_S3_FIELD}:
+    if rest == _COMMON_FIELDS | {_LEGACY_S3_FIELD}:
         resources = (
             M1AssessmentResource(
                 resource_type=_S3_RESOURCE_TYPE, resource_id=value[_LEGACY_S3_FIELD]
             ),
         )
-    elif provided == _COMMON_FIELDS | {"resources"}:
+    elif rest == _COMMON_FIELDS | {"resources"}:
         resources = tuple(_resource(entry) for entry in _resource_entries(value["resources"]))
     else:
         raise ValueError("M1 assessment target fields are invalid")
-    common = {name: value[name] for name in _COMMON_FIELDS}
+    common = {name: value[name] for name in _COMMON_FIELDS | revision}
     return M1AssessmentTarget(**common, resources=resources)
 
 
