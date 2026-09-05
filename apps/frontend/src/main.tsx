@@ -437,6 +437,8 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
   useEffect(() => {
     if (completedAssessmentId && announcedRef.current !== completedAssessmentId) {
       announcedRef.current = completedAssessmentId;
+      // 평가가 끝났으므로 관찰 패널을 완료 상태(assessment done)로 맞춘다.
+      obs.resetNodes({ assessment: "done" });
       setTurns(t => [...t, { role: "bot", text: `평가가 끝났습니다 (${completedAssessmentId}). "결과 요약해줘", "CRITICAL만 정리해줘", "EC2 관련 finding만 알려줘"처럼 결과를 물어보거나 조치를 요청할 수 있습니다.` }]);
     }
   }, [completedAssessmentId]);
@@ -451,13 +453,18 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
     // 한다 — 없으면 먼저 평가를 요청하도록 안내한다.
     const local = detectLocalIntent(text);
     if (local !== "none") {
-      obs.resetNodes({ assessment: "done" });
+      // 로컬 인텐트도 하나의 처리 흐름이다. 입력 해석 동안 parent를 켰다가, 결과 조회/조치 제안은
+      // assessment 결과 기반이므로 처리 후 assessment 노드로 넘겨 "지금 무엇을 하는지"가 관찰
+      // 패널에 보이게 한다.
+      obs.resetNodes({ parent: "active" });
       try {
         if (!assessmentId) {
+          obs.resetNodes({ parent: "done" });
           setTurns(t => [...t, { role: "bot", text: "먼저 평가를 실행해 주세요. 예: \"test 리포지토리를 우리 정책으로 평가해줘\". 평가가 끝나면 결과를 요약하거나 조치를 도와드릴 수 있습니다." }]);
           return;
         }
         const rep = await fetchFullReport(session.accessToken, assessmentId);
+        obs.resetNodes({ assessment: "done" });
         if (local === "summary") {
           setTurns(t => [...t, { role: "bot", text: summarizeReport(rep) }]);
           return;
@@ -480,6 +487,7 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
         const scope = filter ? [...filter].join("/") + " " : "";
         setTurns(t => [...t, { role: "bot", text: `${scope}조치 대상 ${targets.length}건입니다. 각 항목의 버튼으로 조치를 실행하세요 — 실행 전 확인이 필요하며, 조치는 read-only 진단 후 PR/동기화 제안으로 이어집니다.`, remediable: targets }]);
       } catch (e) {
+        obs.resetNodes({ parent: "failed" });
         setTurns(t => [...t, { role: "bot", text: `결과를 가져오지 못했습니다: ${(e as Error).message}` }]);
       } finally { setBusy(false); }
       return;
