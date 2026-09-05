@@ -41,7 +41,7 @@ from packages.contracts import (
 #: 2026-09-05: S3 네 Control에 AWS 근거, EC2 서브넷 capability, `ALL_IN`·`NO_PUBLIC_INGRESS` 술어.
 #: 이전 판본으로 승인된 Rule은 그 판본을 `control_catalog_version`에 그대로 갖는다 — 여기 값은
 #: 앞으로 만들어질 Rule이 어느 Catalog로 검증됐는지 말한다.
-CONTROL_CATALOG_VERSION = "governance-control-catalog/2026-09-05"
+CONTROL_CATALOG_VERSION = "governance-control-catalog/2026-09-05.2"
 
 #: MANUAL Rule이 평가되는 안정된 좌표. Assessment ID를 쓰지 않는다 — Initial과 Post-Deploy
 #: Verification이 같은 Repository에 대해 같은 좌표를 가져야 비교가 성립한다.
@@ -52,6 +52,10 @@ EC2_SECURITY_GROUP_RESOURCE_TYPE = "AWS::EC2::SecurityGroup"
 EC2_SNAPSHOT_RESOURCE_TYPE = "AWS::EC2::Snapshot"
 
 MANUAL_CONTROL_KEY = "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW"
+#: 기술 통제인데 Catalog에 근거 capability가 아직 없어 사람에게 가는 것. 조직 통제와 같은
+#: MANUAL 좌표를 만들지만, 화면과 보고서는 이 둘을 갈라 센다 — "사람이 판정할 일"과
+#: "아직 지원하지 않는 일"은 다른 답을 부른다(전자는 검토, 후자는 Catalog 확장).
+NOT_YET_SUPPORTED_CONTROL_KEY = "TECHNICAL_CONTROL_NOT_YET_SUPPORTED"
 
 
 def _aws(
@@ -717,6 +721,22 @@ _ORGANIZATIONAL_CONTROL_MANUAL_REVIEW = GovernanceControl(
 )
 
 
+_TECHNICAL_CONTROL_NOT_YET_SUPPORTED = GovernanceControl(
+    control_key=NOT_YET_SUPPORTED_CONTROL_KEY,
+    title="Technical control not yet supported by the evidence catalog",
+    description=(
+        "A requirement about infrastructure facts (identity, keys, backups, logging, patching, "
+        "threat detection) that this catalog declares no evidence capability for yet. It is "
+        "recorded as a coordinate a reviewer settles until a capability exists; it is not an "
+        "organizational control."
+    ),
+    automation_support=ControlAutomationSupport.MANUAL,
+    supported_evaluation_types=(RuleEvaluationType.MANUAL,),
+    severity_guidance="Severity follows the control's owner until the catalog can evidence it.",
+    default_severity=RuleSeverity.MEDIUM,
+)
+
+
 MVP_CONTROL_CATALOG = GovernanceControlCatalog(
     version=CONTROL_CATALOG_VERSION,
     controls=(
@@ -737,6 +757,7 @@ MVP_CONTROL_CATALOG = GovernanceControlCatalog(
         _ALB_HTTPS_ONLY,
         _ALB_ACCESS_LOGGING,
         _ORGANIZATIONAL_CONTROL_MANUAL_REVIEW,
+        _TECHNICAL_CONTROL_NOT_YET_SUPPORTED,
     ),
 )
 

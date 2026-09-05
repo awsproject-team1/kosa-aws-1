@@ -1,7 +1,7 @@
 [
   {
     "rule_id": "ISMSP-1.1.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.1 경영진의 참여",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -20,13 +20,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.1.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.2 최고책임자의 지정",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -45,13 +45,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.1.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.3 조직 구성",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -70,13 +70,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.1.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.4 범위 설정",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -95,13 +95,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.1.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.5 정책 수립",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -120,13 +120,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.1.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.1.6 자원 할당",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -145,13 +145,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 기반 마련. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.2.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.2.1 정보자산 식별",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -170,13 +170,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 위험 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.2.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.2.2 현황 및 흐름분석",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -195,13 +195,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 위험 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.2.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.2.3 위험 평가",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -220,13 +220,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 위험 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.2.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.2.4 보호대책 선정",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -245,13 +245,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 위험 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.3.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.3.1 보호대책 구현",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -270,13 +270,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 운영. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.3.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.3.2 보호대책 공유",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -295,13 +295,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 운영. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.3.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.3.3 운영현황 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -320,13 +320,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 운영. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.4.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.4.1 법적 요구사항 준수 검토",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -345,13 +345,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 점검 및 개선. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.4.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.4.2 관리체계 점검",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -370,13 +370,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 점검 및 개선. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-1.4.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 1.4.3 관리체계 개선",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -395,13 +395,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 관리체계 수립 및 운영 > 관리체계 점검 및 개선. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.1.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.1.1 정책의 유지관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -420,13 +420,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정책, 조직, 자산 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.1.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.1.2 조직의 유지관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -445,13 +445,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정책, 조직, 자산 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.1.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.1.3 정보자산 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -470,13 +470,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정책, 조직, 자산 관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.1 주요 직무자 지정 및 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -495,13 +495,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.2 직무 분리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -520,13 +520,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.3 보안 서약",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -545,13 +545,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.4 인식제고 및 교육훈련",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -570,13 +570,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.5 퇴직 및 직무변경 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -595,13 +595,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.2.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.2.6 보안 위반 시 조치",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -620,13 +620,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인적 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.3.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.3.1 외부자 현황 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -645,13 +645,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 외부자 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.3.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.3.2 외부자 계약 시 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -670,13 +670,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 외부자 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.3.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.3.3 외부자 보안 이행 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -695,13 +695,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 외부자 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.3.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.3.4 외부자 계약 변경 및 만료 시 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -720,13 +720,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 외부자 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.1 보호구역 지정",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -745,13 +745,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.2 출입통제",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -770,13 +770,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.3 정보시스템 보호",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -795,13 +795,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.4 보호설비 운영",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -820,13 +820,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.5 보호구역 내 작업",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -845,13 +845,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.6 반출입 기기 통제",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -870,13 +870,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.4.7",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.4.7 업무환경 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -895,13 +895,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 물리 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.1 사용자 계정 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -919,14 +919,14 @@
         "content_sha256": "b9cfa06ef776a3120ef883d3a1a4bde36ba251e7fbb8599e4e365c50ae77b99d"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (사용자 계정 수명주기, 미사용 자격). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.2 사용자 식별",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -944,14 +944,14 @@
         "content_sha256": "8b249f4e68c1eaa1e7d7a80a5af67379f4f6ebfc6894f5513da0d7385468a9a7"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (개인별 식별, 공용 계정). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.3 사용자 인증",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -969,14 +969,14 @@
         "content_sha256": "ca81318a70ac51e26ddcd9713085bf85a9e0e080d23a1435d94b77be1dffbb5b"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (MFA, 인증 정책). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.4 비밀번호 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -994,14 +994,14 @@
         "content_sha256": "66b6f62f99aa5d7e4c5f7fe13ee45b600e82f4e7663523b1f48ca40ab5c5b45e"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (비밀번호 정책). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.5 특수 계정 및 권한 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1019,14 +1019,14 @@
         "content_sha256": "3537ec8f8f3acdd08b1f7301df701c7512c5140888bf428940fef5d2c5986eff"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (root·관리자 권한, 액세스 키). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.5.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.5.6 접근권한 검토",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1044,14 +1044,14 @@
         "content_sha256": "87408aabf17c0fb7c36396c8da2d477b5ce850fb8bfbf94644009882f5dd59e8"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 인증 및 권한관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: IAM (권한 검토, Access Analyzer). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.1 네트워크 접근",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1070,13 +1070,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.2 정보시스템 접근",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1095,13 +1095,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.3 응용프로그램 접근",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1120,13 +1120,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.4 데이터베이스 접근",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1145,13 +1145,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.5 무선 네트워크 접근",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1170,13 +1170,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.6 원격접근 통제",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1195,13 +1195,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.6.7",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.6.7 인터넷 접속 통제",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1220,13 +1220,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 접근통제. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.7.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.7.1 암호정책 적용",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1245,13 +1245,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 암호화 적용. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.7.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.7.2 암호키 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1269,14 +1269,14 @@
         "content_sha256": "5a30aad603d359fb307f5c72bc7a0c62bd258d815c2a8bdecaf629268132b44e"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 암호화 적용. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 암호화 적용. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: KMS (키 교체·정책). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.1 보안 요구사항 정의",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1295,13 +1295,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.2 보안 요구사항 검토 및 시험",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1320,13 +1320,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.3 시험과 운영 환경 분리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1345,13 +1345,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.4 시험 데이터 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1370,13 +1370,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.5 소스 프로그램 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1395,13 +1395,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.8.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.8.6 운영환경 이관",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1420,13 +1420,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 정보시스템 도입 및 개발 보안. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.1 변경관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1445,13 +1445,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.2 성능 및 장애관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1470,13 +1470,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.3 백업 및 복구관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1494,14 +1494,14 @@
         "content_sha256": "e80ef370e5fc26c183b327cd32ffa071e1906695e2b1c660acd920747786c1fc"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: Backup (RDS 백업 보존, 스냅샷). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.4 로그 및 접속기록 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1520,13 +1520,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.5 로그 및 접속기록 점검",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1544,14 +1544,14 @@
         "content_sha256": "3bbbb55c83652996c718465a7c7117f7b97990f33bcc38e49f0b6f993cef5907"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: CloudTrail (로그 무결성·점검). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.6 시간 동기화",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1570,13 +1570,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.9.7",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.9.7 정보자산의 재사용 및 폐기",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1595,13 +1595,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 운영관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.1 보안시스템 운영",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1619,14 +1619,14 @@
         "content_sha256": "6091fab9b94625321bc8bb8c371f9ae0dc0e12f5afbae5f264decbe5b0bf85af"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: WAF·Security Group 운영 (보안시스템). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.2 클라우드 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1645,13 +1645,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.3 공개서버 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1670,13 +1670,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.4 전자거래 및 핀테크 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1695,13 +1695,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.5 정보전송 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1720,13 +1720,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.6 업무용 단말기기 보안",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1745,13 +1745,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.7",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.7 보조저장매체 관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1770,13 +1770,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.8",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.8 패치관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1794,14 +1794,14 @@
         "content_sha256": "23196115f3969d1b479ae79b7c1f8ad2c43c7a732ac5448363b41780dbcc5217"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: SSM Patch Manager (패치 준수). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.10.9",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.10.9 악성코드 통제",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1819,14 +1819,14 @@
         "content_sha256": "f358ee842d58631efc8d1379adadbc1ca01132f17ffac8aed13a2fa9205713ec"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 시스템 및 서비스 보안관리. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: GuardDuty·Inspector (악성코드). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.11.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.11.1 사고 예방 및 대응체계 구축",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1845,13 +1845,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.11.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.11.2 취약점 점검 및 조치",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1869,14 +1869,14 @@
         "content_sha256": "33d4453c2679c5e9a5740b63bcda6d8d6ea520d7b9865d20ddcbf958396a4e2e"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: Inspector (취약점 점검). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.11.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.11.3 이상행위 분석 및 모니터링",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1894,14 +1894,14 @@
         "content_sha256": "e086d2c0c042442981e58a3b7f70864973496ff98458c978676e3490af5c8685"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: GuardDuty·CloudTrail (이상행위 모니터링). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.11.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.11.4 사고 대응 훈련 및 개선",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1920,13 +1920,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.11.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.11.5 사고 대응 및 복구",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1945,13 +1945,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 사고 예방 및 대응. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.12.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.12.1 재해∙재난 대비 안전조치",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1969,14 +1969,14 @@
         "content_sha256": "af283841f5c0d8bceab92da01a312b4b757d5dc0ec36023c328ae4f99f2021d3"
       }
     ],
-    "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_key": "TECHNICAL_CONTROL_NOT_YET_SUPPORTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
-    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 재해복구. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+    "applicability_semantics": "ISMS-P 보호대책 요구사항 > 재해복구. 기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: Multi-AZ·Backup (재해 대비). 그때까지 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-2.12.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 2.12.2 재해 복구 시험 및 개선",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -1995,13 +1995,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 보호대책 요구사항 > 재해복구. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.1 개인정보 수집∙이용",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2020,13 +2020,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.2 개인정보 수집 제한",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2045,13 +2045,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.3 주민등록번호 처리 제한",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2070,13 +2070,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.4 민감정보 및 고유식별정보의 처리 제한",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2095,13 +2095,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.5 개인정보 간접수집",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2120,13 +2120,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.6",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.6 영상정보처리기기 설치∙운영",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2145,13 +2145,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.1.7",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.1.7 마케팅 목적의 개인정보 수집∙이용",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2170,13 +2170,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 수집 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.2.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.2.1 개인정보 현황관리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2195,13 +2195,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 보유 및 이용 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.2.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.2.2 개인정보 품질보장",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2220,13 +2220,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 보유 및 이용 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.2.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.2.3 이용자 단말기 접근 보호",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2245,13 +2245,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 보유 및 이용 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.2.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.2.4 개인정보 목적 외 이용 및 제공",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2270,13 +2270,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 보유 및 이용 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.2.5",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.2.5 가명정보 처리",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2295,13 +2295,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 보유 및 이용 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.3.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.3.1 개인정보 제3자 제공",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2320,13 +2320,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 제공 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.3.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.3.2 개인정보 처리 업무 위탁",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2345,13 +2345,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 제공 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.3.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.3.3 영업의 양도 등에 따른 개인정보 이전",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2370,13 +2370,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 제공 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.3.4",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.3.4 개인정보 국외이전",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2395,13 +2395,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 제공 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.4.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.4.1 개인정보 파기",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2420,13 +2420,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 파기 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.4.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.4.2 처리목적 달성 후 보유 시 조치",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2445,13 +2445,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 개인정보 파기 시 보호조치. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.5.1",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.5.1 개인정보 처리방침 공개",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2470,13 +2470,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 정보주체 권리보호. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.5.2",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.5.2 정보주체 권리보장",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2495,13 +2495,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 정보주체 권리보호. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-3.5.3",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P 3.5.3 정보주체에 대한 통지",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2520,13 +2520,13 @@
       }
     ],
     "control_key": "ORGANIZATIONAL_CONTROL_MANUAL_REVIEW",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 정보주체 권리보호. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
   },
   {
     "rule_id": "ISMSP-ALB_ACCESS_LOGGING",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Load balancers record access logs",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2546,7 +2546,7 @@
       }
     ],
     "control_key": "ALB_ACCESS_LOGGING",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2560,7 +2560,7 @@
   },
   {
     "rule_id": "ISMSP-ALB_HTTPS_ONLY",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Load balancers terminate HTTPS/TLS only",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2598,7 +2598,7 @@
       }
     ],
     "control_key": "ALB_HTTPS_ONLY",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용, 2.10.3 공개서버 보안, 2.10.4 전자거래 및 핀테크 보안, 2.10.5 정보전송 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2612,7 +2612,7 @@
   },
   {
     "rule_id": "ISMSP-EC2_EBS_ENCRYPTION",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Attached block storage is encrypted",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2633,7 +2633,7 @@
       }
     ],
     "control_key": "EC2_EBS_ENCRYPTION",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2647,7 +2647,7 @@
   },
   {
     "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Private-tier compute has no public address",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2679,7 +2679,7 @@
       }
     ],
     "control_key": "EC2_NO_PUBLIC_IP",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.7 인터넷 접속 통제, 2.10.2 클라우드 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2695,7 +2695,7 @@
   },
   {
     "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Inbound access is restricted to required sources and ports",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2728,7 +2728,7 @@
       }
     ],
     "control_key": "EC2_SG_INGRESS_RESTRICTED",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.2 정보시스템 접근, 2.6.6 원격접근 통제의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2742,7 +2742,7 @@
   },
   {
     "rule_id": "ISMSP-RDS_ACCESS_RESTRICTED",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Database network access is restricted to required sources",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2768,7 +2768,7 @@
       }
     ],
     "control_key": "RDS_ACCESS_RESTRICTED",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근, 2.6.4 데이터베이스 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2783,7 +2783,7 @@
   },
   {
     "rule_id": "ISMSP-RDS_ENCRYPTION_AT_REST",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Managed database storage is encrypted at rest",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2803,7 +2803,7 @@
       }
     ],
     "control_key": "RDS_ENCRYPTION_AT_REST",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2817,7 +2817,7 @@
   },
   {
     "rule_id": "ISMSP-RDS_LOG_EXPORTS",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Managed databases export access logs",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2837,7 +2837,7 @@
       }
     ],
     "control_key": "RDS_LOG_EXPORTS",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2851,7 +2851,7 @@
   },
   {
     "rule_id": "ISMSP-RDS_NOT_PUBLIC",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Managed databases are not publicly accessible",
     "severity": "CRITICAL",
     "applicable_phases": [
@@ -2883,7 +2883,7 @@
       }
     ],
     "control_key": "RDS_NOT_PUBLIC",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.4 데이터베이스 접근, 2.10.2 클라우드 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2897,7 +2897,7 @@
   },
   {
     "rule_id": "ISMSP-S3_BLOCK_PUBLIC_ACCESS",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Object storage blocks public access",
     "severity": "CRITICAL",
     "applicable_phases": [
@@ -2923,7 +2923,7 @@
       }
     ],
     "control_key": "S3_BLOCK_PUBLIC_ACCESS",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.10.2 클라우드 보안, 2.10.3 공개서버 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2937,7 +2937,7 @@
   },
   {
     "rule_id": "ISMSP-S3_BUCKET_ACL_DISABLED",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Bucket ACLs are disabled",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -2957,7 +2957,7 @@
       }
     ],
     "control_key": "S3_BUCKET_ACL_DISABLED",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -2971,7 +2971,7 @@
   },
   {
     "rule_id": "ISMSP-S3_BUCKET_POLICY_RESTRICTED",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Bucket policy restricts principals and networks",
     "severity": "HIGH",
     "applicable_phases": [
@@ -2991,7 +2991,7 @@
       }
     ],
     "control_key": "S3_BUCKET_POLICY_RESTRICTED",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -3005,7 +3005,7 @@
   },
   {
     "rule_id": "ISMSP-S3_ENCRYPTION_AT_REST",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Object storage is encrypted at rest",
     "severity": "HIGH",
     "applicable_phases": [
@@ -3025,7 +3025,7 @@
       }
     ],
     "control_key": "S3_ENCRYPTION_AT_REST",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -3039,7 +3039,7 @@
   },
   {
     "rule_id": "ISMSP-S3_SERVER_ACCESS_LOGGING",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Object storage records server access logs",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -3059,7 +3059,7 @@
       }
     ],
     "control_key": "S3_SERVER_ACCESS_LOGGING",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [
@@ -3073,7 +3073,7 @@
   },
   {
     "rule_id": "ISMSP-S3_TLS_ONLY",
-    "version": "2023-10-31",
+    "version": "2023-10-31.r2",
     "title": "ISMS-P Object storage requires TLS in transit",
     "severity": "MEDIUM",
     "applicable_phases": [
@@ -3105,7 +3105,7 @@
       }
     ],
     "control_key": "S3_TLS_ONLY",
-    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "control_catalog_version": "governance-control-catalog/2026-09-05.2",
     "evaluation_type": "HYBRID",
     "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용, 2.10.4 전자거래 및 핀테크 보안, 2.10.5 정보전송 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
     "required_evidence": [

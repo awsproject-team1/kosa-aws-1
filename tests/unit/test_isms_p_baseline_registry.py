@@ -25,6 +25,7 @@ from apps.backend.policy.control_catalog import (
     GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
     MANUAL_CONTROL_KEY,
     MVP_CONTROL_CATALOG,
+    NOT_YET_SUPPORTED_CONTROL_KEY,
 )
 from apps.backend.policy.ingestion.approval import ProfileBaseline, publish_profile
 from packages.contracts import (
@@ -60,6 +61,24 @@ EXPECTED_AUTOMATED_ITEMS = {
     "2.10.5",
 }
 PROFILE_ID = "profile-isms-p-baseline"
+#: 기술 통제인데 지금 Catalog가 근거를 못 대는 항목. 조직·인적·물리·법적 항목은 여기 없다.
+EXPECTED_NOT_YET_SUPPORTED = {
+    "2.5.1",
+    "2.5.2",
+    "2.5.3",
+    "2.5.4",
+    "2.5.5",
+    "2.5.6",
+    "2.7.2",
+    "2.9.3",
+    "2.9.5",
+    "2.10.1",
+    "2.10.8",
+    "2.10.9",
+    "2.11.2",
+    "2.11.3",
+    "2.12.1",
+}
 
 REGISTRY = load_rule_registry(BASELINE_DIR)
 LEGACY = load_rule_registry(LEGACY_DIR)
@@ -128,7 +147,7 @@ class CompletenessTest(unittest.TestCase):
     def test_the_profile_carries_every_rule_in_one_isms_p_segment(self) -> None:
         (profile,) = REGISTRY.profiles
         self.assertEqual(profile.policy_profile_id, PROFILE_ID)
-        self.assertEqual(profile.version, "v2")
+        self.assertEqual(profile.version, "v3")
         self.assertEqual(
             {reference.rule_id for reference in profile.rule_references},
             {rule.rule_id for rule in REGISTRY.rules},
@@ -153,7 +172,7 @@ class ManualSemanticsTest(unittest.TestCase):
         control = MVP_CONTROL_CATALOG.control(MANUAL_CONTROL_KEY)
         assert control is not None
         for rule in MANUAL_RULES:
-            self.assertEqual(rule.control_key, MANUAL_CONTROL_KEY)
+            self.assertIn(rule.control_key, (MANUAL_CONTROL_KEY, NOT_YET_SUPPORTED_CONTROL_KEY))
             self.assertEqual(rule.resource_types, (GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,))
             self.assertEqual(rule.required_evidence, ())
             self.assertIs(rule.severity, control.default_severity)
@@ -185,12 +204,28 @@ class ManualSemanticsTest(unittest.TestCase):
         self.assertIs(result.status, EvaluationStatus.MANUAL_REVIEW)
         self.assertEqual(result.evidence_references, ("isms-p-2023@2023-10-31#control/1.1.1",))
 
+    def test_exactly_the_technical_items_without_evidence_are_not_yet_supported(self) -> None:
+        """'사람이 판정할 일'과 '아직 지원하지 않는 일'은 다른 답을 부른다. 후자만 이 통제를 갖는다."""
+        pending = {
+            r.rule_id.removeprefix("ISMSP-")
+            for r in MANUAL_RULES
+            if r.control_key == NOT_YET_SUPPORTED_CONTROL_KEY
+        }
+        self.assertEqual(pending, EXPECTED_NOT_YET_SUPPORTED)
+        # 자동 근거가 있는 항목은 "아직 지원하지 않음"이 아니다.
+        self.assertEqual(pending & EXPECTED_AUTOMATED_ITEMS, set())
+        # 영역 1(관리체계)과 3(개인정보)은 Catalog가 넓어져도 사람이 판정한다.
+        self.assertTrue(all(item.startswith("2.") for item in pending))
+        for rule in MANUAL_RULES:
+            if rule.control_key == NOT_YET_SUPPORTED_CONTROL_KEY:
+                self.assertIn("필요한 근거", rule.applicability_semantics or "")
+
     def test_no_stored_field_carries_certification_prose(self) -> None:
         """항목 번호·항목명·분야명만 남긴다. 상세내용·확인사항 문장은 원문이다(ADR-0004)."""
         for rule in MANUAL_RULES:
             self.assertLess(len(rule.title), 80, rule.rule_id)
             self.assertIsNone(rule.evaluation_rubric)
-            self.assertLess(len(rule.applicability_semantics or ""), 120, rule.rule_id)
+            self.assertLess(len(rule.applicability_semantics or ""), 200, rule.rule_id)
 
 
 class AutomatedEvidenceTest(unittest.TestCase):
@@ -271,7 +306,10 @@ class PublicationTest(unittest.TestCase):
         # Source 1개는 이미 있으므로 새로 써지는 것은 Rule 전부 + Profile item 2다.
         self.assertEqual(bootstrap.publish(REGISTRY), len(REGISTRY.rules) + 2)
         self.assertEqual(bootstrap.publish(REGISTRY), 0)
-        rule_item = table.items[("CUSTOMER#cust-001", "RULE#ISMSP-1.1.1#VERSION#2023-10-31")]
+        first = MANUAL_RULES[0]
+        rule_item = table.items[
+            ("CUSTOMER#cust-001", f"RULE#{first.rule_id}#VERSION#{first.version}")
+        ]
         self.assertEqual(rule_item["lifecycle"], RuleLifecycle.APPROVED.value)
         self.assertEqual(rule_item["evaluation_type"], "MANUAL")
 
@@ -362,7 +400,10 @@ class GeneratorTest(unittest.TestCase):
         module = _build_module()
         controls = [
             module.Control(item, "x", "p", "s")
-            for item in sorted({i for items in module.AUTOMATABLE_MAPPING.values() for i in items})
+            for item in sorted(
+                {i for items in module.AUTOMATABLE_MAPPING.values() for i in items}
+                | set(module.NOT_YET_SUPPORTED_ITEMS)
+            )
         ]
         module._require_mapping_targets(controls)  # 커밋된 표는 통과한다.
 

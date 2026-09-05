@@ -138,6 +138,22 @@ bootstrap이 current pointer만 조건부로 옮긴다(`current_version = :curre
 - API의 조치 판정은 두 Registry의 범위를 합쳐 본다(`load_remediation_policy`). Rule id가 겹치면
   거부한다 — 어느 판단이 이기는지 말할 수 없다.
 
+### 7. "사람이 판정할 일"과 "아직 지원하지 않는 일"을 가른다 (2026-09-05 보완)
+
+MANUAL 101개 중 15개는 조직 통제가 아니라 **기술 통제**다 — 2.5.1~2.5.6 계정·인증·권한(IAM),
+2.7.2 암호키(KMS), 2.9.3 백업, 2.9.5 로그 점검·2.11.3 이상행위(CloudTrail/GuardDuty), 2.10.1
+보안시스템, 2.10.8 패치·2.10.9 악성코드·2.11.2 취약점(SSM/Inspector), 2.12.1 재해 대비. 사람에게 가는
+이유가 "판단이 필요해서"가 아니라 "Catalog가 아직 근거를 못 읽어서"이고, 그 둘은 다른 답을 부른다
+(전자는 검토, 후자는 Catalog 확장).
+
+- Catalog에 두 번째 MANUAL 통제 `TECHNICAL_CONTROL_NOT_YET_SUPPORTED`를 둔다. runtime 경로는 같다
+  (governance 좌표, `MANUAL_REVIEW`, 준비도 제외). `ManualReviewEvaluator`는 이 통제의 rationale을
+  고정 접두사 `Not yet supported:`로 시작하고, 콘솔은 그것으로 "지원 예정"을 갈라 센다.
+- 항목 목록(`NOT_YET_SUPPORTED_ITEMS`)은 생성 스크립트에 있고 값은 필요한 AWS 근거 계열이다 —
+  매핑이 아니라 "왜 아직 안 되는가"의 기록. 자동 근거가 있는 항목과 겹치면 생성이 실패한다.
+- Rule item은 불변 key에 게시되므로 내용이 바뀐 이 개정은 새 version이다: `2023-10-31.r2`
+  (원문 판본 + Registry 개정). Profile은 `v3`. `v1`·`v2` 판본과 r1 Rule item은 그대로 남는다.
+
 ## Consequences
 
 - ISMS-P 평가는 Bedrock을 부르지 않는다. 고객 수와 무관하게 같은 101개 좌표가 만들어진다.

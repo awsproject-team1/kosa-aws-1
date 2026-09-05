@@ -11,7 +11,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -27,7 +27,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -43,7 +43,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -59,7 +59,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -75,7 +75,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -91,7 +91,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.1.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -107,7 +107,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.2.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -123,7 +123,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.2.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -139,7 +139,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.2.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -155,7 +155,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.2.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -171,7 +171,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.3.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -187,7 +187,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.3.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -203,7 +203,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.3.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -219,7 +219,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.4.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -235,7 +235,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.4.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -251,7 +251,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-1.4.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -267,7 +267,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.1.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -283,7 +283,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.1.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -299,7 +299,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.1.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -315,7 +315,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -331,7 +331,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -347,7 +347,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -363,7 +363,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -379,7 +379,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -395,7 +395,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.2.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -411,7 +411,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.3.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -427,7 +427,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.3.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -443,7 +443,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.3.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -459,7 +459,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.3.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -475,7 +475,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -491,7 +491,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -507,7 +507,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -523,7 +523,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -539,7 +539,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -555,7 +555,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -571,7 +571,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.4.7",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -587,7 +587,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -603,7 +603,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -619,7 +619,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -635,7 +635,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -651,7 +651,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -667,7 +667,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.5.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -683,19 +683,19 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_NOT_PUBLIC",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -711,23 +711,23 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_ACCESS_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_BUCKET_ACL_DISABLED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_BUCKET_POLICY_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -743,7 +743,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -759,15 +759,15 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_ACCESS_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_NOT_PUBLIC",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -783,7 +783,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -799,11 +799,11 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -819,11 +819,11 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.6.7",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -839,27 +839,27 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.7.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-ALB_HTTPS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_EBS_ENCRYPTION",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_ENCRYPTION_AT_REST",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_ENCRYPTION_AT_REST",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_TLS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -875,7 +875,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.7.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -891,7 +891,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -907,7 +907,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -923,7 +923,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -939,7 +939,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -955,7 +955,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -971,7 +971,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.8.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -987,7 +987,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1003,7 +1003,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1019,7 +1019,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1035,19 +1035,19 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-ALB_ACCESS_LOGGING",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_LOG_EXPORTS",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_SERVER_ACCESS_LOGGING",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1063,7 +1063,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1079,7 +1079,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1095,7 +1095,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.9.7",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1111,7 +1111,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1127,19 +1127,19 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-RDS_NOT_PUBLIC",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_BLOCK_PUBLIC_ACCESS",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1155,15 +1155,15 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-ALB_HTTPS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_BLOCK_PUBLIC_ACCESS",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1179,15 +1179,15 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-ALB_HTTPS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_TLS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1203,15 +1203,15 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-ALB_HTTPS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       },
       {
         "rule_id": "ISMSP-S3_TLS_ONLY",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1227,7 +1227,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1243,7 +1243,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.7",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1259,7 +1259,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.8",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1275,7 +1275,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.10.9",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1291,7 +1291,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.11.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1307,7 +1307,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.11.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1323,7 +1323,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.11.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1339,7 +1339,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.11.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1355,7 +1355,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.11.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1371,7 +1371,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.12.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1387,7 +1387,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-2.12.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1403,7 +1403,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1419,7 +1419,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1435,7 +1435,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1451,7 +1451,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1467,7 +1467,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1483,7 +1483,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.6",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1499,7 +1499,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.1.7",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1515,7 +1515,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.2.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1531,7 +1531,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.2.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1547,7 +1547,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.2.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1563,7 +1563,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.2.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1579,7 +1579,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.2.5",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1595,7 +1595,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.3.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1611,7 +1611,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.3.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1627,7 +1627,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.3.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1643,7 +1643,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.3.4",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1659,7 +1659,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.4.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1675,7 +1675,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.4.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1691,7 +1691,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.5.1",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1707,7 +1707,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.5.2",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   },
@@ -1723,7 +1723,7 @@
     "rule_references": [
       {
         "rule_id": "ISMSP-3.5.3",
-        "version": "2023-10-31"
+        "version": "2023-10-31.r2"
       }
     ]
   }

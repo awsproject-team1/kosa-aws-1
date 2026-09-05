@@ -130,6 +130,7 @@ async function startLogin() {
  * re-issues tokens for whoever signed in last — an admin who has just created a user cannot test
  * that user's login from the same browser. logout_uri must be in the pool client's LogoutURLs. */
 function endCognitoSession() {
+  clearAssessmentStorage();
   sessionStorage.removeItem(verifierKey); sessionStorage.removeItem(stateKey);
   const q = new URLSearchParams({ client_id: COGNITO_CLIENT_ID, logout_uri: REDIRECT_URI });
   window.location.assign(`https://${COGNITO_DOMAIN}/logout?${q}`);
@@ -322,16 +323,30 @@ const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 
  * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
  * 동일하게 브라우저 세션 종료 시 함께 비워지도록 하기 위함이다. */
 const chatKey = (sub: string) => `gov.chat.${sub}`;
-/* 마지막으로 열람한 Assessment id를 사용자별로 localStorage에 보관한다. 결과 자체는 백엔드에
- * 영구 저장돼 있고 여기 저장하는 것은 "어느 평가를 보고 있었는지"뿐이라, 재로그인·새로고침 후에도
- * 결과 탭이 그 평가를 다시 불러오도록 한다. sessionStorage가 아니라 localStorage인 이유는
- * 재로그인(세션 종료)을 넘어 유지되어야 하기 때문이다. */
-const assessmentKey = (sub: string) => `gov.assessment.${sub}`;
-function loadAssessmentId(sub: string): string | null {
-  try { return localStorage.getItem(assessmentKey(sub)); } catch { return null; }
+/* 이번 로그인에서 실행한 평가의 기록. 사용자별 sessionStorage에 두어 탭 이동·새로고침에는
+ * 남고, 로그아웃과 새 로그인에서는 비운다 — "이전 로그인에서 한 실행"은 새 로그인의 기록이 아니다.
+ * 결과 자체는 백엔드에 있으므로 id와 시작 시각·대상만 적는다. */
+type AssessmentRecord = { id: string; at: string; repository?: string; profile?: string };
+const historyKey = (sub: string) => `gov.assessments.${sub}`;
+function loadHistory(sub: string): AssessmentRecord[] {
+  try {
+    const raw = sessionStorage.getItem(historyKey(sub));
+    const parsed = raw ? (JSON.parse(raw) as AssessmentRecord[]) : [];
+    return Array.isArray(parsed) ? parsed.filter(r => r && typeof r.id === "string") : [];
+  } catch { return []; }
 }
-function saveAssessmentId(sub: string, id: string | null): void {
-  try { if (id) localStorage.setItem(assessmentKey(sub), id); else localStorage.removeItem(assessmentKey(sub)); } catch { /* 저장 실패는 무시 */ }
+function saveHistory(sub: string, records: AssessmentRecord[]): void {
+  try { sessionStorage.setItem(historyKey(sub), JSON.stringify(records)); } catch { /* 저장 실패는 무시 */ }
+}
+function clearAssessmentStorage(): void {
+  // 새 로그인·로그아웃에서 부른다. 이전 판(localStorage 단일 id)도 함께 지운다.
+  for (const store of [sessionStorage, localStorage]) {
+    try {
+      const doomed: string[] = [];
+      for (let i = 0; i < store.length; i++) { const k = store.key(i); if (k && (k.startsWith("gov.assessments.") || k.startsWith("gov.assessment."))) doomed.push(k); }
+      doomed.forEach(k => store.removeItem(k));
+    } catch { /* 접근 불가 환경 */ }
+  }
 }
 function loadTurns(sub: string): Turn[] {
   try {
@@ -1212,31 +1227,37 @@ function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= 
 /* 결과를 상태별로 나눠 본다. Finding 목록 하나에 FAIL과 사람 검토 101건이 섞이면 조치할 것이
  * 검토할 것 사이에 묻힌다. 분류 기준은 status이고, 사람 검토는 다시 "ISMS-P 항목(사람이 판정)"과
  * "판정 없음으로 인한 검토(drift 등)"로 갈라 센다 — 둘은 성격이 다르다. */
-const STATUS_GROUPS: { key: string; label: string; statuses: string[]; hint: string }[] = [
-  { key: "FAIL", label: "FAIL", statuses: ["FAIL"], hint: "판정된 위반. 조치 요청의 대상입니다." },
-  { key: "MANUAL_REVIEW", label: "수동 검토", statuses: ["MANUAL_REVIEW"], hint: "사람이 판정해야 하는 좌표. 점수를 깎지 않으며 미판정으로 따로 셉니다." },
-  { key: "INSUFFICIENT_EVIDENCE", label: "근거 부족", statuses: ["INSUFFICIENT_EVIDENCE"], hint: "읽은 문서에 판정할 값이 없어 코드가 fail-closed한 좌표. 위반이 아닙니다." },
-  { key: "EXECUTION_ERROR", label: "실행 오류", statuses: ["EXECUTION_ERROR"], hint: "평가가 실행되지 못한 좌표. rationale에 사유가 적힙니다." },
-  { key: "PASS", label: "PASS", statuses: ["PASS"], hint: "판정된 준수." },
-  { key: "OTHER", label: "기타", statuses: ["OUT_OF_SCOPE"], hint: "Rule이 이 리소스에 적용되지 않음." },
+/* "아직 지원하지 않음": 기술 통제인데 Catalog에 근거 capability가 없어 사람에게 간 좌표. 상태는
+ * MANUAL_REVIEW지만 답이 다르다 — 검토가 아니라 Catalog 확장. ManualReviewEvaluator가 고정
+ * rationale 접두사로 구분해 주므로 화면은 그것으로 가른다. */
+const NOT_YET_SUPPORTED_PREFIX = "Not yet supported";
+const isNotYetSupported = (r: ResultRow) => r.status === "MANUAL_REVIEW" && r.rationale.startsWith(NOT_YET_SUPPORTED_PREFIX);
+const STATUS_GROUPS: { key: string; label: string; match: (r: ResultRow) => boolean; hint: string }[] = [
+  { key: "FAIL", label: "FAIL", match: r => r.status === "FAIL", hint: "판정된 위반. 조치 요청의 대상입니다." },
+  { key: "MANUAL_REVIEW", label: "수동 검토", match: r => r.status === "MANUAL_REVIEW" && !isNotYetSupported(r), hint: "사람이 판정해야 하는 좌표(조직·인적·물리·법적 통제). 점수를 깎지 않으며 미판정으로 따로 셉니다." },
+  { key: "NOT_YET_SUPPORTED", label: "지원 예정", match: isNotYetSupported, hint: "기술 통제이지만 이 제품의 근거 카탈로그가 아직 읽지 못하는 항목(IAM·KMS·백업·CloudTrail·GuardDuty·SSM 등). 카탈로그가 확장되면 자동 판정으로 옮겨가며, 그때까지 사람이 검토합니다." },
+  { key: "INSUFFICIENT_EVIDENCE", label: "근거 부족", match: r => r.status === "INSUFFICIENT_EVIDENCE", hint: "읽은 문서에 판정할 값이 없어 코드가 fail-closed한 좌표. 위반이 아닙니다." },
+  { key: "EXECUTION_ERROR", label: "실행 오류", match: r => r.status === "EXECUTION_ERROR", hint: "평가가 실행되지 못한 좌표. rationale에 사유가 적힙니다." },
+  { key: "PASS", label: "PASS", match: r => r.status === "PASS", hint: "판정된 준수." },
+  { key: "OTHER", label: "기타", match: r => r.status === "OUT_OF_SCOPE", hint: "Rule이 이 리소스에 적용되지 않음." },
 ];
 
 function ResultsByStatus({ rep, complete, suppressed, session, obs, isAdmin }: { rep: Report; complete: boolean; suppressed: Map<string, Suppression>; session: Session; obs: ObserverApi; isAdmin: boolean }) {
   const [group, setGroup] = useState<string>("FAIL");
   const findingByCoordinate = new Map(rep.findings.map(f => [`${f.resource_id}|${f.rule_id}|${f.perspective}`, f]));
-  const counts = new Map(STATUS_GROUPS.map(g => [g.key, rep.results.filter(r => g.statuses.includes(r.status)).length]));
+  const counts = new Map(STATUS_GROUPS.map(g => [g.key, rep.results.filter(g.match).length]));
   const active = STATUS_GROUPS.find(g => g.key === group) ?? STATUS_GROUPS[0];
   const rows = rep.results
-    .filter(r => active.statuses.includes(r.status))
+    .filter(active.match)
     .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || a.rule_id.localeCompare(b.rule_id) || a.resource_id.localeCompare(b.resource_id) || a.perspective.localeCompare(b.perspective));
-  const manualItems = rep.results.filter(r => r.status === "MANUAL_REVIEW" && r.perspective === "MANUAL").length;
+  const manualItems = rep.results.filter(r => r.status === "MANUAL_REVIEW" && r.perspective === "MANUAL" && !isNotYetSupported(r)).length;
   const manualOther = (counts.get("MANUAL_REVIEW") ?? 0) - manualItems;
   return <div className="card"><h2>결과 분류 ({rep.results.length})</h2>
     <p className="hint">상태별로 나눠 봅니다. FAIL·수동 검토·근거 부족은 Finding으로 조치·검토 대상이 되고, PASS는 판정된 준수입니다.</p>
     <div className="status-filters" role="tablist" aria-label="결과 상태 필터">
       {STATUS_GROUPS.map(g => <button key={g.key} role="tab" aria-selected={group === g.key} className={group === g.key ? "active" : "ghost"} onClick={() => setGroup(g.key)}>{g.label} <strong>{counts.get(g.key) ?? 0}</strong></button>)}
     </div>
-    <p className="hint">{active.hint}{active.key === "MANUAL_REVIEW" && manualItems > 0 && ` — ISMS-P 항목(사람 판정) ${manualItems}건${manualOther > 0 ? ` · 판정 없음으로 인한 검토 ${manualOther}건` : ""}. 자동 근거가 있는 항목도 확인사항 일부만 자동 판정되므로 항목 자체는 검토 목록에 남습니다.`}</p>
+    <p className="hint">{active.hint}{active.key === "MANUAL_REVIEW" && manualItems > 0 && ` — 정책 항목(사람 판정) ${manualItems}건${manualOther > 0 ? ` · 판정 없음으로 인한 검토 ${manualOther}건` : ""}. 자동 근거가 있는 항목도 확인사항 일부만 자동 판정되므로 항목 자체는 검토 목록에 남습니다.`}</p>
     {rows.map(r => {
       const finding = findingByCoordinate.get(`${r.resource_id}|${r.rule_id}|${r.perspective}`);
       return finding
@@ -1259,7 +1280,7 @@ function severityRank(severity: string): number {
  * 관측 job 생명주기를 쓴다 — 두 경로가 다른 요청을 보내면 어느 쪽이 맞는지 말할 수 없다.
  * 리포지토리는 /scope의 연결 목록에서, Profile은 사용자에게 지정된 것(관리자는 게시된 Profile 중
  * 선택)을 쓴다. */
-function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; isAdmin: boolean; onAssessment: (id: string) => void }) {
+function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; isAdmin: boolean; onAssessment: (id: string, meta?: { repository: string; profile: string }) => void }) {
   const repos = obs.obs.repos;
   const [repositoryId, setRepositoryId] = useState<string>("");
   const [published, setPublished] = useState<PublishedProfile[]>([]);
@@ -1288,7 +1309,7 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
       if (!r.assessment_id) throw new Error("assessment_id 없음");
       obs.lightNode("assessment", "done");
       obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "done", meta: r.assessment_id.slice(0, 12) });
-      onAssessment(r.assessment_id);
+      onAssessment(r.assessment_id, { repository: repositoryId, profile: effectiveProfile });
     } catch (e) {
       obs.lightNode("assessment", "failed");
       obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "failed", meta: "실패" });
@@ -1319,12 +1340,34 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
   </div>;
 }
 
-function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; isAdmin: boolean }) {
-  const [rep, setRep] = useState<Report | null>(null);
+function AssessmentHistoryCard({ history, current, reports, onSelect }: { history: AssessmentRecord[]; current: string | null; reports: Record<string, Report>; onSelect: (id: string) => void }) {
+  if (history.length === 0) return null;
+  return <div className="card"><h2>이번 로그인의 평가 기록 ({history.length})</h2>
+    <p className="hint">로그아웃하면 비워집니다. 결과 자체는 백엔드에 남으므로 id로 다시 열 수 있습니다.</p>
+    <div className="history-list">
+      {history.map(h => {
+        const rep = reports[h.id];
+        const state = rep ? (isComplete(rep) ? "완료" : "진행 중") : "미조회";
+        const score = rep?.readiness_score ? rounded(rep.readiness_score.score) : null;
+        return <button key={h.id} className={h.id === current ? "active" : "ghost"} onClick={() => onSelect(h.id)} title={h.id}>
+          <span className="history-when">{new Date(h.at).toLocaleString("ko-KR", { hour12: false })}</span>
+          <code>{h.id.slice(0, 16)}</code>
+          <span className="history-meta">{h.repository ?? "-"}{h.profile ? ` · ${h.profile}` : ""} · {state}{score != null ? ` · ${score}점` : ""}</span>
+        </button>;
+      })}
+    </div>
+  </div>;
+}
+
+function ReportPanel({ session, assessmentId, obs, onComplete, onReport, cached, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; onReport: (id: string, rep: Report) => void; cached?: Report | null; isAdmin: boolean }) {
+  const [rep, setRep] = useState<Report | null>(cached ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    // 완료된 결과는 불변이다. 탭을 오갈 때마다 다시 폴링하면 "평가 실행 중"으로 보여 평가가 다시
+    // 도는 것처럼 읽힌다 — App이 보관한 완료본이 있으면 그것을 그대로 쓴다.
+    if (cached && isComplete(cached)) { setRep(cached); setErr(null); setWaiting(false); return; }
     // POST /assessments only queues the job (202); the worker writes the plan first and then one
     // immutable result per Resource × Rule × Perspective. Poll through the initial 404 window and
     // then keep refreshing until coverage reaches the planned denominator — the Job record is not
@@ -1338,6 +1381,7 @@ function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { sess
           const r = await fetchFullReport(session.accessToken, assessmentId);
           if (cancelled) return;
           setRep(r);
+          onReport(assessmentId, r);
           if (isComplete(r)) { setWaiting(false); onComplete(assessmentId); return; }
         } catch (e) {
           const msg = (e as Error).message;
@@ -1387,7 +1431,8 @@ function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { sess
         <span><strong>{resources.size}</strong><small>평가 리소스</small></span>
         <span><strong>{rules.size}</strong><small>평가 Rule</small></span>
         <span><strong>{severe}</strong><small>CRITICAL/HIGH FAIL</small></span>
-        <span><strong>{countStatus("MANUAL_REVIEW")}</strong><small>수동 검토</small></span>
+        <span><strong>{rep.results.filter(r => r.status === "MANUAL_REVIEW" && !isNotYetSupported(r)).length}</strong><small>수동 검토</small></span>
+        <span><strong>{rep.results.filter(isNotYetSupported).length}</strong><small>지원 예정</small></span>
         <span><strong>{countStatus("INSUFFICIENT_EVIDENCE")}</strong><small>근거 부족</small></span>
       </div>
       {countStatus("EXECUTION_ERROR") > 0 && <p className="alert">EXECUTION_ERROR {countStatus("EXECUTION_ERROR")}건 — 평가가 실행되지 못한 좌표입니다. 비준수와 다르며 Coverage 분모에 남습니다.</p>}
@@ -1579,13 +1624,24 @@ function App() {
   // "평가가 끝났습니다" 알림을 한 번 띄운다 — Chat이 그때 언마운트 상태여도 완료 사실을 잃지 않도록
   // App 레벨에 보관한다.
   const [completedAssessmentId, setCompletedAssessmentId] = useState<string | null>(null);
+  // 이번 로그인에서 실행한 평가의 기록과, 이미 읽어 온 결과(완료본은 불변이라 다시 폴링하지 않는다).
+  const [history, setHistory] = useState<AssessmentRecord[]>([]);
+  const [reports, setReports] = useState<Record<string, Report>>({});
   const observer = useObserver();
-  useEffect(() => { exchangeCallback().then(s => { if (s) setSession(s); }).catch(e => setError((e as Error).message)); }, []);
-  // 세션이 설정되면 그 사용자가 마지막으로 보던 Assessment id를 복원한다. 결과 자체는 백엔드에
-  // 있으므로 id만 되살리면 결과 탭이 GET /assessments/{id}로 다시 불러온다.
-  useEffect(() => { if (session) setAssessmentId(prev => prev ?? loadAssessmentId(session.sub)); }, [session]);
-  // assessmentId가 바뀌면 사용자별로 저장한다(세션이 있을 때만).
-  useEffect(() => { if (session) saveAssessmentId(session.sub, assessmentId); }, [session, assessmentId]);
+  // 토큰 교환은 새 로그인에서만 일어난다(code 파라미터). 그때 이전 로그인의 기록을 비운다.
+  useEffect(() => { exchangeCallback().then(s => { if (s) { clearAssessmentStorage(); setSession(s); } }).catch(e => setError((e as Error).message)); }, []);
+  useEffect(() => {
+    if (!session) return;
+    const records = loadHistory(session.sub);
+    setHistory(records);
+    setAssessmentId(prev => prev ?? records[0]?.id ?? null);
+  }, [session]);
+  useEffect(() => { if (session) saveHistory(session.sub, history); }, [session, history]);
+  function recordAssessment(id: string, meta?: { repository: string; profile: string }) {
+    setHistory(prev => prev.some(r => r.id === id) ? prev : [{ id, at: new Date().toISOString(), ...meta }, ...prev]);
+    setAssessmentId(id);
+    setCompletedAssessmentId(null);
+  }
   const isAdmin = !!session?.groups.includes("Admin");
   useEffect(() => {
     if (!session) return;
@@ -1626,13 +1682,14 @@ function App() {
         <span className="who">{session.email}{myProfile ? ` · profile: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
-      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} completedAssessmentId={completedAssessmentId} onAssessment={id => { setAssessmentId(id); setCompletedAssessmentId(null); setView("report"); }} />}
+      {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} assessmentId={assessmentId} completedAssessmentId={completedAssessmentId} onAssessment={id => { recordAssessment(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
       {view === "report" && <div className="panel">
-        <StartAssessmentCard session={session} obs={observer} profileId={myProfile} isAdmin={isAdmin} onAssessment={id => { setAssessmentId(id); setCompletedAssessmentId(null); }} />
+        <StartAssessmentCard session={session} obs={observer} profileId={myProfile} isAdmin={isAdmin} onAssessment={recordAssessment} />
+        <AssessmentHistoryCard history={history} current={assessmentId} reports={reports} onSelect={id => setAssessmentId(id)} />
         {assessmentId
-          ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} isAdmin={isAdmin} />
+          ? <ReportPanel key={assessmentId} session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} onReport={(id, rep) => setReports(prev => ({ ...prev, [id]: rep }))} cached={reports[assessmentId]} isAdmin={isAdmin} />
           : <div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 위에서 '평가 실행'을 누르거나 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div>}
       </div>}
     </div>

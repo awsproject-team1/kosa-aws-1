@@ -17,7 +17,10 @@ Repository의 Initial과 Verification이 서로 다른 좌표를 갖게 되어, 
 from __future__ import annotations
 
 from apps.backend.policy import PolicyContext
-from apps.backend.policy.control_catalog import GOVERNANCE_ASSESSMENT_RESOURCE_TYPE
+from apps.backend.policy.control_catalog import (
+    GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
+    NOT_YET_SUPPORTED_CONTROL_KEY,
+)
 from packages.contracts import (
     DecisionSource,
     EvaluationPerspective,
@@ -34,6 +37,14 @@ from packages.contracts import (
 MANUAL_REVIEW_RATIONALE = (
     "This requirement is settled by human review: no tool in this product observes it. "
     "The coordinate is recorded so coverage and verification comparison stay complete."
+)
+
+#: Catalog에 근거 capability가 없어 사람에게 간 기술 통제의 rationale. 조직 통제와 같은
+#: MANUAL_REVIEW 상태지만 이유가 다르고, 화면은 이 고정 접두사로 둘을 갈라 센다.
+NOT_YET_SUPPORTED_RATIONALE = (
+    "Not yet supported: this technical control needs an evidence capability the catalog does "
+    "not declare yet, so a reviewer settles it. The coordinate is recorded so coverage and "
+    "verification comparison stay complete."
 )
 
 #: MANUAL 결과의 점수. readiness 평균에서 제외되므로 이 값이 평균을 끌어내리지 않는다.
@@ -84,7 +95,11 @@ class ManualReviewEvaluator:
             # 그 통제의 중요도를 바꾸지는 않는다.
             severity=rule.severity.value,
             score=MANUAL_REVIEW_SCORE,
-            rationale=MANUAL_REVIEW_RATIONALE,
+            rationale=(
+                NOT_YET_SUPPORTED_RATIONALE
+                if rule.control_key == NOT_YET_SUPPORTED_CONTROL_KEY
+                else MANUAL_REVIEW_RATIONALE
+            ),
             # 근거는 이 Rule이 인용한 정책 판본 그 자체다. 도구가 관찰한 것이 없으므로 그 외의
             # Evidence를 붙이면 관찰하지 않은 것을 관찰했다고 말하게 된다.
             evidence_references=tuple(

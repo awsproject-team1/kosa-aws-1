@@ -30,6 +30,7 @@ from apps.backend.policy.control_catalog import (
     LEGACY_RULE_CONTROL_KEYS,
     MANUAL_CONTROL_KEY,
     MVP_CONTROL_CATALOG,
+    NOT_YET_SUPPORTED_CONTROL_KEY,
     manual_control,
 )
 from apps.backend.policy.evidence_paths import missing_document_paths
@@ -413,10 +414,14 @@ class CatalogScopeTest(unittest.TestCase):
         self.assertEqual(control.supported_evaluation_types, ())
         self.assertNotIn(control, MVP_CONTROL_CATALOG.automatable_controls())
 
-    def test_the_catalog_declares_exactly_one_manual_control(self) -> None:
+    def test_the_catalog_declares_the_two_manual_controls(self) -> None:
+        """조직 통제와 "아직 지원하지 않는 기술 통제"는 둘 다 사람이 판정하지만 이유가 다르다."""
         manual = MVP_CONTROL_CATALOG.manual_controls()
 
-        self.assertEqual([control.control_key for control in manual], [MANUAL_CONTROL_KEY])
+        self.assertEqual(
+            [control.control_key for control in manual],
+            [MANUAL_CONTROL_KEY, NOT_YET_SUPPORTED_CONTROL_KEY],
+        )
         self.assertIs(manual_control(), manual[0])
 
     def test_the_governance_resource_type_is_not_a_readable_aws_type(self) -> None:

@@ -157,7 +157,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .candidate-values, .candidate-references { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 5px; }
 .candidate-references li { display: flex; flex-direction: column; gap: 3px; }
 .candidate-references span { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; overflow-wrap: anywhere; }
-.candidate-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0 20px; }
+.candidate-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 14px 0 20px; }
 .candidate-summary > span { display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 9px; }
 .candidate-summary strong { font-size: 15px; }
 .candidate-summary small { color: var(--muted); font-size: 10px; }
@@ -197,3 +197,9 @@ button.linklike { background: none; border: 0; padding: 0; color: var(--accent);
 .status-filters button { padding: 6px 12px; font-size: 12px; }
 .status-filters button strong { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .panel > .panel { margin: 0; }
+
+/* 이번 로그인의 평가 기록: 시각·id·대상·상태를 한 줄로, 현재 보는 것만 채운다 */
+.history-list { display: flex; flex-direction: column; gap: 6px; }
+.history-list button { display: flex; gap: 12px; align-items: center; justify-content: flex-start; width: 100%; text-align: left; padding: 8px 12px; font-weight: 500; }
+.history-list .history-when { font-variant-numeric: tabular-nums; min-width: 150px; }
+.history-list .history-meta { color: inherit; opacity: .75; font-size: 12px; }

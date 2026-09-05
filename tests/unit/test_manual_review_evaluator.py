@@ -15,6 +15,7 @@ import unittest
 
 from apps.backend.assessment.manual_review import (
     MANUAL_REVIEW_RATIONALE,
+    NOT_YET_SUPPORTED_RATIONALE,
     ManualReviewEvaluator,
     governance_resource_id,
 )
@@ -23,6 +24,7 @@ from apps.backend.policy import PolicyContext
 from apps.backend.policy.control_catalog import (
     GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
     MANUAL_CONTROL_KEY,
+    NOT_YET_SUPPORTED_CONTROL_KEY,
 )
 from packages.contracts import (
     AssessmentPhase,
@@ -268,3 +270,30 @@ class ReadinessTreatmentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotYetSupportedTest(unittest.TestCase):
+    """A technical control the catalog cannot evidence yet is settled by a person — and says so."""
+
+    def test_the_rationale_names_the_missing_capability_as_the_reason(self) -> None:
+        from dataclasses import replace
+
+        rule = replace(MANUAL_RULE, control_key=NOT_YET_SUPPORTED_CONTROL_KEY)
+        context = PolicyContext(
+            policy_profile_id="profile",
+            policy_profile_version="v1",
+            phase=AssessmentPhase.INITIAL,
+            resource_type=GOVERNANCE_ASSESSMENT_RESOURCE_TYPE,
+            rules=(rule,),
+        )
+
+        result = ManualReviewEvaluator().evaluate(
+            resource_id=governance_resource_id("repo-001"),
+            rule=rule,
+            context=context,
+            model_profile=MODEL_PROFILE,
+        )
+
+        self.assertIs(result.status, EvaluationStatus.MANUAL_REVIEW)
+        self.assertEqual(result.rationale, NOT_YET_SUPPORTED_RATIONALE)
+        self.assertTrue(result.rationale.startswith("Not yet supported"))

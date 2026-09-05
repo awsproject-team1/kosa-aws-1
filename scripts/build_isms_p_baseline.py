@@ -50,6 +50,7 @@ from apps.backend.policy.control_catalog import (  # noqa: E402 - repo root must
     LEGACY_RULE_CONTROL_KEYS,
     MANUAL_CONTROL_KEY,
     MVP_CONTROL_CATALOG,
+    NOT_YET_SUPPORTED_CONTROL_KEY,
 )
 from packages.contracts import (  # noqa: E402
     ControlAutomationSupport,
@@ -65,10 +66,39 @@ DIGEST_SCRIPT = REPO_ROOT / "scripts" / "policy_source_digest.py"
 SOURCE_ID = "isms-p-2023"
 SOURCE_VERSION = "2023-10-31"
 PROFILE_ID = "profile-isms-p-baseline"
-#: `v1`은 MANUAL 101개만 담고 게시됐다. 자동 판정 Rule을 더한 판본은 새 version이어야 한다 — 게시된
-#: Profile 판본 item은 불변이고, bootstrap은 current pointer만 옮긴다.
-PROFILE_VERSION = "v2"
+#: Registry 개정 번호. Rule item은 불변 key(`RULE#<id>#VERSION#<version>`)에 게시되므로 내용이
+#: 바뀌면 version이 바뀌어야 한다. 인증기준 원문은 그대로(`source_version`은 2023-10-31)이고 바뀐
+#: 것은 이 Registry의 판단이므로, version은 "원문 판본 + Registry 개정"이다.
+#:   r1: 항목 101 MANUAL + 자동 판정 15 (v2 Profile)
+#:   r2: 기술 통제인데 Catalog가 아직 근거를 못 대는 15개 항목을 NOT_YET_SUPPORTED로 구분 (v3)
+REGISTRY_REVISION = 2
+RULE_VERSION = f"{SOURCE_VERSION}.r{REGISTRY_REVISION}"
+#: `v1`은 MANUAL 101개만, `v2`는 자동 판정 15개를 더해 게시됐다. 게시된 Profile 판본 item은 불변이고
+#: bootstrap은 current pointer만 옮긴다.
+PROFILE_VERSION = "v3"
 RULE_FILE = "rules.isms-p.json"
+
+#: 기술 통제인데 지금 Catalog(S3·EC2·RDS·ALB)가 근거 capability를 선언하지 않아 사람에게 가는 항목.
+#: 값은 그 항목을 자동 판정하려면 Catalog에 들어와야 할 AWS 근거 계열이다 — 매핑이 아니라 **왜 아직
+#: 안 되는가**의 기록이고, 화면은 이 항목들을 "지원 예정"으로 갈라 센다. 조직·인적·물리·법적 항목은
+#: 여기 없다: 그것은 Catalog가 넓어져도 사람이 판정한다.
+NOT_YET_SUPPORTED_ITEMS: dict[str, str] = {
+    "2.5.1": "IAM (사용자 계정 수명주기, 미사용 자격)",
+    "2.5.2": "IAM (개인별 식별, 공용 계정)",
+    "2.5.3": "IAM (MFA, 인증 정책)",
+    "2.5.4": "IAM (비밀번호 정책)",
+    "2.5.5": "IAM (root·관리자 권한, 액세스 키)",
+    "2.5.6": "IAM (권한 검토, Access Analyzer)",
+    "2.7.2": "KMS (키 교체·정책)",
+    "2.9.3": "Backup (RDS 백업 보존, 스냅샷)",
+    "2.9.5": "CloudTrail (로그 무결성·점검)",
+    "2.10.1": "WAF·Security Group 운영 (보안시스템)",
+    "2.10.8": "SSM Patch Manager (패치 준수)",
+    "2.10.9": "GuardDuty·Inspector (악성코드)",
+    "2.11.2": "Inspector (취약점 점검)",
+    "2.11.3": "GuardDuty·CloudTrail (이상행위 모니터링)",
+    "2.12.1": "Multi-AZ·Backup (재해 대비)",
+}
 
 #: 인증기준 항목 번호. `1.1.1` 꼴만 항목이고 `1.1.`은 분야, `1.`은 영역이다.
 _CONTROL_ID = re.compile(r"^\d+\.\d+\.\d+$")
@@ -208,6 +238,17 @@ def _require_mapping_targets(controls: list[Control]) -> None:
     KNOWN_UNSUPPORTED 통제를 매핑하면 실행 경로 없는 Rule이 조용히 게시된다 — 여기서 막는다.
     """
     known = {control.control_id for control in controls}
+    unknown_pending = sorted(set(NOT_YET_SUPPORTED_ITEMS) - known)
+    if unknown_pending:
+        raise ValueError(
+            f"NOT_YET_SUPPORTED_ITEMS cites items not in the original: {unknown_pending}"
+        )
+    overlap = sorted(
+        set(NOT_YET_SUPPORTED_ITEMS) & {i for items in AUTOMATABLE_MAPPING.values() for i in items}
+    )
+    if overlap:
+        # 자동 근거가 있는 항목은 "아직 지원하지 않음"이 아니다. 둘 다 적으면 화면이 거짓말한다.
+        raise ValueError(f"items are both automated and not-yet-supported: {overlap}")
     for control_key, items in AUTOMATABLE_MAPPING.items():
         control = MVP_CONTROL_CATALOG.control(control_key)
         if control is None or control.automation_support is not ControlAutomationSupport.AVAILABLE:
@@ -246,10 +287,11 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
 
     for control in controls:
         rule_id = f"ISMSP-{control.control_id}"
+        pending = NOT_YET_SUPPORTED_ITEMS.get(control.control_id)
         rules.append(
             {
                 "rule_id": rule_id,
-                "version": SOURCE_VERSION,
+                "version": RULE_VERSION,
                 "title": f"ISMS-P {control.control_id} {control.name}",
                 "severity": MANUAL_SEVERITY.value,
                 "applicable_phases": [
@@ -257,14 +299,19 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
                 ],
                 "resource_types": [GOVERNANCE_ASSESSMENT_RESOURCE_TYPE],
                 "source_references": [reference_for(control.control_id)],
-                "control_key": MANUAL_CONTROL_KEY,
+                "control_key": NOT_YET_SUPPORTED_CONTROL_KEY if pending else MANUAL_CONTROL_KEY,
                 "control_catalog_version": CONTROL_CATALOG_VERSION,
                 "evaluation_type": RuleEvaluationType.MANUAL.value,
                 # 분야명은 원문 발췌가 아니라 목차다. 어느 영역·분야의 통제인지 화면이 말할 수
                 # 있게 남기되, 상세내용·확인사항 문장은 싣지 않는다(ADR-0004).
                 "applicability_semantics": (
                     f"ISMS-P {control.part_name} > {control.section_name}. "
-                    "인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+                    + (
+                        f"기술 통제이지만 Catalog에 근거 capability가 아직 없다 — 필요한 근거: {pending}. "
+                        "그때까지 사람이 검토해 판정한다."
+                        if pending
+                        else "인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+                    )
                 ),
             }
         )
@@ -280,7 +327,7 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
         rules.append(
             {
                 "rule_id": rule_id,
-                "version": SOURCE_VERSION,
+                "version": RULE_VERSION,
                 "title": f"ISMS-P {catalog_control.title}",
                 "severity": catalog_control.default_severity.value,
                 "applicable_phases": [
@@ -316,12 +363,12 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
                 "title": control.name,
                 "source_reference": reference_for(control.control_id),
                 "rule_references": [
-                    {"rule_id": rule_id, "version": SOURCE_VERSION} for rule_id in implementing
+                    {"rule_id": rule_id, "version": RULE_VERSION} for rule_id in implementing
                 ],
             }
         )
 
-    references = [{"rule_id": rule["rule_id"], "version": SOURCE_VERSION} for rule in rules]
+    references = [{"rule_id": rule["rule_id"], "version": RULE_VERSION} for rule in rules]
     profile = {
         "policy_profile_id": PROFILE_ID,
         "version": PROFILE_VERSION,
@@ -346,7 +393,7 @@ def build(digest: ModuleType) -> dict[str, list[dict[str, object]]]:
         remediation.append(
             {
                 "rule_id": f"ISMSP-{control_key}",
-                "version": SOURCE_VERSION,
+                "version": RULE_VERSION,
                 "eligibility": inherited[control_key],
             }
         )

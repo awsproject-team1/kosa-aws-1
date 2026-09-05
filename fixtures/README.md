@@ -28,7 +28,9 @@ IAC + AWS_ACTUAL + DRIFT 세 관점으로 평가된다. authoring이 만드는 R
 isms-p-2023`), 내용은 다르다 — 인증기준 101개 항목마다 MANUAL Rule 하나(`ISMSP-x.y.z`)와
 Control 하나(`ISMS-P-x.y.z`), Catalog의 자동 판정 통제마다 그 통제가 근거가 되는 항목들을
 인용하는 Rule 하나(`ISMSP-<CONTROL_KEY>`, 15개 · 11개 항목 · ADR-0026 §5), 그리고 그 전부를
-`ISMS_P` Segment로 담은 `profile-isms-p-baseline@v2`. 고객은 ISMS-P를 업로드하지 않고 Profile
+`ISMS_P` Segment로 담은 `profile-isms-p-baseline@v3`. MANUAL 101개 중 기술 통제 15개는
+`TECHNICAL_CONTROL_NOT_YET_SUPPORTED`(ADR-0026 §7)이고, Rule version은 `2023-10-31.r2`(원문 판본 +
+Registry 개정)다. 고객은 ISMS-P를 업로드하지 않고 Profile
 게시 때 이 기준선을 고른다. Profile 판본 item은 불변이고 bootstrap은 current pointer만 옮긴다 —
 내용이 바뀌면 version을 올린다. `remediation.json`은 자동 판정 Rule 15개의 자동 patch 허용 범위이며
 같은 통제를 구현하는 legacy Rule의 판단을 그대로 물려받는다(ADR-0026 §6); API의 조치 판정은 두

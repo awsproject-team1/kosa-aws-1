@@ -29,8 +29,13 @@ class MergedRemediationScopeTest(unittest.TestCase):
             policy.eligibility(rule_id="S3-PUBLIC-001", version="2026-08-31"),
             RemediationEligibility.AUTOMATIC,
         )
+        baseline_rule = next(
+            r
+            for r in load_rule_registry(BASELINE).rules
+            if r.rule_id == "ISMSP-S3_BLOCK_PUBLIC_ACCESS"
+        )
         self.assertIs(
-            policy.eligibility(rule_id="ISMSP-S3_BLOCK_PUBLIC_ACCESS", version="2023-10-31"),
+            policy.eligibility(rule_id=baseline_rule.rule_id, version=baseline_rule.version),
             RemediationEligibility.AUTOMATIC,
         )
         self.assertEqual(

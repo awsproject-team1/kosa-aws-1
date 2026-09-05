@@ -1804,6 +1804,18 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     Finding 4건이다. 나머지 HIGH/MEDIUM은 ADR-0017 기준(Rule만으로 유일한 안전 상태·무손실)에 따라
     사람이 IaC를 고치고 재평가하는 경로다 — 그건 등록 누락이 아니라 판단이다.
 
+- **"지원 예정" 분류 · 평가 기록 · 결과 캐시 (2026-09-05, ADR-0026 §7).**
+  - MANUAL 101개 중 기술 통제 15개(IAM 6·KMS·백업·CloudTrail·보안시스템·패치·악성코드·취약점·
+    이상행위·재해대비)는 사람이 판정할 일이 아니라 Catalog가 아직 근거를 못 읽는 일이다. 두 번째
+    MANUAL 통제 `TECHNICAL_CONTROL_NOT_YET_SUPPORTED`로 갈랐다 — runtime 경로는 같고 rationale
+    접두사(`Not yet supported:`)만 다르며, 콘솔은 "수동 검토 86 · 지원 예정 15"로 센다. Registry는
+    r2(`2023-10-31.r2`), Profile v3. sandbox 게시 완료.
+  - Assessment 결과 탭: 탭을 오가면 ReportPanel이 다시 폴링해 "평가 실행 중"으로 보였다(재실행이
+    아니라 재조회). App이 완료본을 보관해 그대로 쓴다. 이번 로그인의 평가 기록을 사용자별
+    sessionStorage에 남겨 클릭으로 되돌아가고, 새 로그인(토큰 교환)과 로그아웃에서 비운다 —
+    앞선 PR의 localStorage 단일 id 보존(재로그인 유지)은 이 요구와 반대라 대체했다.
+
+
 
 
 
