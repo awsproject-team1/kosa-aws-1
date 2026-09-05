@@ -326,12 +326,29 @@ function Login({ error }: { error: string | null }) {
  * Chat (Parent Orchestrator)
  * =======================================================================*/
 type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision };
+const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\" 또는 정책 관련 질문." };
+/* Chat 내역은 사용자별로 sessionStorage에 저장한다. 탭 이동(Chat 언마운트)이나 새로고침에도
+ * 대화가 리셋되지 않도록 초기값을 저장소에서 복원하고, 변경마다 다시 쓴다. 키를 `session.sub`로
+ * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
+ * 동일하게 브라우저 세션 종료 시 함께 비워지도록 하기 위함이다. */
+const chatKey = (sub: string) => `gov.chat.${sub}`;
+function loadTurns(sub: string): Turn[] {
+  try {
+    const raw = sessionStorage.getItem(chatKey(sub));
+    if (!raw) return [CHAT_GREETING];
+    const parsed = JSON.parse(raw) as Turn[];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [CHAT_GREETING];
+  } catch { return [CHAT_GREETING]; }
+}
 function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs: ObserverApi; profileId: string | null; onAssessment: (id: string) => void }) {
-  const [turns, setTurns] = useState<Turn[]>([{ role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\" 또는 정책 관련 질문." }]);
+  const [turns, setTurns] = useState<Turn[]>(() => loadTurns(session.sub));
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [turns]);
+  // 대화가 바뀔 때마다 사용자별 키에 저장한다. 초기 인사만 있는 상태도 저장해 두면 다음 마운트에서
+  // 동일하게 복원된다. 저장 실패(용량 초과 등)는 대화 진행을 막지 않도록 조용히 무시한다.
+  useEffect(() => { try { sessionStorage.setItem(chatKey(session.sub), JSON.stringify(turns)); } catch { /* 저장 실패는 무시 */ } }, [turns, session.sub]);
 
   async function send() {
     const text = msg.trim();
