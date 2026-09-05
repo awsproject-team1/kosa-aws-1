@@ -1830,6 +1830,19 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     빼 별도 그룹으로 두었다. 점수 옆 문구는 "판정 27건 · 미판정 1 · 실행 오류 2 · 범위 밖 1 제외 ·
     PASS 5 / FAIL 22"로 분모 구성을 다 말한다(실행 오류·범위 밖은 이미 제외돼 있었고 표기만 없었다).
 
+- **조치 요청 503 — finding 조회가 DynamoDB 첫 페이지만 읽었다 (2026-09-05).**
+  - API 로그: `StoredDataError: remediation finding not found`(`_load_finding`). 조회는 `ASSESSMENT#`
+    접두사 전체를 query하고 FilterExpression으로 finding_id를 거르는데, DynamoDB는 **1 MB 페이지를
+    읽은 뒤** 거른다. 고객 파티션의 평가 이력이 ~1 MB(4,143 item)에 이르자 뒤쪽 평가의 finding은
+    첫 페이지에 없어 "없음"으로 읽혔다 — ISMS-P 기준선(실행당 146 좌표 + 126 finding)이 몇 번 돌자
+    그렇게 됐다. 파티션이 작을 때만 동작하던 코드다.
+  - 처리: `LastEvaluatedKey`를 끝까지 따라간다(상한 50 페이지, 초과는 fail-closed). 조기 종료는
+    하지 않는다 — 같은 위반의 최신 발생을 골라야 한다. 회귀 테스트는 페이지 뒤에 있는 finding·
+    뒤 페이지의 최신 발생·끝까지 없음·끝나지 않는 페이지네이션을 고정한다.
+  - 남는 것: 요청마다 파티션 접두사 전체를 읽는다(지금 ~1 MB, 2 페이지). 이력이 더 쌓이면
+    finding_id GSI(FINDING items에 `GSI2PK = FINDING#{id}`)로 바꾸는 것이 맞다.
+
+
 
 
 

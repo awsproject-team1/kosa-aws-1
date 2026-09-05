@@ -42,6 +42,11 @@ from packages.contracts import (
 )
 from packages.contracts.remediation import RemediationContext
 
+#: `_load_finding`이 따라갈 query 페이지 수의 상한. 끝나지 않는 페이지네이션을 무한 루프 대신
+#: 실패로 만든다. 한 페이지가 1 MB이므로 50 MB — 고객 파티션의 평가 이력이 그보다 크면 이 조회
+#: 방식 자체를 바꿔야 한다(finding_id GSI).
+_MAX_QUERY_PAGES = 50
+
 
 class DynamoTable(Protocol):
     def get_item(self, **kwargs: object) -> Mapping[str, object]: ...
@@ -109,25 +114,45 @@ class DynamoDbRemediationContextReader:
             raise StoredDataError("stored remediation target is invalid") from error
 
     def _load_finding(self, customer_id: str, finding_id: str) -> tuple[Finding, str]:
+        """Find every stored occurrence of one finding across the customer's assessments.
+
+        **FilterExpression은 페이지를 읽은 뒤에 거른다.** DynamoDB query는 페이지당 1 MB를 읽고
+        그 안에서만 필터를 적용하므로, 첫 페이지에 없는 finding은 "없음"이 아니라 "다음 페이지"다.
+        평가 이력이 쌓여 `ASSESSMENT#` 접두사가 1 MB를 넘자 뒤쪽 평가의 모든 조치 요청이 503으로
+        죽었다 — ISMS-P 기준선(146 좌표/실행)이 몇 번 돌자 그렇게 됐다. 그래서 `LastEvaluatedKey`가
+        없을 때까지 전부 읽는다. 조기 종료는 하지 않는다: `_current_occurrence`는 같은 위반의 모든
+        발생 중 가장 최근 것을 골라야 한다.
+        """
         _non_empty(customer_id, "customer_id")
         _non_empty(finding_id, "finding_id")
-        try:
-            response = self._table.query(
-                KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
-                FilterExpression="entity_type = :finding AND finding_id = :fid",
-                ExpressionAttributeValues={
+        matches: list[Mapping[str, object]] = []
+        start_key: object | None = None
+        for _ in range(_MAX_QUERY_PAGES):
+            request: dict[str, object] = {
+                "KeyConditionExpression": "PK = :pk AND begins_with(SK, :prefix)",
+                "FilterExpression": "entity_type = :finding AND finding_id = :fid",
+                "ExpressionAttributeValues": {
                     ":pk": f"CUSTOMER#{customer_id}",
                     ":prefix": "ASSESSMENT#",
                     ":finding": "FINDING",
                     ":fid": finding_id,
                 },
-            )
-        except Exception:
-            raise RepositoryError("remediation finding read failed") from None
-        items = response.get("Items")
-        if not isinstance(items, list):
-            raise StoredDataError("remediation finding page is invalid")
-        matches = [item for item in items if isinstance(item, Mapping)]
+            }
+            if start_key is not None:
+                request["ExclusiveStartKey"] = start_key
+            try:
+                response = self._table.query(**request)
+            except Exception:
+                raise RepositoryError("remediation finding read failed") from None
+            items = response.get("Items")
+            if not isinstance(items, list):
+                raise StoredDataError("remediation finding page is invalid")
+            matches.extend(item for item in items if isinstance(item, Mapping))
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                break
+        else:
+            raise RepositoryError("remediation finding read did not terminate")
         if not matches:
             raise StoredDataError("remediation finding not found")
         item = _current_occurrence(matches, finding_id)
