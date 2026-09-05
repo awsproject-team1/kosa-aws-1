@@ -1842,6 +1842,18 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - 남는 것: 요청마다 파티션 접두사 전체를 읽는다(지금 ~1 MB, 2 페이지). 이력이 더 쌓이면
     finding_id GSI(FINDING items에 `GSI2PK = FINDING#{id}`)로 바꾸는 것이 맞다.
 
+- **실행 오류가 준비도를 통째로 숨겼다 — "계산 불가" (2026-09-05).** ISMS-P 평가 `asm-3f5db136`,
+  146/146 실행, 실행 오류 4건, 준비도 "계산 불가". `calculate_readiness_score`가 실행 오류 좌표를
+  completed 집합에서 빼 계획을 미완료로 봤다(ADR-0020 §5, CONTRACTS "EXECUTION_ERROR가 있으면
+  null"). Coverage의 라이브 counter는 같은 좌표를 실행됨으로 세어 146/146을 보였으므로 두 화면이
+  모순됐고, 모델의 형식 실패 한 건이 판정된 좌표 27건의 점수를 숨겼다. **앞서 "이미 제외돼 있다"고
+  한 답은 틀렸다** — 평균에서는 빠졌지만 게시를 막고 있었다.
+  - 처리: 기록된 결과는 전부 완료 좌표다(실행 오류 포함). readiness는 평균에서 빼고
+    `errored_evaluations`로 수를 싣는다(additive). 점수를 막는 것은 결과 자체가 없는 planned 좌표뿐.
+    `coverage.py` fallback과 비교 경계(`comparison.py`)도 같은 정의로 맞췄다 — 셋이 달랐다.
+  - 이 실행의 새 준비도: 18.52 (판정 27 · 미판정 1 · 실행 오류 4 제외).
+
+
 
 
 

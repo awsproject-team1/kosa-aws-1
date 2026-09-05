@@ -197,9 +197,10 @@ Repository와 Policy Profile만 받으며, Worker가 그 요청을 승인 목록
 "무엇을 평가할 수 있는가"에 답이 두 개가 되기 때문이다.
 
 M1 Coverage는 Assessment 시작 시 확정한 적용 가능 `Resource × Rule × Perspective` 수를 분모로
-사용한다. `PASS`, `FAIL`, `MANUAL_REVIEW`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE` 결과는 완료된
-평가로 집계하고 `EXECUTION_ERROR`는 분모에 남겨 재시도·실패 범위를 드러낸다. 동일한
-Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
+사용한다. 기록된 결과는 status에 관계없이 완료된 평가로 집계한다 — `EXECUTION_ERROR`도 runner가
+사유까지 남긴 기록이다(2026-09-05 이전에는 fallback 계산과 비교 경계만 실행 오류를 빼서 라이브
+counter와 세 정의가 어긋났다). 실패 범위는 result status와 `ReadinessScore.errored_evaluations`가
+드러낸다. 동일한 Resource × Rule × Perspective의 재전송 결과는 한 번만 집계한다.
 
 ## M1 Finding and Readiness boundary
 
@@ -213,8 +214,11 @@ legacy Result/Finding은 provenance 없이 읽을 수 있으나 remediation 자�
 `ReadinessScore`는 평가 계획이 완전히 Coverage 되었을 때만 반환한다. `OUT_OF_SCOPE`와
 `DRIFT` 관점은 점수 계산에서 제외하고, 나머지 평가 score를 Rule Severity 가중치 `LOW=1`,
 `MEDIUM=2`, `HIGH=4`, `CRITICAL=8`로 가중 평균하여 소수 둘째 자리로 반올림한다.
-`EXECUTION_ERROR` 또는 미완료 평가가 있으면 Readiness Score는 `null`이며 Coverage가 그
-이유를 표시한다. 이 산식은 AI가 아닌 C의 결정적 report projection이다.
+미완료 평가(결과 자체가 없는 planned 좌표)가 있으면 Readiness Score는 `null`이며 Coverage가 그
+이유를 표시한다. `EXECUTION_ERROR`는 기록된 결과이므로 좌표를 완료로 보되 평균에서 빼고
+`errored_evaluations`로 함께 싣는다(2026-09-05 이전에는 점수 게시를 막았다 — Coverage는 같은
+좌표를 실행됨으로 세면서 점수만 `null`이라 두 화면이 모순됐다). 이 산식은 AI가 아닌 C의 결정적
+report projection이다.
 
 `EvidenceCapabilityBinding.expectation`은 **그 근거만으로 통제를 확정할 수 있을 때** 선언하는
 술어다(`ALL_TRUE`·`ALL_FALSE`·`NON_EMPTY`·`ALL_EQUAL`·`NONE_EQUAL`, AWS_ACTUAL 전용). 선언되면

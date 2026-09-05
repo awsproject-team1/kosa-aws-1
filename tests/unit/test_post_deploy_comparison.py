@@ -60,9 +60,7 @@ def assessment(
         findings=(),
         coverage=AssessmentCoverage(
             planned_evaluations=len(plan),
-            completed_evaluations=sum(
-                item.status is not EvaluationStatus.EXECUTION_ERROR for item in results
-            ),
+            completed_evaluations=len(results),
         ),
         readiness_score=(
             ReadinessScore(score=score, evaluated_evaluations=len(plan)) if score else None

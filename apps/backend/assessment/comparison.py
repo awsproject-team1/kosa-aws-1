@@ -58,17 +58,9 @@ class ComparisonAssessment:
         }
         if result_coordinates != planned_coordinates:
             raise ValueError("report results must exactly match planned_evaluations")
-        completed_coordinates = {
-            PlannedEvaluation(
-                resource_id=result.resource_id,
-                rule_id=result.rule_id,
-                perspective=result.perspective,
-            )
-            for result in self.report.results
-            if result.status is not EvaluationStatus.EXECUTION_ERROR
-        }
+        # 기록된 결과는 전부 완료 좌표다 — `EXECUTION_ERROR`도 (coverage.py와 같은 정의).
         if self.report.coverage.planned_evaluations != len(planned_coordinates) or (
-            self.report.coverage.completed_evaluations != len(completed_coordinates)
+            self.report.coverage.completed_evaluations != len(result_coordinates)
         ):
             raise ValueError("report coverage does not match planned_evaluations")
 

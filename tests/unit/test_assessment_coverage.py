@@ -45,9 +45,10 @@ class AssessmentCoverageTest(unittest.TestCase):
             {"planned_evaluations": 4, "completed_evaluations": 2, "percentage": 50},
         )
 
-    def test_execution_error_remains_uncovered_and_duplicate_delivery_is_not_double_counted(
+    def test_execution_error_is_a_recorded_result_and_duplicate_delivery_is_not_double_counted(
         self,
     ) -> None:
+        """실행 오류도 기록된 결과라 완료로 센다. 실패 범위는 status와 readiness가 드러낸다."""
         outcome = result()
         coverage = calculate_coverage(
             results=(
@@ -58,8 +59,8 @@ class AssessmentCoverageTest(unittest.TestCase):
             planned_evaluations=2,
         )
 
-        self.assertEqual(coverage.completed_evaluations, 1)
-        self.assertEqual(coverage.percentage, 50)
+        self.assertEqual(coverage.completed_evaluations, 2)
+        self.assertEqual(coverage.percentage, 100)
 
     def test_rejects_a_result_set_larger_than_the_authoritative_plan(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not exceed"):

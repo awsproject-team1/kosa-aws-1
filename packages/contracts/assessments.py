@@ -346,13 +346,16 @@ class ReadinessScore:
     score: float
     evaluated_evaluations: int
     undetermined_evaluations: int = 0
+    #: 실행되지 못한 좌표(EXECUTION_ERROR) 수. 평균에서 빠지지만 점수 게시를 막지는 않는다 —
+    #: 실패는 결과로 기록돼 보이는 미완료이고, 그 수가 여기 함께 실린다(ADR-0024 §2 보완).
+    errored_evaluations: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
             raise TypeError("score must be a number")
         if not 0 <= self.score <= 100:
             raise ValueError("score must be between 0 and 100")
-        for name in ("evaluated_evaluations", "undetermined_evaluations"):
+        for name in ("evaluated_evaluations", "undetermined_evaluations", "errored_evaluations"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
@@ -360,12 +363,15 @@ class ReadinessScore:
             raise ValueError("evaluated_evaluations must be greater than zero")
         if self.undetermined_evaluations < 0:
             raise ValueError("undetermined_evaluations must not be negative")
+        if self.errored_evaluations < 0:
+            raise ValueError("errored_evaluations must not be negative")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "score": self.score,
             "evaluated_evaluations": self.evaluated_evaluations,
             "undetermined_evaluations": self.undetermined_evaluations,
+            "errored_evaluations": self.errored_evaluations,
         }
 
 

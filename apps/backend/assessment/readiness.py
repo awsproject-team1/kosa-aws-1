@@ -28,7 +28,15 @@ from packages.contracts import (
 _SEVERITY_WEIGHTS = {"LOW": 1, "MEDIUM": 2, "HIGH": 4, "CRITICAL": 8}
 
 #: 준비도에 아무 의미가 없는 status. OUT_OF_SCOPE는 그 Rule이 이 Resource를 규율하지 않는다는
-#: 뜻이고, EXECUTION_ERROR는 Coverage가 게시 자체를 막는다. 둘 다 미판정으로도 세지 않는다.
+#: 뜻이고, EXECUTION_ERROR는 평가가 실행되지 못했다는 기록이다. 둘 다 평균에도 미판정에도 들어가지
+#: 않는다. EXECUTION_ERROR는 따로 센다(`errored_evaluations`) — 점수를 막는 대신 보이게 한다.
+#:
+#: **예전에는 EXECUTION_ERROR가 점수 게시를 막았다(2026-09-05까지).** "계획이 완전히 끝났을 때만
+#: 점수를 낸다"의 completed 집합에서 실행 오류 좌표를 뺐기 때문이다. 그런데 Coverage는 같은 좌표를
+#: 실행됨으로 세어 146/146을 보이면서 점수는 "계산 불가"였다 — 두 화면이 서로 모순됐고, 모델의
+#: 형식 실패 한 건이 판정된 좌표 28건의 점수를 통째로 숨겼다. 실행 오류는 조용한 누락이 아니라
+#: 기록된 결과이므로(runner가 사유까지 남긴다) 완료로 보고, 수를 점수 옆에 싣는다. 누락 좌표
+#: (결과 자체가 없음)는 여전히 점수를 막는다 — 그것은 아무도 기록하지 않은 미완료다.
 _NON_SCORING_STATUSES = frozenset({EvaluationStatus.OUT_OF_SCOPE, EvaluationStatus.EXECUTION_ERROR})
 
 #: 실행은 됐으나 판정이 없는 status. 평균에서 빼고 `undetermined_evaluations`로 보고한다.
@@ -55,8 +63,9 @@ def calculate_readiness_score(
     silently fills the slot of a planned one that never ran.
 
     Each judged coordinate contributes `STATUS_SCORES[status]` weighted by the policy
-    Rule severity. OUT_OF_SCOPE has no readiness meaning and EXECUTION_ERROR prevents
-    publication via Coverage. INSUFFICIENT_EVIDENCE and MANUAL_REVIEW are counted as
+    Rule severity. OUT_OF_SCOPE has no readiness meaning. EXECUTION_ERROR is a recorded
+    result: it completes its coordinate, stays out of the average, and is reported as
+    `errored_evaluations`. INSUFFICIENT_EVIDENCE and MANUAL_REVIEW are counted as
     undetermined rather than averaged in.
 
     `DRIFT` results are excluded from the score. Drift states whether the IaC and
@@ -87,10 +96,10 @@ def calculate_readiness_score(
         )
         for result in results
         if isinstance(result, EvaluationResult)
-        and result.status is not EvaluationStatus.EXECUTION_ERROR
     }
     if completed != planned:
         return None
+    errored = sum(1 for result in results if result.status is EvaluationStatus.EXECUTION_ERROR)
     candidates = tuple(
         result
         for result in results
@@ -114,6 +123,7 @@ def calculate_readiness_score(
         score=round(weighted_score / total_weight, 2),
         evaluated_evaluations=len(judged),
         undetermined_evaluations=len(undetermined),
+        errored_evaluations=errored,
     )
 
 

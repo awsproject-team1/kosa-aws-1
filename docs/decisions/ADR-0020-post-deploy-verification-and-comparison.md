@@ -110,7 +110,9 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
 - 리소스가 사라졌으면 **세 관점 모두에** `OUT_OF_SCOPE` 결과를 쓴다. planned 집합은 원 Assessment
   에서 고정돼 그 리소스를 여전히 포함하므로, 한 관점만 비우면 집합이 어긋나 `comparable = false`가
   된다. `OUT_OF_SCOPE`는 completed 집합에는 들어가고 점수 계산에서만 빠지므로
-  (`apps/backend/assessment/readiness.py`는 `EXECUTION_ERROR`만 completed에서 제외한다)
+  (`apps/backend/assessment/readiness.py`는 결과가 있는 모든 좌표를 completed로 본다;
+  `EXECUTION_ERROR`는 2026-09-05부터 completed에 들고 점수에서만 빠지며 `errored_evaluations`로
+  세어진다 — ADR-0024 §2 보완)
   Coverage와 score가 모두 성립한다.
 - 비교 입력은 `Finding`이 아니라 **`EvaluationResult` 집합**이다. `Finding`은 status를
   `FAIL`/`MANUAL_REVIEW`/`INSUFFICIENT_EVIDENCE`로 제한하므로 `PASS`를 표현하지 못하고,
@@ -132,8 +134,8 @@ Readiness Score 변화를 확인한다"다. 현재 코드·문서 상태에서 �
   `INDETERMINATE`가 되고 delta도 부분 집합 기준이 되어 **예외 없이 잘못된 리포트**가 나온다.
   비교 경계는 cursor가 남은 report를 fail-closed로 거부한다.
 - cursor가 없더라도 report의 결과 좌표 집합은 immutable planned 집합과 **정확히 같아야** 하며,
-  Coverage의 planned/completed count도 그 집합 및 `EXECUTION_ERROR`를 제외한 완료 좌표와 일치해야
-  한다. 따라서 잘못된 조회 구현이나 손상된 projection이 누락 좌표를 정상 score로 위장할 수 없다.
+  Coverage의 planned/completed count도 그 집합과 일치해야 한다(`EXECUTION_ERROR`도 기록된 완료
+  좌표다). 따라서 잘못된 조회 구현이나 손상된 projection이 누락 좌표를 정상 score로 위장할 수 없다.
 - 이 complete-input 검사는 comparison eligibility와 별개인 경계 validation이다. cursor가 남거나
   결과/coverage가 자체 plan과 어긋난 report는 `AssessmentComparison`을 만들기 전에 거부한다. 반면
   두 개의 유효하고 complete한 Assessment 사이에서 plan/profile/rubric/score가 다르면

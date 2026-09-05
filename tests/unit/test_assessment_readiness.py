@@ -113,14 +113,31 @@ class ReadinessScoreTest(unittest.TestCase):
             )
         )
 
-    def test_execution_error_leaves_its_coordinate_uncompleted(self) -> None:
+    def test_execution_error_completes_its_coordinate_and_is_counted_not_scored(self) -> None:
+        """실행 오류는 기록된 결과다. 점수를 막지 않고, 평균에서 빠지며, 수가 점수 옆에 실린다.
+
+        예전에는 실행 오류 하나가 판정된 좌표 전부의 점수를 숨겼다(계산 불가) — Coverage는 같은
+        좌표를 실행됨으로 세면서. 누락 좌표(결과 없음)만 점수를 막는다.
+        """
+        score = calculate_readiness_score(
+            results=(
+                result(),
+                result(resource_id="bucket-002", status=EvaluationStatus.EXECUTION_ERROR),
+            ),
+            planned_evaluations=(planned(), planned(resource_id="bucket-002")),
+        )
+
+        assert score is not None
+        self.assertEqual(score.evaluated_evaluations, 1)
+        self.assertEqual(score.errored_evaluations, 1)
+        self.assertEqual(score.undetermined_evaluations, 0)
+        self.assertEqual(score.to_dict()["errored_evaluations"], 1)
+
+    def test_a_plan_of_only_execution_errors_has_no_score(self) -> None:
         self.assertIsNone(
             calculate_readiness_score(
-                results=(
-                    result(),
-                    result(resource_id="bucket-002", status=EvaluationStatus.EXECUTION_ERROR),
-                ),
-                planned_evaluations=(planned(), planned(resource_id="bucket-002")),
+                results=(result(status=EvaluationStatus.EXECUTION_ERROR),),
+                planned_evaluations=(planned(),),
             )
         )
 

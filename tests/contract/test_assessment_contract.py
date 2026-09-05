@@ -170,10 +170,17 @@ class AssessmentContractTest(unittest.TestCase):
 
         self.assertEqual(
             score.to_dict(),
-            {"score": 73.25, "evaluated_evaluations": 4, "undetermined_evaluations": 0},
+            {
+                "score": 73.25,
+                "evaluated_evaluations": 4,
+                "undetermined_evaluations": 0,
+                "errored_evaluations": 0,
+            },
         )
         with self.assertRaisesRegex(ValueError, "undetermined_evaluations"):
             ReadinessScore(score=1, evaluated_evaluations=1, undetermined_evaluations=-1)
+        with self.assertRaisesRegex(ValueError, "errored_evaluations"):
+            ReadinessScore(score=1, evaluated_evaluations=1, errored_evaluations=-1)
 
     def test_evaluation_result_records_who_decided_and_what_was_observed(self) -> None:
         from packages.contracts import DecisionSource, score_for_status

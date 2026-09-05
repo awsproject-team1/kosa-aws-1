@@ -68,7 +68,7 @@ type CandidatePage = {
 };
 /** `decided_by`·`observed_*`는 이 필드 이전에 저장된 결과에는 없다 — 그때는 전부 모델 판정이었다. */
 type ResultRow = { resource_id: string; rule_id: string; rule_version: string; perspective: string; status: string; severity: string; score: number; rationale: string; evidence_references: string[]; model_profile_id: string; rubric_version: string; decided_by?: "CODE" | "MODEL"; observed_satisfied?: number | null; observed_total?: number | null };
-type Readiness = { score: number; evaluated_evaluations: number; undetermined_evaluations?: number };
+type Readiness = { score: number; evaluated_evaluations: number; undetermined_evaluations?: number; errored_evaluations?: number };
 type FindingRow = ResultRow & { finding_id: string };
 type Suppression = { finding_id: string; exception_id: string; reason: string; expires_at: string };
 type PublishedProfile = { policy_profile_id: string; version: string; rule_count: number; source_kinds: string[]; published_at?: string | null };
@@ -250,7 +250,8 @@ const readinessHint = (r: Readiness, excluded?: Excluded) => {
   const undetermined = r.undetermined_evaluations ?? 0;
   const parts = [`판정 ${r.evaluated_evaluations}건 가중 평균`];
   if (undetermined > 0) parts.push(`미판정 ${undetermined}`);
-  if (excluded && excluded.errors > 0) parts.push(`실행 오류 ${excluded.errors}`);
+  const errors = r.errored_evaluations ?? excluded?.errors ?? 0;
+  if (errors > 0) parts.push(`실행 오류 ${errors}`);
   if (excluded && excluded.outOfScope > 0) parts.push(`범위 밖 ${excluded.outOfScope}`);
   return parts.length === 1 ? parts[0] : `${parts[0]} · ${parts.slice(1).join(" · ")} 제외`;
 };
