@@ -71,6 +71,53 @@ write로 게시한다(멱등). 게시된 `profile-isms-p-baseline@v1`은 `GET /p
 고객 승인 record가 없다: 고객이 올린 문서가 아니라 코드 리뷰를 거쳐 커밋된 Registry이기
 때문이다(`docs/POLICY_INGESTION.md`, `ProfileBaseline`).
 
+### 5. 자동 판정 근거가 있는 항목은 자동 판정 Rule도 갖는다 (2026-09-05 보완)
+
+MANUAL 101개만으로 평가하면 판정 좌표가 0개라 준비도가 `None`이다(ADR-0024 §2 — 판정 없는 좌표는
+점수 없음). 그것은 설계대로이지 오류가 아니지만, Catalog가 이미 코드로 판정할 수 있는 사실에
+대해서까지 사람을 기다릴 이유는 없다.
+
+**Catalog의 자동 판정 통제(15개)마다 Rule 하나**(`ISMSP-<CONTROL_KEY>`)를 두고, 그 통제의 사실이
+답하는 인증기준 항목들을 `source_references`로 인용한다. 매핑은 사람이 정한 표이며
+`scripts/build_isms_p_baseline.py`의 `AUTOMATABLE_MAPPING`이 그 기록이다.
+
+| 인증기준 항목 | 근거가 되는 통제 |
+| --- | --- |
+| 2.6.1 네트워크 접근 | SG ingress 제한, EC2 공인 IP 없음, RDS 비공개 |
+| 2.6.2 정보시스템 접근 | S3 ACL 비활성, S3 bucket policy 제한, SG ingress 제한, RDS 접근 제한 |
+| 2.6.4 데이터베이스 접근 | RDS 접근 제한, RDS 비공개 |
+| 2.6.6 원격접근 통제 | SG ingress 제한 |
+| 2.6.7 인터넷 접속 통제 | EC2 공인 IP 없음 |
+| 2.7.1 암호정책 적용 | S3·EBS·RDS 저장 암호화, S3 TLS, ALB HTTPS |
+| 2.9.4 로그 및 접속기록 관리 | S3·RDS·ALB 로깅 |
+| 2.10.2 클라우드 보안 | S3 public access block, EC2 공인 IP 없음, RDS 비공개 |
+| 2.10.3 공개서버 보안 | S3 public access block, ALB HTTPS |
+| 2.10.4 전자거래 및 핀테크 보안 | ALB HTTPS, S3 TLS |
+| 2.10.5 정보전송 보안 | ALB HTTPS, S3 TLS |
+
+세 가지가 이 모양을 정했다.
+
+- **통제 하나에 Rule 하나, 항목은 인용.** 항목마다 Rule을 복제하면 같은 사실(예: SG 0.0.0.0/0
+  개방)이 인용 항목 수만큼 점수에 들어간다. `readiness.py`는 같은 사실을 두 번 세지 않는다.
+- **자동 근거가 있는 항목도 MANUAL Rule을 그대로 갖는다.** 자동 판정은 그 항목 확인사항의
+  일부에만 답한다(2.7.1은 정책 수립·키 관리도 묻는다). `controls.json`이 항목별로 MANUAL + 자동
+  Rule을 함께 가리키므로 `ControlRuleCoverage`가 "이 항목은 몇 개 Rule로 얼마나 평가됐는가"를
+  말한다. 화면은 "ISMS-P 준비도 N점"이 아니라 **"자동 판정 가능한 11개 항목 기준 N점 · 101개
+  항목은 사람 검토 대기"**로 말해야 한다.
+- **legacy Rule 16개를 복사하지 않고 실행 의미를 가진 Rule로 만든다.** legacy Rule은
+  `control_for_rule`의 손 매핑에 묶인 legacy 경로를 타고, 이 Rule들은 authoring이 만든 Rule과 같은
+  경로(Catalog 술어 → 코드 판정, ADR-0024)를 탄다. 실행 유형은 HYBRID(IAC + AWS_ACTUAL + DRIFT),
+  severity·evidence·rubric은 전부 Catalog 값이다 — 여기서 새로 쓰면 코드 술어와 어긋난다.
+
+이 상한은 Catalog의 상한이다. 영역 1(관리체계)과 영역 3(개인정보)은 자동 근거가 0개이고, IAM·KMS·
+백업·CloudTrail·GuardDuty 통제가 Catalog에 들어오면 약 20–25개 항목까지 간다. 나머지는 사람 검토
+기록 기능(별도 ADR)이 답이다.
+
+**게시.** `profile-isms-p-baseline`은 `v2`(116 Rule)다. 게시된 `v1` 판본 item은 불변으로 남고,
+bootstrap이 current pointer만 조건부로 옮긴다(`current_version = :current`, `record_profile`과
+같은 규칙). 같은 판본에 다른 내용이면 여전히 fail-closed하고, 동시에 옮겨진 pointer는 덮어쓰지
+않는다.
+
 ## Consequences
 
 - ISMS-P 평가는 Bedrock을 부르지 않는다. 고객 수와 무관하게 같은 101개 좌표가 만들어진다.

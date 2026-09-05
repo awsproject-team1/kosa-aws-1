@@ -26,9 +26,11 @@ IAC + AWS_ACTUAL + DRIFT 세 관점으로 평가된다. authoring이 만드는 R
 `baselines/isms-p-2023/`는 **ISMS-P 인증기준 기준선 Registry**다(ADR-0026). 같은 네 파일 모양을
 `load_rule_registry`가 읽고 같은 bootstrap이 게시하지만(`publish_policy_catalog.py --registry
 isms-p-2023`), 내용은 다르다 — 인증기준 101개 항목마다 MANUAL Rule 하나(`ISMSP-x.y.z`)와
-Control 하나(`ISMS-P-x.y.z`), 그리고 그 전부를 `ISMS_P` Segment로 담은
-`profile-isms-p-baseline@v1`. 고객은 ISMS-P를 업로드하지 않고 Profile 게시 때 이 기준선을
-고른다. 손으로 편집하지 않는다: `scripts/build_isms_p_baseline.py`가 로컬 원문에서 결정적으로
+Control 하나(`ISMS-P-x.y.z`), Catalog의 자동 판정 통제마다 그 통제가 근거가 되는 항목들을
+인용하는 Rule 하나(`ISMSP-<CONTROL_KEY>`, 15개 · 11개 항목 · ADR-0026 §5), 그리고 그 전부를
+`ISMS_P` Segment로 담은 `profile-isms-p-baseline@v2`. 고객은 ISMS-P를 업로드하지 않고 Profile
+게시 때 이 기준선을 고른다. Profile 판본 item은 불변이고 bootstrap은 current pointer만 옮긴다 —
+내용이 바뀌면 version을 올린다. 손으로 편집하지 않는다: `scripts/build_isms_p_baseline.py`가 로컬 원문에서 결정적으로
 생성하며 `--check`가 커밋본과 대조한다. `sources.json`의 `isms-p-2023` 항목은 `rules/`의 것과
 바이트가 같아야 한다 — 다르면 두 번째 bootstrap이 불변 key 충돌로 fail-closed한다.
 

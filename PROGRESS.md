@@ -1744,3 +1744,23 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
   - 회귀 테스트: 라이브에 실제로 저장돼 있던 네 count 모양의 READY manifest가 `_manifest_from_item`을
     통과한다(`StoredManifestCompatibilityTest`).
 
+- **ISMS-P 기준선에 자동 판정 근거를 붙였다 — 11개 항목 (2026-09-05, ADR-0026 §5).**
+  - 왜: 기준선이 MANUAL 101개뿐이라 평가하면 전부 `MANUAL_REVIEW`, 판정 좌표 0개, 준비도 `None`.
+    101은 인증기준 자체의 항목 수(관리체계 16 · 보호대책 64 · 개인정보 21)이고, 그중 지금 카탈로그
+    (S3·EC2·RDS·ALB 기술 통제 15개)가 근거를 댈 수 있는 항목은 **11개**다(영역 1·3은 0개).
+  - 어떻게: Catalog의 자동 판정 통제마다 Rule 하나(`ISMSP-<CONTROL_KEY>`, HYBRID, 실행 의미는
+    Catalog에서)를 만들고, 그 통제가 근거가 되는 항목들을 `source_references`로 인용한다
+    (`AUTOMATABLE_MAPPING`, 사람이 정한 표). **통제 하나에 Rule 하나** — 항목마다 복제하면 같은
+    사실이 인용 항목 수만큼 점수에 들어간다. 자동 근거가 있는 항목도 MANUAL Rule을 그대로 갖는다:
+    자동 판정은 그 항목 확인사항의 일부에만 답한다. `controls.json`이 항목별 Rule 목록(MANUAL +
+    자동)을 가리키므로 `ControlRuleCoverage`가 "이 항목은 몇 개 Rule로 얼마나 평가됐는가"를 말한다.
+  - legacy 16개를 복사하지 않고 새로 만든 이유: legacy Rule은 `control_for_rule`의 손 매핑에 묶인
+    legacy 경로를 타고, 기준선은 authoring Rule과 같은 실행 의미 경로를 타야 "왜 코드가 판정하나"가
+    한 가지 답으로 남는다. 고객은 baseline을 하나만 고르므로 두 경로가 한 Profile에서 겹치지 않는다.
+  - `profile-isms-p-baseline`은 **v2**(116 Rule). 게시된 v1 판본 item은 불변으로 남고, bootstrap이
+    current pointer만 조건부로 옮긴다(`current_version = :current`) — `record_profile`과 같은 규칙.
+    같은 판본에 다른 내용이면 여전히 fail-closed, 동시에 옮겨진 pointer는 덮어쓰지 않는다.
+  - 화면 문구가 정확해야 한다: "ISMS-P 준비도"가 아니라 "자동 판정 가능한 11개 항목(15 Rule) 기준
+    점수 · 101개 항목은 사람 검토 대기". 나머지 75%는 사람 검토 기록 기능(다음 작업)이 답이다.
+
+

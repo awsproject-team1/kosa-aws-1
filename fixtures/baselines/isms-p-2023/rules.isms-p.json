@@ -2523,5 +2523,598 @@
     "control_catalog_version": "governance-control-catalog/2026-09-05",
     "evaluation_type": "MANUAL",
     "applicability_semantics": "ISMS-P 개인정보 처리단계별 요구사항 > 정보주체 권리보호. 인증기준 항목에 대한 증적을 사람이 검토해 판정한다."
+  },
+  {
+    "rule_id": "ISMSP-ALB_ACCESS_LOGGING",
+    "version": "2023-10-31",
+    "title": "ISMS-P Load balancers record access logs",
+    "severity": "MEDIUM",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ],
+    "control_key": "ALB_ACCESS_LOGGING",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "ALB.ACCESS_LOGS"
+    ],
+    "optional_evidence": [
+      "ALB.IAC_ACCESS_LOGS"
+    ],
+    "evaluation_rubric": "Access logging must be enabled and delivered to a logging bucket.",
+    "severity_guidance": "Without request logs an exposure cannot be scoped after the fact."
+  },
+  {
+    "rule_id": "ISMSP-ALB_HTTPS_ONLY",
+    "version": "2023-10-31",
+    "title": "ISMS-P Load balancers terminate HTTPS/TLS only",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.3",
+        "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.4",
+        "content_sha256": "3c3deac950581ffe7c34e9a119e5232d6797b87da70ae40dbac358abb726affa"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.5",
+        "content_sha256": "e4728469a76a82e25fd61aabf2c5e6dfbf1b6fe1a5e3e4332cd539bdc0df0740"
+      }
+    ],
+    "control_key": "ALB_HTTPS_ONLY",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용, 2.10.3 공개서버 보안, 2.10.4 전자거래 및 핀테크 보안, 2.10.5 정보전송 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "ALB.LISTENER_PROTOCOL"
+    ],
+    "optional_evidence": [
+      "ALB.IAC_LISTENER_PROTOCOL"
+    ],
+    "evaluation_rubric": "Every listener must use HTTPS or TLS with an approved security policy.",
+    "severity_guidance": "A plaintext listener exposes session tokens on every request."
+  },
+  {
+    "rule_id": "ISMSP-EC2_EBS_ENCRYPTION",
+    "version": "2023-10-31",
+    "title": "ISMS-P Attached block storage is encrypted",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::EC2::Instance",
+      "AWS::EC2::Volume"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ],
+    "control_key": "EC2_EBS_ENCRYPTION",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "EC2.VOLUME_ENCRYPTION"
+    ],
+    "optional_evidence": [
+      "EC2.IAC_VOLUME_ENCRYPTION"
+    ],
+    "evaluation_rubric": "Every EBS volume attached to an instance must be encrypted.",
+    "severity_guidance": "An unencrypted volume leaks its whole contents if a snapshot escapes."
+  },
+  {
+    "rule_id": "ISMSP-EC2_NO_PUBLIC_IP",
+    "version": "2023-10-31",
+    "title": "ISMS-P Private-tier compute has no public address",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::EC2::Instance"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.1",
+        "content_sha256": "d36f4b5af67edf844db13b93b9eeb3ce39d075e44d989f3816e24d1adc7ee844"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.7",
+        "content_sha256": "8e6416f2403fe2ee4e273e4c917cd52dd701e3f311306de686d2c6a51450f74e"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.2",
+        "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+      }
+    ],
+    "control_key": "EC2_NO_PUBLIC_IP",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.7 인터넷 접속 통제, 2.10.2 클라우드 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "EC2.PUBLIC_ADDRESS",
+      "EC2.SUBNET_PUBLIC_IP_ASSIGNMENT"
+    ],
+    "optional_evidence": [
+      "EC2.NETWORK_INTERFACE_ASSOCIATION",
+      "EC2.IAC_PUBLIC_ADDRESS"
+    ],
+    "evaluation_rubric": "Instances in a private tier must not carry a public IPv4 address.",
+    "severity_guidance": "A public address puts a private-tier host directly on the internet."
+  },
+  {
+    "rule_id": "ISMSP-EC2_SG_INGRESS_RESTRICTED",
+    "version": "2023-10-31",
+    "title": "ISMS-P Inbound access is restricted to required sources and ports",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::EC2::Instance",
+      "AWS::EC2::SecurityGroup"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.1",
+        "content_sha256": "d36f4b5af67edf844db13b93b9eeb3ce39d075e44d989f3816e24d1adc7ee844"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.6",
+        "content_sha256": "fee1891a48dfe7ca4341e9bdc7e5edaf4807b135a29d78197e8a3495ea25fc51"
+      }
+    ],
+    "control_key": "EC2_SG_INGRESS_RESTRICTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.2 정보시스템 접근, 2.6.6 원격접근 통제의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "EC2.SECURITY_GROUP_INGRESS"
+    ],
+    "optional_evidence": [
+      "EC2.IAC_SECURITY_GROUP_INGRESS"
+    ],
+    "evaluation_rubric": "Security group ingress must name the sources and ports it allows.",
+    "severity_guidance": "Open ingress reaches the workload without any other control in between."
+  },
+  {
+    "rule_id": "ISMSP-RDS_ACCESS_RESTRICTED",
+    "version": "2023-10-31",
+    "title": "ISMS-P Database network access is restricted to required sources",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::RDS::DBInstance"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.4",
+        "content_sha256": "56a844efe3298b787158dfa51d98fcf8985c1825427b7e44febce72ae7355efc"
+      }
+    ],
+    "control_key": "RDS_ACCESS_RESTRICTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근, 2.6.4 데이터베이스 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "RDS.SECURITY_GROUP_INGRESS"
+    ],
+    "optional_evidence": [
+      "RDS.SUBNET_GROUP",
+      "RDS.IAC_SECURITY_GROUP_INGRESS"
+    ],
+    "evaluation_rubric": "Security groups attached to a DB instance must name the sources they allow.",
+    "severity_guidance": "Broad database ingress removes the network boundary in front of the data."
+  },
+  {
+    "rule_id": "ISMSP-RDS_ENCRYPTION_AT_REST",
+    "version": "2023-10-31",
+    "title": "ISMS-P Managed database storage is encrypted at rest",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::RDS::DBInstance"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ],
+    "control_key": "RDS_ENCRYPTION_AT_REST",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "RDS.STORAGE_ENCRYPTED"
+    ],
+    "optional_evidence": [
+      "RDS.IAC_STORAGE_ENCRYPTED"
+    ],
+    "evaluation_rubric": "A DB instance must have storage encryption enabled.",
+    "severity_guidance": "Unencrypted database storage fails at-rest protection outright."
+  },
+  {
+    "rule_id": "ISMSP-RDS_LOG_EXPORTS",
+    "version": "2023-10-31",
+    "title": "ISMS-P Managed databases export access logs",
+    "severity": "MEDIUM",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::RDS::DBInstance"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ],
+    "control_key": "RDS_LOG_EXPORTS",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "RDS.LOG_EXPORTS"
+    ],
+    "optional_evidence": [
+      "RDS.IAC_LOG_EXPORTS"
+    ],
+    "evaluation_rubric": "A DB instance must export its engine access logs to CloudWatch Logs.",
+    "severity_guidance": "Without database access logs, misuse of valid credentials leaves no trace."
+  },
+  {
+    "rule_id": "ISMSP-RDS_NOT_PUBLIC",
+    "version": "2023-10-31",
+    "title": "ISMS-P Managed databases are not publicly accessible",
+    "severity": "CRITICAL",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::RDS::DBInstance"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.1",
+        "content_sha256": "d36f4b5af67edf844db13b93b9eeb3ce39d075e44d989f3816e24d1adc7ee844"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.4",
+        "content_sha256": "56a844efe3298b787158dfa51d98fcf8985c1825427b7e44febce72ae7355efc"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.2",
+        "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+      }
+    ],
+    "control_key": "RDS_NOT_PUBLIC",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.1 네트워크 접근, 2.6.4 데이터베이스 접근, 2.10.2 클라우드 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "RDS.PUBLICLY_ACCESSIBLE"
+    ],
+    "optional_evidence": [
+      "RDS.IAC_PUBLICLY_ACCESSIBLE"
+    ],
+    "evaluation_rubric": "A DB instance must not be reachable from outside its VPC.",
+    "severity_guidance": "A publicly reachable database is one credential away from full access."
+  },
+  {
+    "rule_id": "ISMSP-S3_BLOCK_PUBLIC_ACCESS",
+    "version": "2023-10-31",
+    "title": "ISMS-P Object storage blocks public access",
+    "severity": "CRITICAL",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.2",
+        "content_sha256": "78df9bee436d2601011732e6a0d702604437be134a576bec9115ca533eeac8d9"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.3",
+        "content_sha256": "268d60f31d0599bc6f8274590d78f9003320a75051512386ef9af68257688f29"
+      }
+    ],
+    "control_key": "S3_BLOCK_PUBLIC_ACCESS",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.10.2 클라우드 보안, 2.10.3 공개서버 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.PUBLIC_ACCESS_BLOCK"
+    ],
+    "optional_evidence": [
+      "S3.IAC_PUBLIC_ACCESS_BLOCK"
+    ],
+    "evaluation_rubric": "Every bucket must block public ACLs and public bucket policies at the account or bucket level.",
+    "severity_guidance": "A publicly readable bucket exposes stored data with no further step."
+  },
+  {
+    "rule_id": "ISMSP-S3_BUCKET_ACL_DISABLED",
+    "version": "2023-10-31",
+    "title": "ISMS-P Bucket ACLs are disabled",
+    "severity": "MEDIUM",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ],
+    "control_key": "S3_BUCKET_ACL_DISABLED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.OWNERSHIP_CONTROLS"
+    ],
+    "optional_evidence": [
+      "S3.IAC_OBJECT_OWNERSHIP"
+    ],
+    "evaluation_rubric": "Object ownership must be enforced so ACLs cannot grant access.",
+    "severity_guidance": "ACL-based grants bypass the bucket policy review path."
+  },
+  {
+    "rule_id": "ISMSP-S3_BUCKET_POLICY_RESTRICTED",
+    "version": "2023-10-31",
+    "title": "ISMS-P Bucket policy restricts principals and networks",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.6.2",
+        "content_sha256": "0b4ec24f446a580314adce60a619bfa530c011e3569c6aa72ee52cc40a7dae56"
+      }
+    ],
+    "control_key": "S3_BUCKET_POLICY_RESTRICTED",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.6.2 정보시스템 접근의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.BUCKET_POLICY_PRINCIPALS"
+    ],
+    "optional_evidence": [
+      "S3.IAC_BUCKET_POLICY"
+    ],
+    "evaluation_rubric": "A bucket policy must name the principals, source networks, or resources it allows, rather than granting broadly.",
+    "severity_guidance": "An over-broad bucket policy grants access no reviewer approved."
+  },
+  {
+    "rule_id": "ISMSP-S3_ENCRYPTION_AT_REST",
+    "version": "2023-10-31",
+    "title": "ISMS-P Object storage is encrypted at rest",
+    "severity": "HIGH",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      }
+    ],
+    "control_key": "S3_ENCRYPTION_AT_REST",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.ENCRYPTION"
+    ],
+    "optional_evidence": [
+      "S3.IAC_ENCRYPTION"
+    ],
+    "evaluation_rubric": "Every bucket must declare server-side encryption by default.",
+    "severity_guidance": "Unencrypted storage fails at-rest protection requirements outright."
+  },
+  {
+    "rule_id": "ISMSP-S3_SERVER_ACCESS_LOGGING",
+    "version": "2023-10-31",
+    "title": "ISMS-P Object storage records server access logs",
+    "severity": "MEDIUM",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.9.4",
+        "content_sha256": "78ddae6e48d1a85718c7a08b098219ffef4ea439629d828078af978f6605e096"
+      }
+    ],
+    "control_key": "S3_SERVER_ACCESS_LOGGING",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.9.4 로그 및 접속기록 관리의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.SERVER_ACCESS_LOGGING"
+    ],
+    "optional_evidence": [
+      "S3.IAC_SERVER_ACCESS_LOGGING"
+    ],
+    "evaluation_rubric": "Buckets must deliver server access logs to a logging destination.",
+    "severity_guidance": "Without access logs an incident cannot be reconstructed afterwards."
+  },
+  {
+    "rule_id": "ISMSP-S3_TLS_ONLY",
+    "version": "2023-10-31",
+    "title": "ISMS-P Object storage requires TLS in transit",
+    "severity": "MEDIUM",
+    "applicable_phases": [
+      "INITIAL",
+      "DEPLOYMENT_READINESS",
+      "POST_DEPLOY_VERIFICATION"
+    ],
+    "resource_types": [
+      "AWS::S3::Bucket"
+    ],
+    "source_references": [
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.7.1",
+        "content_sha256": "e9c9cc3c68e1f65e233bbd566ebce43296fbdfbe6f17ee4dc98b36f96649f1e6"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.4",
+        "content_sha256": "3c3deac950581ffe7c34e9a119e5232d6797b87da70ae40dbac358abb726affa"
+      },
+      {
+        "source_id": "isms-p-2023",
+        "source_version": "2023-10-31",
+        "locator": "control/2.10.5",
+        "content_sha256": "e4728469a76a82e25fd61aabf2c5e6dfbf1b6fe1a5e3e4332cd539bdc0df0740"
+      }
+    ],
+    "control_key": "S3_TLS_ONLY",
+    "control_catalog_version": "governance-control-catalog/2026-09-05",
+    "evaluation_type": "HYBRID",
+    "applicability_semantics": "ISMS-P 2.7.1 암호정책 적용, 2.10.4 전자거래 및 핀테크 보안, 2.10.5 정보전송 보안의 확인사항 중 이 통제가 답하는 부분만 자동 판정한다. 항목의 나머지 확인사항은 MANUAL Rule로 사람이 검토한다.",
+    "required_evidence": [
+      "S3.BUCKET_POLICY_TLS"
+    ],
+    "optional_evidence": [
+      "S3.IAC_TLS_ONLY_POLICY"
+    ],
+    "evaluation_rubric": "A bucket policy must deny requests that do not use TLS.",
+    "severity_guidance": "Plaintext transfer exposes objects and credentials on the wire."
   }
 ]
