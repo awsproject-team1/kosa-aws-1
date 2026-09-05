@@ -204,7 +204,9 @@ class LiveGitHubWriteTool:
             ),
         )
         if status != 201:
-            raise GitHubWriteToolError("GitHub pull request creation failed")
+            raise GitHubWriteToolError(
+                f"GitHub pull request creation failed (status {status}): {_error_detail(payload)}"
+            )
         return _mapping(payload)
 
     def _branch_head(self, branch: str, headers: Mapping[str, str]) -> str:
@@ -272,6 +274,26 @@ def _json(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
 
+def _error_detail(payload: object) -> str:
+    """Render a GitHub error response compactly for logs/exceptions.
+
+    GitHub 422 등은 `{"message": ..., "errors": [...]}` 형태다. 그 message와 errors만 뽑아
+    로그에 남기면 "이미 PR 존재" vs "변경 없음"을 즉시 구분할 수 있다.
+    """
+    if isinstance(payload, Mapping):
+        message = payload.get("message")
+        errors = payload.get("errors")
+        parts = []
+        if message:
+            parts.append(str(message))
+        if errors:
+            parts.append(json.dumps(errors, ensure_ascii=True))
+        return " | ".join(parts) if parts else json.dumps(dict(payload), ensure_ascii=True)[:300]
+    if isinstance(payload, str):
+        return payload[:300]
+    return "no response body"
+
+
 def _github_request(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None
 ) -> tuple[int, object]:
@@ -282,6 +304,17 @@ def _github_request(
             raw = response.read()
     except HTTPError as error:
         # 404(없음)와 422(이미 있음)는 흐름의 일부다. 나머지는 호출자가 status로 판단한다.
+        # 응답 본문을 함께 돌려주어(가능하면 JSON) 실패 사유가 로그·예외에 남게 한다 —
+        # 본문을 버리면 422가 "이미 존재"인지 "변경 없음"인지 구분할 수 없다.
+        try:
+            detail_raw = error.read()
+        except Exception:
+            detail_raw = b""
+        if detail_raw:
+            try:
+                return error.code, json.loads(detail_raw.decode("utf-8"))
+            except Exception:
+                return error.code, detail_raw.decode("utf-8", "replace")
         return error.code, None
     except (URLError, TimeoutError) as error:
         raise GitHubWriteToolError("GitHub request failed") from error
