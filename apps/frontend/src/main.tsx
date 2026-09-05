@@ -77,6 +77,7 @@ type Report = { assessment_id: string; results: ResultRow[]; findings: FindingRo
 type RemediationDecision = { action: string; manual_review_code: string | null; exception_id: string | null };
 type RemediationStart = { decision: RemediationDecision; job: { job_id: string; remediation_id: string | null } | null };
 type RemediationView = { remediation_id: string; status: string; decision: RemediationDecision; job_id: string | null; result: { kind: string; patch?: { changed_paths: string[]; base_commit_sha: string; artifact: { content_sha256: string } }; sync_target?: { commit_sha: string } } | null; pull_request: { number: number; url: string; head_branch: string } | null };
+type DeploymentView = { deployment_id: string; status: string; commit_sha: string; remediation_id: string; source_assessment_id: string; plan_hash: string | null; verification_assessment_id: string | null };
 
 /* =========================================================================
  * Observability store — the whole point: show what's happening inside.
@@ -1186,7 +1187,7 @@ async function fetchFullReport(token: string, assessmentId: string): Promise<Rep
 
 function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
 
-function ReportPanel({ session, assessmentId, obs, onComplete }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void }) {
+function ReportPanel({ session, assessmentId, obs, onComplete, isAdmin }: { session: Session; assessmentId: string; obs: ObserverApi; onComplete: (id: string) => void; isAdmin: boolean }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -1263,7 +1264,7 @@ function ReportPanel({ session, assessmentId, obs, onComplete }: { session: Sess
 
     <div className="card"><h2>Findings ({rep.findings.length})</h2>
       <p className="hint">FAIL·MANUAL_REVIEW·INSUFFICIENT_EVIDENCE 결과만 Finding이 됩니다. Evidence는 평가기가 인용한 정책 locator와 read-only IaC/AWS 조회 locator입니다.</p>
-      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} obs={obs} />)}
+      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />)}
       {rep.findings.length === 0 && <p className="obs-empty">{complete ? "Finding이 없습니다." : "아직 Finding이 없습니다 (평가 진행 중)."}</p>}
     </div>
 
@@ -1285,11 +1286,17 @@ function ReportPanel({ session, assessmentId, obs, onComplete }: { session: Sess
   </div>;
 }
 
-function FindingCard({ finding: f, suppression, session, obs }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi }) {
+function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi; isAdmin: boolean }) {
   const [start, setStart] = useState<RemediationStart | null>(null);
   const [view, setView] = useState<RemediationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deployment, setDeployment] = useState<DeploymentView | null>(null);
+  const [deploying, setDeploying] = useState(false);
+
+  // Deployment는 사람이 PR을 merge한 뒤 진행되는 별도 단계다(ADR-0019 §3). merge 전까지는
+  // 이 상태들에서 멈춰 사람 판단(승인)을 기다린다.
+  const DEPLOY_STOP = new Set(["WAITING_APPROVAL", "BLOCKED", "MANUAL_REVIEW", "REJECTED", "APPLIED", "VERIFIED", "VERIFICATION_INDETERMINATE"]);
 
   async function request() {
     setBusy(true); setError(null); setStart(null); setView(null);
@@ -1328,6 +1335,62 @@ function FindingCard({ finding: f, suppression, session, obs }: { finding: Findi
     finally { setBusy(false); }
   }
 
+  // PR을 사람이 merge한 뒤 호출한다. Deployment를 생성하고 상태를 폴링한다 — merge된 commit에서
+  // refreshed plan → readiness 평가까지 진행되어 WAITING_APPROVAL(또는 BLOCKED/MANUAL_REVIEW)에서
+  // 멈춘다. deployment 노드는 이 시점부터 켜진다.
+  async function startDeployment(remediationId: string) {
+    setDeploying(true); setError(null);
+    const jobId = "deploy-" + remediationId;
+    obs.resetNodes({ deployment: "active" });
+    obs.upsertJob({ id: jobId, label: `배포 ${f.rule_id}`, queue: "deployment", state: "active" });
+    try {
+      const d = await api<DeploymentView>(`/remediations/${enc(remediationId)}/deployments`, session.accessToken, { method: "POST", body: "{}" });
+      setDeployment(d);
+      let latest = d;
+      for (let i = 0; i < 60 && !DEPLOY_STOP.has(latest.status); i++) {
+        await sleep(3000);
+        try { latest = await api<DeploymentView>(`/deployments/${enc(d.deployment_id)}`, session.accessToken); setDeployment(latest); }
+        catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+      }
+      // 승인 대기/적용 완료면 done, 차단·거절·수동검토면 failed로 표시한다.
+      const bad = latest.status === "BLOCKED" || latest.status === "REJECTED" || latest.status === "MANUAL_REVIEW";
+      obs.lightNode("deployment", bad ? "failed" : "done");
+      obs.upsertJob({ id: jobId, label: `배포 ${f.rule_id}`, queue: "deployment", state: bad ? "failed" : "done", meta: latest.status });
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("deployment", "failed");
+      obs.upsertJob({ id: jobId, label: `배포 ${f.rule_id}`, queue: "deployment", state: "failed", meta: "실패" });
+    } finally { setDeploying(false); }
+  }
+
+  // Admin 승인. 저장된 plan의 commit_sha/plan_hash를 그대로 실어 보낸다(백엔드가 저장값과 대조).
+  // 승인은 apply를 트리거하지 않고 승인 record만 쓴다 — apply는 D Worker가 재검증 후 실행한다.
+  async function approveDeployment(d: DeploymentView) {
+    if (!d.plan_hash) { setError("plan_hash가 아직 없어 승인할 수 없습니다. plan 완료를 기다리세요."); return; }
+    setDeploying(true); setError(null);
+    const jobId = "deploy-" + d.remediation_id;
+    obs.resetNodes({ deployment: "active" });
+    obs.upsertJob({ id: jobId, label: `배포 승인 ${f.rule_id}`, queue: "deployment", state: "active" });
+    try {
+      await api(`/deployments/${enc(d.deployment_id)}/approve`, session.accessToken, { method: "POST", body: JSON.stringify({ commit_sha: d.commit_sha, plan_hash: d.plan_hash }) });
+      let latest = d;
+      for (let i = 0; i < 60; i++) {
+        await sleep(3000);
+        try {
+          latest = await api<DeploymentView>(`/deployments/${enc(d.deployment_id)}`, session.accessToken); setDeployment(latest);
+          if (["APPLIED", "VERIFIED", "VERIFICATION_INDETERMINATE", "MANUAL_REVIEW", "REJECTED"].includes(latest.status)) break;
+        } catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+      }
+      const bad = latest.status === "MANUAL_REVIEW" || latest.status === "REJECTED" || latest.status === "VERIFICATION_INDETERMINATE";
+      obs.lightNode("deployment", bad ? "failed" : "done");
+      obs.upsertJob({ id: jobId, label: `배포 승인 ${f.rule_id}`, queue: "deployment", state: bad ? "failed" : "done", meta: latest.status });
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("deployment", "failed");
+      obs.upsertJob({ id: jobId, label: `배포 승인 ${f.rule_id}`, queue: "deployment", state: "failed", meta: "실패" });
+    } finally { setDeploying(false); }
+  }
+
   const code = start?.decision.manual_review_code;
   return <article className="candidate">
     <div className="candidate-badges"><span className="badge severity">{f.severity}</span><span className={`badge status-${f.status.toLowerCase()}`}>{f.status}</span><span className="badge">{f.perspective}</span><span className="badge">score {f.score}</span>{suppression && <span className="badge">억제됨 · {suppression.reason}</span>}</div>
@@ -1346,6 +1409,30 @@ function FindingCard({ finding: f, suppression, session, obs }: { finding: Findi
       {view.pull_request
         ? <p className="status">Pull Request #{view.pull_request.number} 생성됨 — <a href={view.pull_request.url} target="_blank" rel="noreferrer">{view.pull_request.url}</a> (branch <code>{view.pull_request.head_branch}</code>). PR 본문에 unified diff가 있습니다. 사람이 검토·머지한 뒤에만 배포 승인과 apply가 진행됩니다.</p>
         : view.result?.kind === "TERRAFORM_PATCH" && <p className="hint">PR 생성 대기 중…</p>}
+    </div>}
+
+    {/* Deployment 단계 (ADR-0019): 사람이 PR을 merge한 뒤 진행한다. merge는 코드만 반영하고
+        AWS를 바꾸지 않으므로, deployment 에이전트가 merge commit에서 refreshed plan을 만들고
+        readiness를 평가한 뒤 Human Approval을 거쳐 apply한다. */}
+    {view?.remediation_id && (view.result?.kind === "TERRAFORM_PATCH" ? !!view.pull_request : !!view.result?.sync_target) && <div className="remediation-result">
+      <div className="hint" style={{ marginBottom: 6 }}>
+        {view.result?.kind === "TERRAFORM_PATCH"
+          ? "PR을 고객사 GitHub에서 merge하셨다면 배포를 시작하세요. merge된 commit에서 plan → readiness → 승인 → apply가 진행됩니다."
+          : "IaC는 이미 안전합니다. Actual 동기화 배포를 진행할 수 있습니다."}
+      </div>
+      {!deployment
+        ? <button className="ghost" disabled={deploying} onClick={() => void startDeployment(view.remediation_id)}>{deploying ? "배포 시작 중…" : "PR merge 후 배포 시작"}</button>
+        : <div>
+            <div className="hint">deployment <code>{deployment.deployment_id}</code> · <strong>{deployment.status}</strong> · commit <code>{deployment.commit_sha.slice(0, 12)}</code>{deployment.plan_hash ? ` · plan ${deployment.plan_hash.slice(0, 16)}` : " · plan 대기"}</div>
+            {deployment.status === "WAITING_APPROVAL" && (isAdmin
+              ? <div className="finding-actions row" style={{ marginTop: 6 }}><button disabled={deploying || !deployment.plan_hash} onClick={() => void approveDeployment(deployment)}>{deploying ? "승인 처리 중…" : "이 배포 승인 (apply)"}</button><span className="hint">승인하면 저장된 commit/plan을 재검증한 뒤 apply가 실행됩니다.</span></div>
+              : <p className="hint">승인 대기 중입니다. 배포 승인은 관리자만 할 수 있습니다.</p>)}
+            {deployment.status === "BLOCKED" && <p className="hint">Readiness가 BLOCKED입니다 — plan이 Finding을 해소하지 못하거나 매핑되지 않았습니다. 새 조치/재수정이 필요합니다.</p>}
+            {deployment.status === "MANUAL_REVIEW" && <p className="hint">사람 검토 대상입니다(파괴적 변경 등). 자동 승인 경로로 진행하지 않습니다.</p>}
+            {deployment.status === "REJECTED" && <p className="hint">거절된 배포입니다. 같은 plan으로 재승인할 수 없으며 새 plan·새 배포가 필요합니다.</p>}
+            {(deployment.status === "APPLIED" || deployment.status === "VERIFIED") && <p className="status">apply 완료{deployment.verification_assessment_id ? ` · 검증 Assessment ${deployment.verification_assessment_id.slice(0, 12)}` : " · 검증 진행 중"}.</p>}
+            {deployment.status === "VERIFICATION_INDETERMINATE" && <p className="hint">apply는 됐으나 Post-Deploy 검증이 불명확합니다. 사람 확인이 필요합니다.</p>}
+          </div>}
     </div>}
     {error && <p className="alert">{error}</p>}
   </article>;
@@ -1410,7 +1497,7 @@ function App() {
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
       {view === "report" && (assessmentId
-        ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} />
+        ? <ReportPanel session={session} assessmentId={assessmentId} obs={observer} onComplete={id => setCompletedAssessmentId(id)} isAdmin={isAdmin} />
         : <div className="panel"><div className="card"><p className="obs-empty">아직 실행한 평가가 없습니다. 챗봇에서 "test 리포지토리를 우리 정책으로 평가해줘"처럼 요청하면 결과가 여기에 표시됩니다.</p></div></div>)}
     </div>
   </div>;
