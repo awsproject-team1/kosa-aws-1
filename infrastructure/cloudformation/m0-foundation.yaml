@@ -640,7 +640,15 @@ Resources:
                   Resource: !Split [",", !Ref M1AssessmentReadRoleArns]
                 - Effect: Allow
                   Action: bedrock:InvokeModel
-                  Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
+                  Resource:
+                    # Remediation/Assessment 모델. Nova(직접 foundation-model)와 Claude Sonnet
+                    # (cross-region inference profile)을 모두 허용한다. inference profile은 자신과
+                    # 라우팅 대상 리전별 foundation-model ARN 모두에 InvokeModel 권한이 필요하다.
+                    - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
+                    - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+                    - !Sub "arn:${AWS::Partition}:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
+                    - !Sub "arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
+                    - !Sub "arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
           - !Ref AWS::NoValue
         # Deployment Worker의 live 경로는 승인 repository의 GitHub token을 읽는다. 미설정
         # 배포에서는 Worker가 설정 오류로 먼저 멈추므로 이 정책 자체가 없어야 한다.
