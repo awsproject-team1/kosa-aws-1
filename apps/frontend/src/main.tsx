@@ -96,6 +96,10 @@ function useObserver() {
   const [obs, setObs] = useState<Observer>(OBS_DEFAULT);
   const api = useMemo(() => ({
     lightNode(node: GraphNodeId, state: LightState) { setObs(o => ({ ...o, nodeStates: { ...o.nodeStates, [node]: state } })); },
+    // 새 턴이 시작되면 이전 턴에서 켜둔 노드 불을 모두 끄고 지정한 노드만 남긴다. 노드 상태는
+    // 누적 맵이라, 리셋하지 않으면 한 번 사용한 그래프가 계속 초록불로 남아 "지금 어떤 그래프가
+    // 도는지"를 알 수 없다.
+    resetNodes(next: Partial<Record<GraphNodeId, LightState>> = {}) { setObs(o => ({ ...o, nodeStates: { ...next } })); },
     upsertJob(job: QueueJob) { setObs(o => ({ ...o, jobs: [job, ...o.jobs.filter(j => j.id !== job.id)].slice(0, 8) })); },
     setPipeline(steps: PipelineStep[] | null) { setObs(o => ({ ...o, pipeline: steps })); },
     patchPipeline(key: string, state: LightState) { setObs(o => o.pipeline ? { ...o, pipeline: o.pipeline.map(s => s.key === key ? { ...s, state } : s) } : o); },
@@ -355,15 +359,20 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
     if (!text || busy) return;
     setMsg(""); setBusy(true);
     setTurns(t => [...t, { role: "user", text }]);
-    obs.lightNode("parent", "active");
+    // 새 턴이므로 이전 그래프 불을 모두 끄고 parent만 켠다 — 라우팅 결과에 따라 아래에서
+    // 해당 하위 노드만 추가로 켜진다.
+    obs.resetNodes({ parent: "active" });
     try {
       const d = await api<OrchestrationDecision>("/orchestrate", session.accessToken, { method: "POST", body: JSON.stringify(profileId ? { message: text, policy_profile_id: profileId } : { message: text }) });
-      obs.lightNode("parent", "done");
       const sub: Record<string, GraphNodeId> = { POLICY_QA: "policy_qa", ASSESSMENT: "assessment", REMEDIATION: "remediation", DEPLOYMENT: "deployment" };
       const node = sub[d.intent];
-      if (node) obs.lightNode(node, d.intent === "POLICY_QA" ? "done" : "pending");
+      // parent는 라우팅만 담당한다. 라우팅이 끝나면 parent 불을 끄고 넘겨받은 노드만 켜서
+      // "지금 어떤 그래프가 도는지"가 하나만 보이게 한다. POLICY_QA는 답이 이미 완성돼 done,
+      // 워크플로 제안은 사용자 확인 대기라 pending, UNSUPPORTED는 넘길 하위 노드가 없어 parent done.
+      if (node) obs.resetNodes({ [node]: d.intent === "POLICY_QA" ? "done" : "pending" });
+      else obs.resetNodes({ parent: "done" });
       setTurns(t => [...t, { role: "bot", text: d.answer ?? d.rationale, decision: d }]);
-    } catch (e) { obs.lightNode("parent", "failed"); setTurns(t => [...t, { role: "bot", text: `오류: ${(e as Error).message}` }]); }
+    } catch (e) { obs.resetNodes({ parent: "failed" }); setTurns(t => [...t, { role: "bot", text: `오류: ${(e as Error).message}` }]); }
     finally { setBusy(false); }
   }
   async function confirmAssessment(sel: Record<string, unknown> & { repository_id?: string }) {
@@ -390,14 +399,23 @@ function Chat({ session, obs, profileId, onAssessment }: { session: Session; obs
       setTurns(t => [...t, { role: "bot", text: "지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요." }]);
       return;
     }
-    obs.lightNode("assessment", "active");
-    obs.upsertJob({ id: "assess-" + Date.now(), label: "Assessment 시작", queue: "assessment", state: "active" });
+    obs.resetNodes({ assessment: "active" });
+    const jobId = "assess-" + Date.now();
+    obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "active" });
     try {
       const r = await api<{ assessment_id?: string }>("/assessments", session.accessToken, { method: "POST", body: JSON.stringify({ repository_id: repositoryId, policy_profile_id: policyProfileId }) });
       if (!r.assessment_id) throw new Error("assessment_id 없음");
       obs.lightNode("assessment", "done");
+      // /assessments는 Job을 큐에 넣는 것으로 끝난다(202). 이 UI job은 "시작 요청"의 수명이므로
+      // 여기서 done으로 닫아야 Queue/Jobs에서 노란불로 영원히 남지 않는다. 실제 평가 진행은
+      // Assessment 결과 화면의 coverage 폴링이 보여준다.
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "done", meta: r.assessment_id.slice(0, 12) });
       onAssessment(r.assessment_id);
-    } catch (e) { obs.lightNode("assessment", "failed"); setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]); }
+    } catch (e) {
+      obs.lightNode("assessment", "failed");
+      obs.upsertJob({ id: jobId, label: "Assessment 시작", queue: "assessment", state: "failed", meta: "실패" });
+      setTurns(t => [...t, { role: "bot", text: `평가 시작 실패: ${(e as Error).message}` }]);
+    }
   }
   return <div className="chat">
     <div className="chat-log" ref={logRef}>
@@ -584,6 +602,9 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       { key: "poll", label: "4. 후보 조회", state: "pending" },
     ]);
     obs.lightNode("authoring", "pending");
+    // job id를 try 밖에 두어, 어느 단계에서 실패하든 이미 생성된 authoring job을 catch에서
+    // failed로 닫을 수 있게 한다. upload 세션 생성 전 실패면 sourceId가 없어 닫을 job도 없다.
+    let authoringJobId: string | null = null;
     try {
       obs.patchPipeline("upload", "active");
       const s = await api<UploadSession>("/policy-sources/uploads", session.accessToken, { method: "POST", body: JSON.stringify({ filename: file.name, declared_media_type: mt, byte_size: file.size }) });
@@ -605,7 +626,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         throw new Error(`추출 결과 확인이 필요합니다 (${doc.warnings.join(", ")}). 문서 목록에서 '검토 확인'을 누르면 ${doc.units.length}개 단위로 추출을 진행합니다.`);
       }
       obs.patchPipeline("extract", "active"); obs.lightNode("authoring", "active");
-      obs.upsertJob({ id: "auth-" + s.source_id, label: "후보 추출", queue: "authoring", state: "active" });
+      authoringJobId = "auth-" + s.source_id;
+      obs.upsertJob({ id: authoringJobId, label: "후보 추출", queue: "authoring", state: "active" });
       await api(`/policy-sources/${enc(s.source_id)}/versions/${enc(s.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
       obs.patchPipeline("extract", "done");
       obs.patchPipeline("poll", "active");
@@ -633,7 +655,13 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       setNotice(`추출 완료 · 승인 가능 ${result.candidates.length}개 · 미지원 ${result.unsupported.length}개 · 거절 ${result.rejected.length}개`
         + (gaps > 0 ? ` · 미분류 ${gaps}개 단위 (아래 목록 확인 후 승인하세요).` : "."));
       await refresh();
-    } catch (e) { setError((e as Error).message); obs.lightNode("authoring", "failed"); }
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("authoring", "failed");
+      // 추출 job이 이미 생성돼 active로 남아 있으면 failed로 닫는다 — 타임아웃·FAILED·조회 오류
+      // 어느 경로로 throw되든 Queue/Jobs에 노란불로 남지 않도록 한다.
+      if (authoringJobId) obs.upsertJob({ id: authoringJobId, label: "후보 추출", queue: "authoring", state: "failed", meta: "실패" });
+    }
     finally { setRunning(false); }
   }
 
@@ -673,6 +701,9 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "active" });
     try {
       await api(`/policy-sources/${enc(d.source_id)}/versions/${enc(d.source_version)}/candidates`, session.accessToken, { method: "POST", body: "{}" });
+      // 추출 요청(POST)의 수명은 여기서 끝난다 — 실제 후보 생성은 비동기다. 요청 job을 done으로
+      // 닫지 않으면 Queue/Jobs에 노란불로 영원히 남는다. 완료는 '후보 조회'가 보여준다.
+      obs.upsertJob({ id: jobId, label: "후보 추출", queue: "authoring", state: "done", meta: "요청됨" });
       setNotice(`추출을 요청했습니다: ${d.filename}. 완료되면 '후보 조회'에 결과가 나옵니다.`);
       await loadCandidates(d);
     } catch (e) {
@@ -990,7 +1021,7 @@ async function fetchFullReport(token: string, assessmentId: string): Promise<Rep
 
 function isComplete(rep: Report) { return rep.coverage.completed_evaluations >= rep.coverage.planned_evaluations; }
 
-function ReportPanel({ session, assessmentId }: { session: Session; assessmentId: string }) {
+function ReportPanel({ session, assessmentId, obs }: { session: Session; assessmentId: string; obs: ObserverApi }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -1067,7 +1098,7 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
 
     <div className="card"><h2>Findings ({rep.findings.length})</h2>
       <p className="hint">FAIL·MANUAL_REVIEW·INSUFFICIENT_EVIDENCE 결과만 Finding이 됩니다. Evidence는 평가기가 인용한 정책 locator와 read-only IaC/AWS 조회 locator입니다.</p>
-      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} />)}
+      {rep.findings.map(f => <FindingCard key={f.finding_id} finding={f} suppression={suppressed.get(f.finding_id)} session={session} obs={obs} />)}
       {rep.findings.length === 0 && <p className="obs-empty">{complete ? "Finding이 없습니다." : "아직 Finding이 없습니다 (평가 진행 중)."}</p>}
     </div>
 
@@ -1089,7 +1120,7 @@ function ReportPanel({ session, assessmentId }: { session: Session; assessmentId
   </div>;
 }
 
-function FindingCard({ finding: f, suppression, session }: { finding: FindingRow; suppression?: Suppression; session: Session }) {
+function FindingCard({ finding: f, suppression, session, obs }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi }) {
   const [start, setStart] = useState<RemediationStart | null>(null);
   const [view, setView] = useState<RemediationView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1097,6 +1128,11 @@ function FindingCard({ finding: f, suppression, session }: { finding: FindingRow
 
   async function request() {
     setBusy(true); setError(null); setStart(null); setView(null);
+    // 조치 요청은 remediation 그래프로 넘어가는 동작이다. 현재 실행 중인 노드만 보이도록
+    // resetNodes로 remediation만 켠다. job은 finding별 안정 id로 열고 종료 시 닫는다.
+    const jobId = "remediate-" + f.finding_id;
+    obs.resetNodes({ remediation: "active" });
+    obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "active" });
     try {
       const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
       setStart(r);
@@ -1112,8 +1148,18 @@ function FindingCard({ finding: f, suppression, session }: { finding: FindingRow
             if (v.result && (v.result.kind !== "TERRAFORM_PATCH" || v.pull_request)) break;
           } catch (e) { const msg = (e as Error).message; if (!msg.includes("404")) throw e; }
         }
+        obs.lightNode("remediation", "done");
+        obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
+      } else {
+        // Job이 없는 판정(MANUAL_REVIEW 등)은 자동 조치 대상이 아니므로 여기서 판정으로 끝난다.
+        obs.lightNode("remediation", "done");
+        obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
       }
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      setError((e as Error).message);
+      obs.lightNode("remediation", "failed");
+      obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "failed", meta: "실패" });
+    }
     finally { setBusy(false); }
   }
 
@@ -1194,7 +1240,7 @@ function App() {
       {view === "chat" && <Chat session={session} obs={observer} profileId={myProfile} onAssessment={id => { setAssessmentId(id); setView("report"); }} />}
       {view === "documents" && isAdmin && <DocumentsPanel session={session} obs={observer} />}
       {view === "users" && isAdmin && <UsersPanel session={session} obs={observer} />}
-      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} />}
+      {view === "report" && assessmentId && <ReportPanel session={session} assessmentId={assessmentId} obs={observer} />}
     </div>
   </div>;
 }
