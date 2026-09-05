@@ -455,6 +455,16 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
     }
   }, [completedAssessmentId]);
 
+  // 대화를 초기화한다: 인사말만 남기고 저장된 사본도 비운다. 진행 중 요청(busy)일 때는 막는다.
+  function resetChat() {
+    if (busy) return;
+    setTurns([CHAT_GREETING]);
+    try { sessionStorage.removeItem(chatKey(session.sub)); } catch { /* 무시 */ }
+    // 초기화 후 같은 평가 완료 알림을 다시 받을 수 있도록 중복 방지 ref도 비운다.
+    announcedRef.current = null;
+    setMsg("");
+  }
+
   async function send() {
     const text = msg.trim();
     if (!text || busy) return;
@@ -636,6 +646,7 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
       </div>)}
     </div>
     <div className="chat-input">
+      <button className="ghost" title="대화 내용을 지우고 새로 시작합니다" disabled={busy} onClick={() => resetChat()}>새 대화</button>
       <input value={msg} onChange={e => setMsg(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="메시지를 입력하세요…" />
       <button disabled={busy} onClick={() => void send()}>{busy ? "…" : "보내기"}</button>
     </div>
