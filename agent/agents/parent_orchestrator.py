@@ -125,7 +125,10 @@ _SYSTEM_PROMPT = (
     "into selector (use null for unknown fields). Use UNSUPPORTED when the request maps to "
     "none of these; then answer and selector must be null. You never start work, validate "
     "permissions, or approve anything — a workflow intent is only a proposal the backend "
-    "must confirm. Do not wrap the JSON in code fences or add prose."
+    "must confirm. Do not wrap the JSON in code fences or add prose. "
+    "Always write the human-readable fields (answer and rationale) in Korean, regardless of the "
+    "language of the user's message. Keep identifiers such as rule_id, control keys, and other "
+    "codes unchanged."
 )
 
 

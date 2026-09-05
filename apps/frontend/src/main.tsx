@@ -115,11 +115,18 @@ const verifierKey = "gov.pkce.verifier";
 const stateKey = "gov.pkce.state";
 function b64url(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
 async function sha256(v: string) { return b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))); }
-async function startLogin() {
+/* 로그인 화면에서 누른 버튼이 어떤 역할을 의도했는지 기억한다. Cognito Hosted UI로 리다이렉트되면
+ * 페이지가 새로 로드되어 메모리 state가 사라지므로, 콜백에서 실제 토큰 그룹과 대조하려면
+ * sessionStorage에 남겨야 한다. "admin"으로 시작한 로그인은 실제 Admin 그룹일 때만 통과시키고,
+ * "user"로 시작한 로그인은 관리자든 일반 사용자든 모두 사용자 UI로 진입시킨다. */
+type IntendedRole = "admin" | "user";
+const intendedRoleKey = "gov.login.intendedRole";
+async function startLogin(intendedRole: IntendedRole = "user") {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   sessionStorage.setItem(verifierKey, verifier);
   sessionStorage.setItem(stateKey, state);
+  sessionStorage.setItem(intendedRoleKey, intendedRole);
   // prompt=login forces the Hosted UI to re-authenticate every time instead of silently reusing
   // its session cookie. Without it, clicking "일반 사용자로 로그인" after an admin session just
   // lands back in the same account, so a role switch is impossible without a full logout.
@@ -176,6 +183,16 @@ async function exchangeCallback(): Promise<Session | null> {
   const claims = decodeJwt(tok.id_token);
   const groups = Array.isArray(claims["cognito:groups"]) ? (claims["cognito:groups"] as string[]) : [];
   const profiles = splitProfiles(claims["profile"]);
+  // 이 로그인이 어떤 버튼(역할)으로 시작됐는지 확인한다. "관리자로 로그인"은 실제 Admin 그룹일
+  // 때만 통과시킨다 — 일반 사용자가 관리자 진입을 시도하면 세션을 만들지 않고 안내로 막는다.
+  // "일반 사용자로 로그인"은 관리자·사용자 모두 사용자 UI로 진입한다. 이는 UX 게이트이며,
+  // 실제 권한은 백엔드가 토큰 그룹으로 강제한다(사용자는 관리자 액션을 호출할 수 없다).
+  const intendedRole = sessionStorage.getItem(intendedRoleKey) as IntendedRole | null;
+  sessionStorage.removeItem(intendedRoleKey);
+  if (intendedRole === "admin" && !groups.includes("Admin")) {
+    // 잘못 발급된 세션이 남지 않도록 Cognito 세션까지 정리하며 로그인 화면으로 돌린다.
+    throw new Error("NOT_ADMIN");
+  }
   return { accessToken: tok.access_token, email: String(claims["email"] ?? ""), groups, sub: String(claims["sub"] ?? ""), customerId: (claims["custom:customer_id"] as string) ?? null, profile: profiles[0] ?? null, profiles };
 }
 
@@ -345,7 +362,7 @@ function ObserverPanel({ obs }: { obs: Observer }) {
           </div>
         </div>)}</div>}
 
-    <div className="obs-title">사용자 · 지정 Profile</div>
+    <div className="obs-title">사용자 · 지정 평가 규정 세트</div>
     {obs.userProfiles.length === 0
       ? <div className="obs-empty">등록된 사용자가 없습니다.</div>
       : obs.userProfiles.map(u => <div key={u.email} className="queue-item"><span className={`light ${(u.profiles?.length ?? (u.profile ? 1 : 0)) ? "done" : "pending"}`} /><span className="q-label">{u.email}</span><span className="q-meta">{(u.profiles && u.profiles.length ? u.profiles : (u.profile ? [u.profile] : [])).join(", ") || "미지정"}</span></div>)}
@@ -360,8 +377,8 @@ function Login({ error }: { error: string | null }) {
     <h1>Cloud Governance Console</h1>
     <p>역할을 선택해 로그인하세요. 실제 권한은 로그인 후 토큰의 그룹으로 결정됩니다.</p>
     <div className="role-btns">
-      <button className="role-btn" onClick={() => void startLogin()}><span className="r-title">관리자로 로그인</span><span className="r-desc">문서 업로드 · Profile 생성 · 사용자별 Profile 지정 · 평가/조치/배포</span></button>
-      <button className="role-btn" onClick={() => void startLogin()}><span className="r-title">일반 사용자로 로그인</span><span className="r-desc">챗봇으로 평가 요청 · 지정된 Profile 확인 · Finding 검토</span></button>
+      <button className="role-btn" onClick={() => void startLogin("admin")}><span className="r-title">관리자로 로그인</span><span className="r-desc">문서 업로드 · 평가 규정 세트 생성 · 사용자별 평가 규정 세트 지정 · 평가/조치/배포 (관리자 계정만 가능)</span></button>
+      <button className="role-btn" onClick={() => void startLogin("user")}><span className="r-title">일반 사용자로 로그인</span><span className="r-desc">챗봇으로 평가 요청 · 지정된 평가 규정 세트 확인 · Finding 검토</span></button>
     </div>
     {error && <p className="alert" style={{ marginTop: 16 }}>{error}</p>}
     <p className="hint" style={{ marginTop: 14 }}>
@@ -374,7 +391,7 @@ function Login({ error }: { error: string | null }) {
  * Chat (Parent Orchestrator)
  * =======================================================================*/
 type Turn = { role: "user" | "bot"; text: string; decision?: OrchestrationDecision; remediable?: FindingRow[] };
-const CHAT_GREETING: Turn = { role: "bot", text: "무엇을 도와드릴까요? 예: \"test 리포지토리를 우리 정책으로 평가해줘\", \"평가 결과 요약해줘\", \"CRITICAL 문제 고쳐줘\" 또는 정책 관련 질문." };
+const CHAT_GREETING: Turn = { role: "bot", text: "안녕하세요, 클라우드 거버넌스 어시스턴트입니다. 리소스를 우리 정책 기준으로 점검하고, 결과 확인부터 조치까지 도와드릴게요.\n\n이렇게 말씀해 보세요:\n• \"우리 인프라를 정책 기준으로 점검해줘\"\n• \"평가 결과를 요약해줘\"\n• \"CRITICAL 항목을 조치해줘\"\n• 정책이나 컴플라이언스에 대한 궁금한 점도 물어보세요." };
 /* Chat 내역은 사용자별로 sessionStorage에 저장한다. 탭 이동(Chat 언마운트)이나 새로고침에도
  * 대화가 리셋되지 않도록 초기값을 저장소에서 복원하고, 변경마다 다시 쓴다. 키를 `session.sub`로
  * 나눠 계정을 바꾸면 다른 사용자의 대화가 섞이지 않는다. sessionStorage를 쓰는 이유는 auth 흐름과
@@ -624,7 +641,7 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
     }
     const policyProfileId = profileId ?? (sel.policy_profile_id as string | undefined);
     if (!policyProfileId) {
-      setTurns(t => [...t, { role: "bot", text: "지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요." }]);
+      setTurns(t => [...t, { role: "bot", text: "지정된 평가 규정 세트가 없습니다. 관리자에게 평가 규정 세트 지정을 요청하세요." }]);
       return;
     }
     obs.resetNodes({ assessment: "active" });
@@ -731,7 +748,7 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
               : connected.length === 1 ? connected[0]
               : proposed ?? "?";
             return <div className="confirm">
-              <div>제안 범위: repository <code>{repoShown}</code> · profile <code>{profileId ?? t.decision.selector.policy_profile_id ?? "미지정"}</code></div>
+              <div>제안 범위: 리포지토리 <code>{repoShown}</code> · 평가 규정 세트 <code>{profileId ?? t.decision.selector.policy_profile_id ?? "미지정"}</code></div>
               <button style={{ marginTop: 8 }} onClick={() => void confirmAssessment(t.decision!.selector!)}>이 Assessment 시작</button>
             </div>;
           })()}
@@ -886,8 +903,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
       const msg = (e as Error).message;
       // 409는 "게시된 Profile이 아직 이 문서의 Rule을 인용한다"는 뜻이다. 아래 Profile 목록에서
       // 그 Profile을 retire하면 참조가 풀리고 문서를 지울 수 있다.
-      const friendly = msg.includes("CONFLICT") ? "게시된 Profile이 이 문서의 Rule을 참조하고 있습니다. 아래 'Profile 목록'에서 해당 Profile을 삭제(retire)한 뒤 다시 시도하세요." : `삭제 실패: ${msg}`;
-      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "failed", meta: msg.includes("CONFLICT") ? "Profile 참조 중" : "실패" });
+      const friendly = msg.includes("CONFLICT") ? "게시된 평가 규정 세트가 이 문서의 Rule을 참조하고 있습니다. 아래 '평가 규정 세트 목록'에서 해당 평가 규정 세트를 삭제(retire)한 뒤 다시 시도하세요." : `삭제 실패: ${msg}`;
+      obs.upsertJob({ id: jobId, label: `삭제 ${d.filename}`, queue: "policy-sources", state: "failed", meta: msg.includes("CONFLICT") ? "평가 규정 세트 참조 중" : "실패" });
       setError(friendly);
     }
   }
@@ -1021,8 +1038,8 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
   async function publishCart() {
     const baseline = published.find(p => p.policy_profile_id === baselineId);
     if (cart.length === 0 && !baseline) { setError("장바구니에 후보를 담거나 기준선을 고르세요."); return; }
-    if (!profileId.trim()) { setError("Profile ID를 입력하세요."); return; }
-    if (baseline && baseline.policy_profile_id === profileId.trim()) { setError("기준선과 새 Profile ID가 같습니다. 다른 ID를 쓰세요."); return; }
+    if (!profileId.trim()) { setError("평가 규정 세트 ID를 입력하세요."); return; }
+    if (baseline && baseline.policy_profile_id === profileId.trim()) { setError("기준선과 새 평가 규정 세트 ID가 같습니다. 다른 ID를 쓰세요."); return; }
     setError(null); setNotice(null);
     try {
       const bySource = new Map<string, { source_version: string; rules: { rule_id: string; version: string }[] }>();
@@ -1051,26 +1068,26 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
         bySource.size > 0 ? `사내 문서 ${bySource.size}건의 승인 Rule` : null,
         baseline ? `기준선 ${baseline.policy_profile_id}@${baseline.version} (Rule ${baseline.rule_count}개)` : null,
       ].filter(Boolean);
-      setNotice(`Profile '${profileId.trim()}' 게시 완료 — ${parts.join(" + ")}. 준비도는 정책 원본별로 따로 표시됩니다. '사용자 관리'에서 지정하세요.`);
+      setNotice(`평가 규정 세트 '${profileId.trim()}' 게시 완료 — ${parts.join(" + ")}. 준비도는 정책 원본별로 따로 표시됩니다. '사용자 관리'에서 지정하세요.`);
       setCart([]);
       await refreshProfiles();
     } catch (e) {
       const msg = (e as Error).message;
       setError(msg.includes("409")
-        ? `게시 실패: 같은 ID의 Profile이 이미 있습니다(${profileId.trim()}). 다른 ID를 쓰거나 아래 목록에서 기존 Profile을 삭제하세요.`
+        ? `게시 실패: 같은 ID의 평가 규정 세트가 이미 있습니다(${profileId.trim()}). 다른 ID를 쓰거나 아래 목록에서 기존 평가 규정 세트를 삭제하세요.`
         : `게시 실패: ${msg}`);
     }
   }
 
   async function retireProfile(p: PublishedProfile) {
     setError(null); setNotice(null);
-    if (!confirm(`Profile '${p.policy_profile_id}'를 삭제(retire)할까요? 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다.`)) return;
+    if (!confirm(`평가 규정 세트 '${p.policy_profile_id}'를 삭제(retire)할까요? 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다.`)) return;
     try {
       await api(`/policy-profiles/${enc(p.policy_profile_id)}`, session.accessToken, { method: "DELETE" });
-      setNotice(`Profile 삭제됨: ${p.policy_profile_id}`);
+      setNotice(`평가 규정 세트 삭제됨: ${p.policy_profile_id}`);
       if (baselineId === p.policy_profile_id) setBaselineId("");
       await refreshProfiles();
-    } catch (e) { setError(`Profile 삭제 실패: ${(e as Error).message}`); }
+    } catch (e) { setError(`평가 규정 세트 삭제 실패: ${(e as Error).message}`); }
   }
 
   return <div className="panel">
@@ -1154,13 +1171,13 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
     </div>}
 
     <div className="card">
-      <h2>Profile 장바구니 ({cart.length})</h2>
-      <p className="hint">한 Profile에 여러 사내 문서의 승인 Rule과 ISMS-P 기준선을 함께 담을 수 있습니다. 담긴 원본은 Profile에 기록되며, 평가 준비도는 원본별로 따로 계산됩니다 — 사내 기준 미달과 인증 기준 미달은 서로 다른 조치를 부르므로 하나의 점수로 합치지 않습니다.</p>
+      <h2>평가 규정 세트 장바구니 ({cart.length})</h2>
+      <p className="hint">한 평가 규정 세트에 여러 사내 문서의 승인 Rule과 ISMS-P 기준선을 함께 담을 수 있습니다. 담긴 원본은 평가 규정 세트에 기록되며, 평가 준비도는 원본별로 따로 계산됩니다 — 사내 기준 미달과 인증 기준 미달은 서로 다른 조치를 부르므로 하나의 점수로 합치지 않습니다.</p>
       {cart.length === 0 ? <p className="obs-empty">담긴 후보가 없습니다. 문서에서 후보를 조회해 담거나, 기준선만으로 게시할 수 있습니다.</p>
         : <table><thead><tr><th>Rule</th><th>Severity</th><th>Control</th><th>문서</th></tr></thead>
           <tbody>{cart.map(i => <tr key={`${i.rule_id}@${i.rule_version}`}><td>{i.rule_id}@{i.rule_version}</td><td>{i.severity}</td><td>{i.control_key}</td><td>{i.source_id.slice(0, 12)}</td></tr>)}</tbody></table>}
       <div className="row" style={{ marginTop: 12 }}>
-        <label style={{ flex: 1 }}>Policy Profile ID<input value={profileId} onChange={e => setProfileId(e.target.value)} placeholder="profile-internal-baseline" /></label>
+        <label style={{ flex: 1 }}>평가 규정 세트 ID<input value={profileId} onChange={e => setProfileId(e.target.value)} placeholder="profile-internal-baseline" /></label>
         <label style={{ flex: 1 }}>기준선 (ISMS-P 등, 선택)
           <select value={baselineId} onChange={e => setBaselineId(e.target.value)}>
             <option value="">포함하지 않음</option>
@@ -1170,17 +1187,17 @@ function DocumentsPanel({ session, obs }: { session: Session; obs: ObserverApi }
               </option>)}
           </select>
         </label>
-        <button disabled={cart.length === 0 && !baselineId} onClick={() => void publishCart()}>Profile 게시</button>
+        <button disabled={cart.length === 0 && !baselineId} onClick={() => void publishCart()}>평가 규정 세트 게시</button>
       </div>
-      <p className="hint">ISMS-P 인증기준은 업로드하지 않습니다. 운영자가 게시한 <code>profile-isms-p-baseline</code>(101개 항목, 사람 검토 좌표)을 기준선으로 고르면 문서 추출 없이 Profile에 포함됩니다.</p>
-      {published.length === 0 && <p className="hint">게시된 기준선 Profile이 없습니다. 운영자 bootstrap이 Registry를 이 고객 파티션에 게시하면 여기에 나타납니다.</p>}
+      <p className="hint">ISMS-P 인증기준은 업로드하지 않습니다. 운영자가 게시한 <code>profile-isms-p-baseline</code>(101개 항목, 사람 검토 좌표)을 기준선으로 고르면 문서 추출 없이 평가 규정 세트에 포함됩니다.</p>
+      {published.length === 0 && <p className="hint">게시된 기준선 평가 규정 세트가 없습니다. 운영자 bootstrap이 Registry를 이 고객 파티션에 게시하면 여기에 나타납니다.</p>}
     </div>
 
     <div className="card">
-      <h2>Profile 목록 ({published.length})</h2>
-      <p className="hint">삭제는 retire입니다 — 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다. 문서를 지우려면 그 문서를 참조하는 Profile을 먼저 여기서 삭제하세요.</p>
-      {published.length === 0 ? <p className="obs-empty">게시된 Profile이 없습니다.</p>
-        : <table><thead><tr><th>Profile</th><th>버전</th><th>Rule</th><th>원본</th><th>게시</th><th></th></tr></thead>
+      <h2>평가 규정 세트 목록 ({published.length})</h2>
+      <p className="hint">삭제는 retire입니다 — 목록과 사용자 지정에서 빠지고 새 평가에 쓸 수 없게 됩니다. 이미 실행된 평가가 고정한 판본 기록은 보고서를 위해 남습니다. 문서를 지우려면 그 문서를 참조하는 평가 규정 세트를 먼저 여기서 삭제하세요.</p>
+      {published.length === 0 ? <p className="obs-empty">게시된 평가 규정 세트가 없습니다.</p>
+        : <table><thead><tr><th>평가 규정 세트</th><th>버전</th><th>Rule</th><th>원본</th><th>게시</th><th></th></tr></thead>
           <tbody>{published.map(p => <tr key={p.policy_profile_id}>
             <td><code>{p.policy_profile_id}</code></td><td>{p.version}</td><td>{p.rule_count}</td>
             <td>{p.source_kinds.length ? p.source_kinds.map(k => SEGMENT_LABELS[k] ?? k).join(" + ") : "구분 없음"}</td>
@@ -1233,7 +1250,7 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
   }
   async function assign() {
     setError(null); setNotice(null);
-    if (!assignEmail.trim() || !assignPid) { setError("사용자와 Profile을 선택하세요."); return; }
+    if (!assignEmail.trim() || !assignPid) { setError("사용자와 평가 규정 세트를 선택하세요."); return; }
     try {
       const r = await api<{ profiles: string[] }>("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: assignEmail.trim(), policy_profile_id: assignPid, action: "add" }) });
       setNotice(`${assignEmail.trim()} ← ${assignPid} 추가 (현재 ${r.profiles.length}개 · 다음 로그인부터 적용)`);
@@ -1244,7 +1261,7 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
     setError(null); setNotice(null);
     try {
       const r = await api<{ profiles: string[] }>("/admin/users/profile", session.accessToken, { method: "POST", body: JSON.stringify({ email: u.email, policy_profile_id: pid, action: "remove" }) });
-      setNotice(`${u.email}에서 ${pid} 해제 (남은 Profile ${r.profiles.length}개 · 다음 로그인부터 적용)`);
+      setNotice(`${u.email}에서 ${pid} 해제 (남은 평가 규정 세트 ${r.profiles.length}개 · 다음 로그인부터 적용)`);
       await refresh();
     } catch (e) { setError(`해제 실패: ${(e as Error).message}`); }
   }
@@ -1271,14 +1288,14 @@ function UsersPanel({ session, obs }: { session: Session; obs: ObserverApi }) {
       </div>
     </div>
     <div className="card">
-      <h2>사용자 목록 · Profile 지정</h2>
+      <h2>사용자 목록 · 평가 규정 세트 지정</h2>
       <div className="row">
         <label style={{ flex: 2 }}>사용자<select value={assignEmail} onChange={e => setAssignEmail(e.target.value)}><option value="">선택</option>{users.map(u => <option key={u.username} value={u.email}>{u.email}</option>)}</select></label>
-        <label style={{ flex: 2 }}>Profile<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.filter(p => { const u = users.find(x => x.email === assignEmail.trim()); return !u || !assigned(u).includes(p); }).map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+        <label style={{ flex: 2 }}>평가 규정 세트<select value={assignPid} onChange={e => setAssignPid(e.target.value)}><option value="">선택</option>{profiles.filter(p => { const u = users.find(x => x.email === assignEmail.trim()); return !u || !assigned(u).includes(p); }).map(p => <option key={p} value={p}>{p}</option>)}</select></label>
         <button onClick={() => void assign()}>추가</button>
       </div>
-      <p className="hint">한 사용자에게 여러 Profile을 지정할 수 있습니다 — 사내 정책과 ISMS-P 기준선을 따로 평가해 보려면 둘 다 지정하세요. 이미 지정된 Profile은 목록에서 빠지고, ✕로 해제합니다. 변경은 그 사용자의 다음 로그인부터 적용됩니다.</p>
-      <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 Profile</th><th></th></tr></thead>
+      <p className="hint">한 사용자에게 여러 평가 규정 세트를 지정할 수 있습니다 — 사내 정책과 ISMS-P 기준선을 따로 평가해 보려면 둘 다 지정하세요. 이미 지정된 평가 규정 세트는 목록에서 빠지고, ✕로 해제합니다. 변경은 그 사용자의 다음 로그인부터 적용됩니다.</p>
+      <table><thead><tr><th>이메일</th><th>역할/상태</th><th>지정 평가 규정 세트</th><th></th></tr></thead>
         <tbody>{users.map(u => <tr key={u.username}><td>{u.email}</td><td>{u.status}{u.enabled ? "" : " (비활성)"}</td>
           <td>{assigned(u).length === 0 ? "-" : <span className="chips">{assigned(u).map(pid => <span key={pid} className="chip"><code>{pid}</code><button className="chip-x" title={`${pid} 해제`} aria-label={`${pid} 해제`} onClick={() => void unassign(u, pid)}>✕</button></span>)}</span>}</td>
           <td><button className="ghost" style={{ borderColor: "var(--err)", color: "var(--err)" }} disabled={u.email === session.email} onClick={() => void deleteUser(u)}>삭제</button></td></tr>)}
@@ -1395,7 +1412,7 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
   async function start() {
     setError(null);
     if (!repositoryId) { setError("연결된 리포지토리가 없습니다. 관리자에게 리포지토리 연결을 요청하세요."); return; }
-    if (!effectiveProfile) { setError("지정된 정책 Profile이 없습니다. 관리자에게 Profile 지정을 요청하세요."); return; }
+    if (!effectiveProfile) { setError("지정된 평가 규정 세트가 없습니다. 관리자에게 평가 규정 세트 지정을 요청하세요."); return; }
     setBusy(true);
     obs.resetNodes({ assessment: "active" });
     const jobId = "assess-" + Date.now();
@@ -1413,7 +1430,7 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
     } finally { setBusy(false); }
   }
   return <div className="card"><h2>평가 실행</h2>
-    <p className="hint">연결된 리포지토리를 지정된 정책 Profile로 평가합니다. 챗봇에서 요청하는 것과 같은 평가이며, 결과는 이 화면에 표시됩니다.</p>
+    <p className="hint">연결된 리포지토리를 지정된 평가 규정 세트로 평가합니다. 챗봇에서 요청하는 것과 같은 평가이며, 결과는 이 화면에 표시됩니다.</p>
     <div className="row">
       <label style={{ flex: 1, marginBottom: 0 }}>리포지토리
         <select value={repositoryId} onChange={e => setRepositoryId(e.target.value)} disabled={repos.length === 0}>
@@ -1421,7 +1438,7 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
           {repos.map(r => <option key={r.repository_id} value={r.repository_id}>{r.repository_id}{r.github_repository ? ` · ${r.github_repository}` : ""}</option>)}
         </select>
       </label>
-      <label style={{ flex: 1, marginBottom: 0 }}>정책 Profile
+      <label style={{ flex: 1, marginBottom: 0 }}>평가 규정 세트
         {isAdmin
           ? <select value={selectedProfile} onChange={e => setSelectedProfile(e.target.value)}>
               {!selectedProfile && <option value="">선택</option>}
@@ -1430,7 +1447,7 @@ function StartAssessmentCard({ session, obs, profileId, isAdmin, onAssessment }:
             </select>
           : session.profiles.length > 1
             ? <select value={userChoice} onChange={e => setUserChoice(e.target.value)}>{session.profiles.map(p => <option key={p} value={p}>{p}</option>)}</select>
-            : <input value={profileId ?? "지정된 Profile 없음"} readOnly />}
+            : <input value={profileId ?? "지정된 평가 규정 세트 없음"} readOnly />}
       </label>
       <button disabled={busy || !repositoryId || !effectiveProfile} onClick={() => void start()}>{busy ? "요청 중…" : "평가 실행"}</button>
     </div>
@@ -1541,7 +1558,7 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFo
           <small>{SEGMENT_LABELS[s.kind] ?? s.kind} 준비도{s.score ? ` · ${readinessHint(s.score, segments.length === 1 ? excluded : undefined)}` : ""}{s.score && segments.length === 1 ? ` · PASS ${judgedPass} / FAIL ${judgedFail}` : ""}</small>
         </span>)}
       </div>}
-      <p className="disclaimer">Readiness Score는 <strong>판정된</strong> 좌표(PASS=100, FAIL=0)의 severity 가중 준수율로, 선택한 Policy Profile에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 근거가 부족하거나 사람이 검토해야 하는 좌표(INSUFFICIENT_EVIDENCE·MANUAL_REVIEW)는 <strong>미판정</strong>으로 따로 세며 점수를 깎지 않습니다 — "확인하지 못함"은 "위반"이 아닙니다. 한 Profile이 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
+      <p className="disclaimer">Readiness Score는 <strong>판정된</strong> 좌표(PASS=100, FAIL=0)의 severity 가중 준수율로, 선택한 평가 규정 세트에 대한 <strong>준비도</strong> 지표입니다. 공식 ISMS-P 인증 점수나 합격/불합격 판정이 아닙니다. 근거가 부족하거나 사람이 검토해야 하는 좌표(INSUFFICIENT_EVIDENCE·MANUAL_REVIEW)는 <strong>미판정</strong>으로 따로 세며 점수를 깎지 않습니다 — "확인하지 못함"은 "위반"이 아닙니다. 한 평가 규정 세트가 사내 정책과 ISMS-P를 함께 담으면 준비도는 <strong>원본별로 따로</strong> 계산해 표시하며 하나의 점수로 합치지 않습니다. DRIFT·MANUAL 관점과 OUT_OF_SCOPE·EXECUTION_ERROR는 점수에서 제외됩니다.</p>
       <div className="candidate-summary" aria-label="평가 집계">
         <span><strong>{resources.size}</strong><small>평가 리소스</small></span>
         <span><strong>{rules.size}</strong><small>평가 Rule</small></span>
@@ -1765,7 +1782,17 @@ function App() {
   const [activeProfile, setActiveProfile] = useState<string | null>(null);
   const observer = useObserver();
   // 토큰 교환은 새 로그인에서만 일어난다(code 파라미터). 그때 이전 로그인의 기록을 비운다.
-  useEffect(() => { exchangeCallback().then(s => { if (s) { clearAssessmentStorage(); setSession(s); } }).catch(e => setError((e as Error).message)); }, []);
+  // NOT_ADMIN은 일반 사용자가 "관리자로 로그인"을 시도한 경우 — 세션을 만들지 않고 안내로 막는다.
+  useEffect(() => {
+    exchangeCallback()
+      .then(s => { if (s) { clearAssessmentStorage(); setSession(s); } })
+      .catch(e => {
+        const msg = (e as Error).message;
+        setError(msg === "NOT_ADMIN"
+          ? "관리자 계정이 아닙니다. 관리자 권한이 없는 계정은 관리자로 로그인할 수 없습니다. '일반 사용자로 로그인'을 이용해 주세요."
+          : msg);
+      });
+  }, []);
   useEffect(() => {
     if (!session) return;
     const records = loadHistory(session.sub);
@@ -1823,9 +1850,9 @@ function App() {
         </nav>
         <span className="spacer" />
         {session.profiles.length > 1
-          ? <label className="profile-pick">Profile<select value={myProfile ?? ""} onChange={e => setActiveProfile(e.target.value)}>{session.profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+          ? <label className="profile-pick">평가 규정 세트<select value={myProfile ?? ""} onChange={e => setActiveProfile(e.target.value)}>{session.profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
           : null}
-        <span className="who">{session.email}{myProfile && session.profiles.length <= 1 ? ` · profile: ${myProfile}` : ""}</span>
+        <span className="who">{session.email}{myProfile && session.profiles.length <= 1 ? ` · 평가 규정 세트: ${myProfile}` : ""}</span>
         <button className="logout-btn" title="Cognito 세션을 끝내고 로그인 화면으로" onClick={() => endCognitoSession()}>로그아웃</button>
       </div>
       {sessionExpired && <p className="alert" style={{ margin: "8px 16px", display: "flex", alignItems: "center", gap: 12 }}>
