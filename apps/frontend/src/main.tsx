@@ -205,6 +205,31 @@ async function putPresigned(url: string, file: File, contentType: string) {
 
 const AUTHORING_PENDING = new Set(["QUEUED", "PROCESSING"]);
 
+/** 에러 메시지를 사용자용 문구로 바꾼다. 401(SESSION_EXPIRED)은 재로그인을 안내한다. */
+function friendlyError(e: unknown): string {
+  const m = (e as Error)?.message ?? String(e);
+  return m === "SESSION_EXPIRED" ? "세션이 만료되었습니다. 상단의 '다시 로그인'을 눌러 주세요." : m;
+}
+
+/* FindingCard의 조치/배포 상태는 컴포넌트 로컬 state라 탭 이동으로 언마운트되면 사라진다.
+ * 사용자별·finding별 sessionStorage에 저장·복원해, 탭을 다녀와도 조치 요청 결과(판정·PR·배포)가
+ * 유지되게 한다. 챗봇 대화와 같은 세션 단위(sessionStorage)다. */
+type RemediationCardState = { start: RemediationStart | null; view: RemediationView | null; deployment: DeploymentView | null };
+const remediationKey = (sub: string, findingId: string) => `gov.remediation.${sub}.${findingId}`;
+function loadRemediationState(sub: string, findingId: string): RemediationCardState {
+  try {
+    const raw = sessionStorage.getItem(remediationKey(sub, findingId));
+    if (raw) { const p = JSON.parse(raw) as RemediationCardState; return { start: p.start ?? null, view: p.view ?? null, deployment: p.deployment ?? null }; }
+  } catch { /* 무시 */ }
+  return { start: null, view: null, deployment: null };
+}
+function saveRemediationState(sub: string, findingId: string, s: RemediationCardState): void {
+  try {
+    if (s.start || s.view || s.deployment) sessionStorage.setItem(remediationKey(sub, findingId), JSON.stringify(s));
+    else sessionStorage.removeItem(remediationKey(sub, findingId));
+  } catch { /* 저장 실패는 무시 */ }
+}
+
 /** `PolicySourceKind` 값의 한국어 표시. 모르는 값은 그대로 보여준다. */
 const SEGMENT_LABELS: Record<string, string> = { INTERNAL_POLICY: "사내 정책", ISMS_P: "ISMS-P" };
 
@@ -631,31 +656,53 @@ function Chat({ session, obs, profileId, assessmentId, completedAssessmentId, on
     try {
       const r = await api<RemediationStart>(`/findings/${enc(f.finding_id)}/remediations`, session.accessToken, { method: "POST", body: "{}" });
       const remediationId = r.job?.remediation_id;
+      // 결과 창처럼 판정(decision)을 즉시 보여준다. 그래야 사용자가 조치가 접수·판정됐음을
+      // 바로 알 수 있다 — PR 생성까지 수 분을 조용히 기다리며 "조치 요청 중"에 갇히지 않는다.
+      const verdict =
+        r.decision.action === "MANUAL_REVIEW"
+          ? `판정: 수동 검토${r.decision.manual_review_code ? ` (${r.decision.manual_review_code})` : ""} — 자동 조치 대상이 아닙니다. 담당자가 직접 검토합니다.`
+          : `판정: ${r.decision.action}${r.job ? ` · job ${r.job.job_id}` : ""}${remediationId ? " · patch 생성과 PR 발행을 진행합니다 (수 분 소요될 수 있음)." : ""}`;
+      setTurns(t => [...t, { role: "bot", text: `${f.rule_id}@${f.rule_version} 조치 요청 접수됨 — ${verdict}` }]);
+      // 조치 job이 없는 판정(MANUAL_REVIEW/SUPPRESSED 등)은 여기서 끝난다. 폴링할 것이 없다.
+      if (!remediationId) {
+        obs.lightNode("remediation", "done");
+        obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
+        return;
+      }
       let view: RemediationView | null = null;
-      if (remediationId) {
-        for (let i = 0; i < 60; i++) {
+      {
+        // TERRAFORM_PATCH는 worker가 patch를 만든 뒤 PR을 비동기로 연다. 실측상 PR 생성까지
+        // 3분 안팎이 걸리므로, 넉넉히(최대 ~5분) PR을 기다린다. patch가 먼저 보이면 진행 표시를
+        // "PR 생성 중"으로 바꿔 살아있음을 드러낸다. PR이 나오면 즉시 종료한다.
+        for (let i = 0; i < 100; i++) {
           await sleep(3000);
+          const patchSeen = !!view?.result?.patch && !view?.pull_request;
+          obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "active", meta: patchSeen ? `PR 생성 중 ${i + 1}/100` : `결과 대기 ${i + 1}/100` });
           try {
             view = await api<RemediationView>(`/remediations/${enc(remediationId)}`, session.accessToken);
             if (view.result && (view.result.kind !== "TERRAFORM_PATCH" || view.pull_request)) break;
-          } catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+          } catch (e) {
+            const m = (e as Error).message;
+            if (m === "SESSION_EXPIRED") throw e; // 만료는 즉시 실패시켜 재로그인 배너로 유도
+            if (!m.includes("404")) throw e;
+          }
         }
       }
       obs.lightNode("remediation", "done");
       obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "done", meta: r.decision.action });
       const msg =
-        r.decision.action === "MANUAL_REVIEW"
-          ? `판정: 수동 검토${r.decision.manual_review_code ? ` (${r.decision.manual_review_code})` : ""} — 자동 조치 대상이 아닙니다. 담당자가 직접 검토합니다.`
-          : view?.pull_request
-          ? `판정: ${r.decision.action} · Pull Request #${view.pull_request.number} 생성됨 — ${view.pull_request.url} (branch ${view.pull_request.head_branch}). 사람이 검토·머지한 뒤에만 배포 승인/apply로 이어집니다.`
+        view?.pull_request
+          ? `Pull Request #${view.pull_request.number} 생성됨 — ${view.pull_request.url} (branch ${view.pull_request.head_branch}). 사람이 검토·머지한 뒤에만 배포 승인/apply로 이어집니다.`
           : view?.result?.sync_target
-          ? `판정: ${r.decision.action} · IaC는 이미 안전합니다. 배포 대상 commit ${view.result.sync_target.commit_sha.slice(0, 12)}로 Actual 동기화를 제안합니다.`
-          : `판정: ${r.decision.action}${r.job ? ` · job ${r.job.job_id}` : ""} · Worker 결과 대기 중입니다. 잠시 후 Assessment 결과 화면에서 확인하세요.`;
+          ? `IaC는 이미 안전합니다. 배포 대상 commit ${view.result.sync_target.commit_sha.slice(0, 12)}로 Actual 동기화를 제안합니다.`
+          : view?.result?.patch
+          ? `수정 patch 생성됨 (변경 파일: ${view.result.patch.changed_paths.join(", ")}, base ${view.result.patch.base_commit_sha.slice(0, 12)}). PR은 생성에 수 분이 걸릴 수 있습니다 — 잠시 후 Assessment 결과 화면에서 PR 링크를 확인하세요.`
+          : `Worker 결과 대기 중입니다. 잠시 후 Assessment 결과 화면에서 확인하세요.`;
       setTurns(t => [...t, { role: "bot", text: `${f.rule_id}@${f.rule_version} 조치 결과 — ${msg}` }]);
     } catch (e) {
       obs.lightNode("remediation", "failed");
       obs.upsertJob({ id: jobId, label: `조치 ${f.rule_id}`, queue: "remediation", state: "failed", meta: "실패" });
-      setTurns(t => [...t, { role: "bot", text: `조치 실패 (${f.rule_id}): ${(e as Error).message}` }]);
+      setTurns(t => [...t, { role: "bot", text: `조치 실패 (${f.rule_id}): ${friendlyError(e)}` }]);
     } finally {
       setRemediating(s => { const n = new Set(s); n.delete(f.finding_id); return n; });
     }
@@ -1527,12 +1574,15 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFo
 }
 
 function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi; isAdmin: boolean }) {
-  const [start, setStart] = useState<RemediationStart | null>(null);
-  const [view, setView] = useState<RemediationView | null>(null);
+  const persisted = loadRemediationState(session.sub, f.finding_id);
+  const [start, setStart] = useState<RemediationStart | null>(persisted.start);
+  const [view, setView] = useState<RemediationView | null>(persisted.view);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [deployment, setDeployment] = useState<DeploymentView | null>(null);
+  const [deployment, setDeployment] = useState<DeploymentView | null>(persisted.deployment);
   const [deploying, setDeploying] = useState(false);
+  // 조치/배포 상태가 바뀔 때마다 finding별로 저장한다. 탭을 다녀와도 복원되도록.
+  useEffect(() => { saveRemediationState(session.sub, f.finding_id, { start, view, deployment }); }, [session.sub, f.finding_id, start, view, deployment]);
 
   // Deployment는 사람이 PR을 merge한 뒤 진행되는 별도 단계다(ADR-0019 §3). merge 전까지는
   // 이 상태들에서 멈춰 사람 판단(승인)을 기다린다.
