@@ -215,18 +215,18 @@ function friendlyError(e: unknown): string {
  * 사용자별·finding별 sessionStorage에 저장·복원해, 탭을 다녀와도 조치 요청 결과(판정·PR·배포)가
  * 유지되게 한다. 챗봇 대화와 같은 세션 단위(sessionStorage)다. */
 type RemediationCardState = { start: RemediationStart | null; view: RemediationView | null; deployment: DeploymentView | null };
-const remediationKey = (sub: string, findingId: string) => `gov.remediation.${sub}.${findingId}`;
-function loadRemediationState(sub: string, findingId: string): RemediationCardState {
+const remediationKey = (sub: string, assessmentId: string, findingId: string) => `gov.remediation.${sub}.${assessmentId}.${findingId}`;
+function loadRemediationState(sub: string, assessmentId: string, findingId: string): RemediationCardState {
   try {
-    const raw = sessionStorage.getItem(remediationKey(sub, findingId));
+    const raw = sessionStorage.getItem(remediationKey(sub, assessmentId, findingId));
     if (raw) { const p = JSON.parse(raw) as RemediationCardState; return { start: p.start ?? null, view: p.view ?? null, deployment: p.deployment ?? null }; }
   } catch { /* 무시 */ }
   return { start: null, view: null, deployment: null };
 }
-function saveRemediationState(sub: string, findingId: string, s: RemediationCardState): void {
+function saveRemediationState(sub: string, assessmentId: string, findingId: string, s: RemediationCardState): void {
   try {
-    if (s.start || s.view || s.deployment) sessionStorage.setItem(remediationKey(sub, findingId), JSON.stringify(s));
-    else sessionStorage.removeItem(remediationKey(sub, findingId));
+    if (s.start || s.view || s.deployment) sessionStorage.setItem(remediationKey(sub, assessmentId, findingId), JSON.stringify(s));
+    else sessionStorage.removeItem(remediationKey(sub, assessmentId, findingId));
   } catch { /* 저장 실패는 무시 */ }
 }
 
@@ -400,7 +400,7 @@ function clearAssessmentStorage(): void {
   for (const store of [sessionStorage, localStorage]) {
     try {
       const doomed: string[] = [];
-      for (let i = 0; i < store.length; i++) { const k = store.key(i); if (k && (k.startsWith("gov.assessments.") || k.startsWith("gov.assessment."))) doomed.push(k); }
+      for (let i = 0; i < store.length; i++) { const k = store.key(i); if (k && (k.startsWith("gov.assessments.") || k.startsWith("gov.assessment.") || k.startsWith("gov.remediation."))) doomed.push(k); }
       doomed.forEach(k => store.removeItem(k));
     } catch { /* 접근 불가 환경 */ }
   }
@@ -1355,7 +1355,7 @@ function ResultsByStatus({ rep, complete, suppressed, session, obs, isAdmin }: {
     {rows.map(r => {
       const finding = findingByCoordinate.get(`${r.resource_id}|${r.rule_id}|${r.perspective}`);
       return finding
-        ? <FindingCard key={finding.finding_id} finding={finding} suppression={suppressed.get(finding.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />
+        ? <FindingCard key={finding.finding_id} finding={finding} assessmentId={rep.assessment_id} suppression={suppressed.get(finding.finding_id)} session={session} obs={obs} isAdmin={isAdmin} />
         : <article key={`${r.resource_id}|${r.rule_id}|${r.perspective}`} className="candidate">
             <div className="candidate-badges"><span className="badge severity">{r.severity}</span><span className={`badge ${statusBadge(r).cls}`}>{statusBadge(r).label}</span><span className="badge">{r.perspective}</span><span className="badge">판정 {r.decided_by === "CODE" ? "코드" : "모델"}</span></div>
             <h3><code>{r.resource_id}</code> · {r.rule_id}@{r.rule_version}</h3>
@@ -1574,16 +1574,18 @@ function ReportPanel({ session, assessmentId, obs, onComplete, onReport, onNotFo
   </div>;
 }
 
-function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { finding: FindingRow; suppression?: Suppression; session: Session; obs: ObserverApi; isAdmin: boolean }) {
-  const persisted = loadRemediationState(session.sub, f.finding_id);
+function FindingCard({ finding: f, assessmentId, suppression, session, obs, isAdmin }: { finding: FindingRow; assessmentId: string; suppression?: Suppression; session: Session; obs: ObserverApi; isAdmin: boolean }) {
+  const persisted = loadRemediationState(session.sub, assessmentId, f.finding_id);
   const [start, setStart] = useState<RemediationStart | null>(persisted.start);
   const [view, setView] = useState<RemediationView | null>(persisted.view);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deployment, setDeployment] = useState<DeploymentView | null>(persisted.deployment);
   const [deploying, setDeploying] = useState(false);
-  // 조치/배포 상태가 바뀔 때마다 finding별로 저장한다. 탭을 다녀와도 복원되도록.
-  useEffect(() => { saveRemediationState(session.sub, f.finding_id, { start, view, deployment }); }, [session.sub, f.finding_id, start, view, deployment]);
+  // 조치/배포 상태가 바뀔 때마다 (평가, finding)별로 저장한다. 탭을 다녀와도 복원되지만,
+  // 새 평가는 다른 assessmentId라 이전 평가의 조치/PR/배포 상태를 물려받지 않는다 —
+  // 같은 위반의 finding_id는 평가가 달라도 같기 때문이다.
+  useEffect(() => { saveRemediationState(session.sub, assessmentId, f.finding_id, { start, view, deployment }); }, [session.sub, assessmentId, f.finding_id, start, view, deployment]);
 
   // Deployment는 사람이 PR을 merge한 뒤 진행되는 별도 단계다(ADR-0019 §3). merge 전까지는
   // 이 상태들에서 멈춰 사람 판단(승인)을 기다린다.
