@@ -54,7 +54,7 @@ class DynamoReadTable(Protocol):
 
 
 class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
-    """Atomically append an exact approval and a metadata-only audit event."""
+    """Atomically approve, resume the Deployment Job, and queue apply dispatch."""
 
     def __init__(
         self,
@@ -110,7 +110,14 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
         return approval
 
     def record_approval(
-        self, *, customer_id: str, approval: DeploymentApproval, readiness: DeploymentReadiness
+        self,
+        *,
+        customer_id: str,
+        approval: DeploymentApproval,
+        readiness: DeploymentReadiness,
+        resumed_job: Job,
+        expected_revision: int,
+        outbox: WorkflowOutboxEntry,
     ) -> None:
         if not isinstance(customer_id, str) or not customer_id.strip():
             raise ValueError("customer_id must be a non-empty string")
@@ -118,6 +125,21 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
             readiness, DeploymentReadiness
         ):
             raise TypeError("approval and readiness must be their respective contracts")
+        if not isinstance(resumed_job, Job):
+            raise TypeError("resumed_job must be a Job")
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+            raise TypeError("expected_revision must be an integer")
+        if not isinstance(outbox, WorkflowOutboxEntry):
+            raise TypeError("outbox must be a WorkflowOutboxEntry")
+        if (
+            resumed_job.customer_id != customer_id
+            or resumed_job.deployment_id != approval.deployment_id
+            or outbox.customer_id != customer_id
+            or outbox.job_id != resumed_job.job_id
+            or outbox.task.expected_revision != resumed_job.revision
+            or outbox.task.command is not WorkflowCommand.PLAN_COMPLETED
+        ):
+            raise ValueError("approval resume state is inconsistent")
         occurred_at = self._now().astimezone(UTC).isoformat().replace("+00:00", "Z")
         # One deployment has one approval state.  Keep the approval key
         # deterministic so retries cannot append a second approval record.
@@ -149,7 +171,27 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
         }
         try:
             self._transaction_client.transact_write_items(
-                TransactItems=[self._put(approval_item), self._put(audit_item)]
+                TransactItems=[
+                    self._put(approval_item),
+                    self._put(audit_item),
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": marshal_item(_job_item(resumed_job)),
+                            "ConditionExpression": "#revision = :expected",
+                            "ExpressionAttributeNames": {"#revision": "revision"},
+                            "ExpressionAttributeValues": marshal_item(
+                                {":expected": expected_revision}
+                            ),
+                        }
+                    },
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": marshal_item(_outbox_item(outbox)),
+                        }
+                    },
+                ]
             )
         except Exception as error:
             if self._error_code(error) in {
