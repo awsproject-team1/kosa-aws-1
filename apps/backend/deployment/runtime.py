@@ -298,6 +298,19 @@ def _live_plan_outputs_fetcher(
     if isinstance(max_polls, bool) or not isinstance(max_polls, int) or max_polls < 1:
         raise ValueError("max_polls must be a positive integer")
 
+    # secret은 App 자격 JSON({app_id, installation_id, private_key})일 수 있으므로 원문을 그대로
+    # Bearer token으로 쓰면 GitHub이 401을 낸다(dispatch·조회가 모두 "GitHub plan request failed"로
+    # 실패). GitHubAppTokenProvider가 App 자격이면 installation token을 발급하고, 이미 token 문자열
+    # 이면 그대로 쓴다. secret_id별로 한 provider를 캐시해 한 실행 안에서 token을 재사용한다.
+    token_providers: dict[str, GitHubAppTokenProvider] = {}
+
+    def _token_for(secret_id: str) -> str:
+        provider = token_providers.get(secret_id)
+        if provider is None:
+            provider = GitHubAppTokenProvider(secret_reader=lambda: secret_reader(secret_id))
+            token_providers[secret_id] = provider
+        return provider()
+
     def fetch(target: DeploymentTarget, deployment_id: str, commit_sha: str) -> PlanRunOutputs:
         if not isinstance(target, DeploymentTarget):
             raise TypeError("target must be a DeploymentTarget")
@@ -305,7 +318,7 @@ def _live_plan_outputs_fetcher(
             raise ValueError("deployment_id must be a non-empty string")
         if not isinstance(commit_sha, str) or len(commit_sha) != 40:
             raise ValueError("commit_sha must be a 40-character SHA")
-        token = secret_reader(target.github_token_secret_id)
+        token = _token_for(target.github_token_secret_id)
         headers = _github_headers(token)
         repository = quote(target.repository_full_name, safe="/")
         workflow = "terraform-plan.yml"
