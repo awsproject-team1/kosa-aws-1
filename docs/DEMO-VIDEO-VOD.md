@@ -17,14 +17,20 @@ MediaConvert의 `COMPLETE`와 `ERROR`는 EventBridge가 SNS topic으로 전달�
 
 ## Deployment
 
-정본은 `infrastructure/cloudformation/demo-video-vod.yaml`이며
-`.github/workflows/deploy-demo-video.yml`만 실제 스택을 배포한다. Stack과 OIDC Role scope는
-`kosa-governance-demo-video`로 고정한다.
+정본은 `infrastructure/cloudformation/demo-video-vod.yaml`이다. 이 template은 기존 GovLens stack,
+bootstrap role, SPA, GitHub Actions를 참조하거나 변경하지 않는 독립 stack이다. 고객 AWS 관리자가
+별도 stack `kosa-governance-demo-video`로 배포한다.
 
-기존 bootstrap stack은 먼저 최신 `m1-customer-bootstrap-roles.yaml`로 갱신되어야 한다. 이 변경은
-GitHub deployment role에 demo stack 하나의 CloudFormation 접근과 output bucket의 player 게시
-권한을 추가하고, CloudFormation execution role에 CloudFront/SNS provisioning을 추가한다.
-MediaConvert job 제출 권한은 CloudFormation 역할이 아니라 전용 Lambda runtime 역할에만 있다.
+Stack 생성이 끝나면 player HTML을 독립 output bucket에 게시한다.
+
+```bash
+aws s3 cp demo/video-player/index.html \
+  s3://kosa-governance-sandbox-video-output-369676914736/index.html \
+  --content-type text/html \
+  --cache-control 'no-cache,no-store,must-revalidate' \
+  --profile mfa \
+  --region us-east-1
+```
 
 ## Source upload
 
