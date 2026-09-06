@@ -60,8 +60,10 @@ class DynamoDbDeploymentApprovalRepositoryTest(unittest.TestCase):
         )
         items = transactions.calls[0]["TransactItems"]
         self.assertEqual(len(items), 2)
-        self.assertEqual(items[0]["Put"]["Item"]["commit_sha"], "commit-001")
-        self.assertEqual(items[1]["Put"]["Item"]["event_type"], "DEPLOYMENT_APPROVED")
+        # `_put`이 marshal_item으로 low-level AttributeValue 형식을 만든다(실제
+        # transact_write_items가 요구하는 형식). plain dict를 넘기면 ParamValidationError.
+        self.assertEqual(items[0]["Put"]["Item"]["commit_sha"], {"S": "commit-001"})
+        self.assertEqual(items[1]["Put"]["Item"]["event_type"], {"S": "DEPLOYMENT_APPROVED"})
         self.assertNotIn("artifact", items[1]["Put"]["Item"])
 
     def test_get_approval_reconstructs_the_stored_approval(self) -> None:

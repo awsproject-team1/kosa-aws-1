@@ -169,7 +169,7 @@ class DynamoDbDeploymentApprovalRepository(DeploymentApprovalRepository):
         return {
             "Put": {
                 "TableName": self._table_name,
-                "Item": item,
+                "Item": marshal_item(item),
                 "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
             }
         }
