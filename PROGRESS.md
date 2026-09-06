@@ -2,6 +2,12 @@
 
 ## Current
 
+- **승인 뒤 apply dispatch를 재개했다 (2026-09-07).** 승인 경로가 immutable approval/audit만
+  저장하고 `PLAN_COMPLETED` outbox를 만들지 않아, plan 승인 뒤 Deployment Worker가 apply를
+  dispatch할 수 없었다. 이제 approval·Job revision(`APPLY`)·`PLAN_COMPLETED` outbox를 하나의
+  DynamoDB transaction으로 기록하고, 커밋 성공 후 Deployment Queue로 발행한다. 승인/큐 write가
+  부분 성공해 apply가 유실되는 경로는 없다.
+
 - **경계를 의미로 다시 긋는다 — 사실·해석·모름 (2026-09-05, ADR-0024).** 바로 아래 항목이 만든
   결정적 판정은 옳았지만, 경계의 기준이 "Catalog가 술어를 선언했는가"라서 네 가지가 새어 나갔다.
   전체 검토는 `docs/decisions/ADR-0024-scoring-boundary-by-meaning.md`.
@@ -1878,7 +1884,6 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     runtime config가 같은 규칙으로 거부한다. 기존 고정 commit 설정은 그대로 유효.
   - 운영자 작업: secret `M1_ASSESSMENT_RUNTIME_JSON`에서 `"commit_sha": "…"`를 `"branch": "main"`으로
     바꾸고 M0 Foundation을 재배포한다. 코드 배포만으로는 동작이 바뀌지 않는다.
-
 
 
 

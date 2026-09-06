@@ -4,10 +4,18 @@ import unittest
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
+from apps.backend.jobs.models import Job
+from apps.backend.jobs.outbox import WorkflowOutboxEntry
 from apps.backend.repositories import DynamoDbDeploymentApprovalRepository
 from apps.backend.repositories.errors import RepositoryError
 from apps.backend.repositories.ports import StoredDataError
-from packages.contracts import DeploymentApproval
+from packages.contracts import (
+    DeploymentApproval,
+    JobCurrentStep,
+    JobStatus,
+    WorkflowCommand,
+    WorkflowTask,
+)
 from packages.contracts.remediation import DeploymentReadiness, DeploymentReadinessStatus
 
 
@@ -57,14 +65,36 @@ class DynamoDbDeploymentApprovalRepositoryTest(unittest.TestCase):
                 status=DeploymentReadinessStatus.READY_FOR_APPROVAL,
                 reason_codes=("REFRESHED_PLAN_BOUND_TO_REMEDIATION_CONTEXT",),
             ),
+            resumed_job=Job(
+                job_id="job-001",
+                customer_id="cust-001",
+                job_type="DEPLOYMENT",
+                status=JobStatus.RUNNING,
+                current_step=JobCurrentStep.APPLY,
+                requested_by="admin-001",
+                revision=1,
+                deployment_id="deployment-001",
+            ),
+            expected_revision=0,
+            outbox=WorkflowOutboxEntry(
+                customer_id="cust-001",
+                job_id="job-001",
+                task=WorkflowTask(
+                    job_id="job-001",
+                    expected_revision=1,
+                    command=WorkflowCommand.PLAN_COMPLETED,
+                ),
+            ),
         )
         items = transactions.calls[0]["TransactItems"]
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 4)
         # `_put`이 marshal_item으로 low-level AttributeValue 형식을 만든다(실제
         # transact_write_items가 요구하는 형식). plain dict를 넘기면 ParamValidationError.
         self.assertEqual(items[0]["Put"]["Item"]["commit_sha"], {"S": "commit-001"})
         self.assertEqual(items[1]["Put"]["Item"]["event_type"], {"S": "DEPLOYMENT_APPROVED"})
         self.assertNotIn("artifact", items[1]["Put"]["Item"])
+        self.assertEqual(items[2]["Put"]["Item"]["current_step"], {"S": "APPLY"})
+        self.assertEqual(items[3]["Put"]["Item"]["command"], {"S": "PLAN_COMPLETED"})
 
     def test_get_approval_reconstructs_the_stored_approval(self) -> None:
         # record_approval이 쓴 것과 같은 key/body를 read table에 넣어 왕복을 확인한다.

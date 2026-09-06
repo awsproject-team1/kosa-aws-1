@@ -293,7 +293,14 @@ def _deployment_components(
         ).get_rule(rule_id, version),
     )
     return DeploymentApiService(
-        approvals=DeploymentApprovalService(approval_repository),
+        approvals=DeploymentApprovalService(
+            approval_repository,
+            deployments=deployment_repository,
+            jobs=workflow_repository,
+            outbox_dispatcher=OutboxDispatcher(
+                repository=workflow_repository, dispatcher=dispatcher
+            ),
+        ),
         plans=plans,
         sources=DynamoDbDeploymentSourceReader(
             _metadata_table(), commits=_deployment_commit_resolver()
