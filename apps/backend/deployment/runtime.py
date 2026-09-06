@@ -33,7 +33,7 @@ import zipfile
 from collections.abc import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from agent.runtime.actual_resource_tool_factory import (
     ClientFactoryProvider,
@@ -457,9 +457,14 @@ def _github_json(
 
 
 def _github_bytes(url: str, *, headers: Mapping[str, str], opener: Callable[..., object]) -> bytes:
+    # GitHub artifact 다운로드 URL은 302로 Azure Blob presigned URL로 redirect한다. 그때
+    # GitHub용 `Authorization: Bearer` 헤더를 그대로 넘기면 Azure가 401 InvalidAuthenticationInfo를
+    # 낸다(presigned URL은 자체 서명이라 헤더 인증이 필요 없다). redirect 시 Authorization을 떼는
+    # opener로 다운로드한다. 주입된 opener(테스트)가 있으면 그대로 쓴다.
+    download = opener if opener is not urlopen else _artifact_opener()
     request = Request(url, headers=dict(headers), method="GET")
     try:
-        with opener(request, timeout=10) as response:
+        with download(request, timeout=30) as response:
             status = getattr(response, "status", response.getcode())
             content = response.read()
     except (HTTPError, URLError, TimeoutError) as error:
@@ -467,6 +472,25 @@ def _github_bytes(url: str, *, headers: Mapping[str, str], opener: Callable[...,
     if status != 200 or not isinstance(content, bytes):
         raise DeploymentRuntimeError("GitHub plan artifact download failed")
     return content
+
+
+class _StripAuthOnRedirect(HTTPRedirectHandler):
+    """Redirect를 따라갈 때 Authorization 헤더를 제거한다.
+
+    GitHub artifact 다운로드는 Azure Blob presigned URL로 redirect하는데, 그 URL은 자체 서명이라
+    GitHub용 Bearer 토큰을 함께 보내면 401(InvalidAuthenticationInfo)이 난다.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            for header in ("Authorization", "authorization"):
+                new.remove_header(header)
+        return new
+
+
+def _artifact_opener() -> Callable[..., object]:
+    return build_opener(_StripAuthOnRedirect()).open
 
 
 def _plan_outputs_from_archive(archive: bytes, *, run_id: str) -> PlanRunOutputs:
