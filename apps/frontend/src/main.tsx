@@ -1724,8 +1724,8 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
     {view && <div className="remediation-result">
       <div className="hint">remediation <code>{view.remediation_id}</code> · {view.status}{view.result ? ` · ${view.result.kind}` : view.status === "FAILED" ? "" : " · Worker 결과 대기 중"}</div>
       {view.status === "FAILED" && <p className="alert">조치 실패{view.failure ? ` — ${view.failure.code}: ${view.failure.reason}` : ""}. 재시도해도 같은 결과일 사유입니다(모델 출력 형식·GitHub 거부 등). 담당자가 IaC를 직접 고치거나, 사유가 일시적이면 조치를 다시 요청하세요.</p>}
-      {view.result?.patch && <div className="hint">변경 파일: <CodeValues values={view.result.patch.changed_paths} /> base commit <code>{view.result.patch.base_commit_sha.slice(0, 12)}</code> · patch digest <code>{view.result.patch.artifact.content_sha256.slice(0, 16)}</code></div>}
-      {view.result?.sync_target && <div className="hint">IaC는 이미 안전합니다. 배포 대상 commit <code>{view.result.sync_target.commit_sha.slice(0, 12)}</code>로 Actual 동기화를 진행합니다.</div>}
+      {view.result?.patch && <div className="hint">변경 파일: <CodeValues values={view.result.patch.changed_paths ?? []} /> base commit <code>{(view.result.patch.base_commit_sha ?? "").slice(0, 12)}</code> · patch digest <code>{(view.result.patch.artifact?.content_sha256 ?? "").slice(0, 16)}</code></div>}
+      {view.result?.sync_target && <div className="hint">IaC는 이미 안전합니다. 배포 대상 commit <code>{(view.result.sync_target.commit_sha ?? "").slice(0, 12)}</code>로 Actual 동기화를 진행합니다.</div>}
       {view.pull_request
         ? <p className="status">Pull Request #{view.pull_request.number} 생성됨 — <a href={view.pull_request.url} target="_blank" rel="noreferrer">{view.pull_request.url}</a> (branch <code>{view.pull_request.head_branch}</code>). PR 본문에 unified diff가 있습니다. 사람이 검토·머지한 뒤에만 배포 승인과 apply가 진행됩니다.</p>
         : view.result?.kind === "TERRAFORM_PATCH" && <p className="hint">PR 생성 대기 중…</p>}
@@ -1743,7 +1743,7 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
       {!deployment
         ? <button className="ghost" disabled={deploying} onClick={() => void startDeployment(view.remediation_id)}>{deploying ? "배포 시작 중…" : "PR merge 후 배포 시작"}</button>
         : <div>
-            <div className="hint">deployment <code>{deployment.deployment_id}</code> · <strong>{deployment.status}</strong> · commit <code>{deployment.commit_sha.slice(0, 12)}</code>{deployment.plan_hash ? ` · plan ${deployment.plan_hash.slice(0, 16)}` : " · plan 대기"}</div>
+            <div className="hint">deployment <code>{deployment.deployment_id}</code> · <strong>{deployment.status}</strong> · commit <code>{(deployment.commit_sha ?? "").slice(0, 12)}</code>{deployment.plan_hash ? ` · plan ${deployment.plan_hash.slice(0, 16)}` : " · plan 대기"}</div>
             {/* plan/apply/검증이 진행 중인 중간 상태. 안내가 없으면 "배포 시작 중…"에서 멈춘 빈 화면처럼 보인다. */}
             {DEPLOY_IN_PROGRESS.has(deployment.status) && <p className="hint">
               {deployment.status === "APPLYING" ? "승인된 plan을 apply하는 중입니다…"
