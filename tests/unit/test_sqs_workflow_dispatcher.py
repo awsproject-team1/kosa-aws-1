@@ -3,7 +3,11 @@
 import json
 import unittest
 
-from apps.backend.jobs import SqsRemediationWorkflowDispatcher, SqsWorkflowDispatcher
+from apps.backend.jobs import (
+    SqsDeploymentWorkflowDispatcher,
+    SqsRemediationWorkflowDispatcher,
+    SqsWorkflowDispatcher,
+)
 from packages.contracts import WorkflowCommand, WorkflowTask
 
 
@@ -36,6 +40,39 @@ class SqsWorkflowDispatcherTest(unittest.TestCase):
                     job_id="job-001",
                     expected_revision=0,
                     command=WorkflowCommand.GENERATE_REMEDIATION,
+                )
+            )
+
+
+class SqsDeploymentWorkflowDispatcherTest(unittest.TestCase):
+    def test_deployment_dispatcher_accepts_every_deployment_lifecycle_command(self) -> None:
+        client = Client()
+        dispatcher = SqsDeploymentWorkflowDispatcher(
+            client, queue_url="https://sqs.example/deployment"
+        )
+        for command in (
+            WorkflowCommand.RUN_DEPLOYMENT,
+            WorkflowCommand.PLAN_COMPLETED,
+            WorkflowCommand.APPLY_COMPLETED,
+        ):
+            dispatcher.dispatch(
+                WorkflowTask(job_id="job-001", expected_revision=0, command=command)
+            )
+
+        self.assertEqual(
+            [json.loads(call["MessageBody"])["command"] for call in client.calls],
+            ["RUN_DEPLOYMENT", "PLAN_COMPLETED", "APPLY_COMPLETED"],
+        )
+
+    def test_deployment_dispatcher_rejects_non_deployment_commands(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only accepts"):
+            SqsDeploymentWorkflowDispatcher(
+                Client(), queue_url="https://sqs.example/deployment"
+            ).dispatch(
+                WorkflowTask(
+                    job_id="job-001",
+                    expected_revision=0,
+                    command=WorkflowCommand.ASSESS_RESOURCE,
                 )
             )
 
