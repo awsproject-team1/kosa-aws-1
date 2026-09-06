@@ -2,7 +2,8 @@
 
 실제 GitHub/AWS 호출은 주입한 fake로 대체한다. 고정하는 것:
 - 세 어댑터가 각 정본 port Protocol을 만족한다.
-- ApplyDispatchPort는 workflow_dispatch만 호출하고 input이 deployment_id/commit_sha/plan_hash다.
+- ApplyDispatchPort는 저장소 기본 브랜치의 workflow_dispatch만 호출하고 승인 commit은 input으로
+  전달한다.
   dispatch는 run_id를 주지 않고 ApplyDispatchReceipt(workflow_path)만 돌려준다.
 - WorkflowRunReader는 WorkflowRunReference(실제 run_id)로 재조회하고, 실패(404·형식·미완료·
   plan_hash 마커 부재)는 예외가 아니라 FAILURE 결론 값이다(EventBridge 불신뢰, section 7).
@@ -120,6 +121,7 @@ class ApplyDispatchTest(unittest.TestCase):
             repository_id=REPOSITORY_ID,
             repository_full_name=REPO_FULL,
             token_provider=lambda: "tok",
+            request=lambda url, headers: {"default_branch": "main"},
             dispatch=dispatch,
         )
 
@@ -143,7 +145,9 @@ class ApplyDispatchTest(unittest.TestCase):
         self.assertIn("/actions/workflows/terraform-apply.yml/dispatches", url)
         self.assertEqual(headers["Authorization"], "Bearer tok")
         payload = json.loads(body.decode("utf-8"))
-        self.assertEqual(payload["ref"], COMMIT)
+        # GitHub workflow_dispatch ref는 branch/tag만 받는다. 승인된 실제 대상 commit은
+        # inputs.commit_sha로 유지되어 workflow checkout과 approval binding에 쓰인다.
+        self.assertEqual(payload["ref"], "main")
         self.assertEqual(
             payload["inputs"],
             {
@@ -189,6 +193,26 @@ class ApplyDispatchTest(unittest.TestCase):
                 plan_run=build_plan_run(repository_id="repo-other"),
             )
 
+    def test_dispatch_fails_closed_without_a_repository_default_branch(self) -> None:
+        calls, dispatch = self._capture()
+        port = LiveApplyDispatchPort(
+            customer_id=CUSTOMER_ID,
+            repository_id=REPOSITORY_ID,
+            repository_full_name=REPO_FULL,
+            token_provider=lambda: "tok",
+            request=lambda url, headers: {},
+            dispatch=dispatch,
+        )
+
+        with self.assertRaisesRegex(LiveDeploymentPortError, "default branch is unavailable"):
+            port.dispatch_apply(
+                approval=build_approval(),
+                plan=build_plan(),
+                state_version=TerraformStateVersion(lineage=LINEAGE, serial=7),
+                plan_run=build_plan_run(),
+            )
+        self.assertEqual(calls, [])
+
 
 class ApplyDispatchMatchesWorkflowTemplateTest(unittest.TestCase):
     """dispatch가 보내는 input 집합이 apply workflow의 선언과 정확히 같아야 한다.
@@ -214,6 +238,7 @@ class ApplyDispatchMatchesWorkflowTemplateTest(unittest.TestCase):
             repository_id=REPOSITORY_ID,
             repository_full_name=REPO_FULL,
             token_provider=lambda: "tok",
+            request=lambda url, headers: {"default_branch": "main"},
             dispatch=lambda url, headers, body: calls.append((url, headers, body)),
         )
 
