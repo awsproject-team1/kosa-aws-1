@@ -1588,6 +1588,9 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
   // Deployment는 사람이 PR을 merge한 뒤 진행되는 별도 단계다(ADR-0019 §3). merge 전까지는
   // 이 상태들에서 멈춰 사람 판단(승인)을 기다린다.
   const DEPLOY_STOP = new Set(["WAITING_APPROVAL", "BLOCKED", "MANUAL_REVIEW", "REJECTED", "APPLIED", "VERIFIED", "VERIFICATION_INDETERMINATE"]);
+  // plan/apply/검증이 아직 도는 중간 상태. 이 상태에는 사람이 할 일이 없고 기다려야 한다 —
+  // 안내가 없으면 "배포 시작 중…"에서 멈춘 빈 화면처럼 보인다.
+  const DEPLOY_IN_PROGRESS = new Set(["PLAN_REQUESTED", "PLAN_COMPLETED", "READINESS_EVALUATED", "APPROVED", "APPLYING", "VERIFYING"]);
 
   async function request() {
     setBusy(true); setError(null); setStart(null); setView(null);
@@ -1654,7 +1657,23 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
     } finally { setDeploying(false); }
   }
 
-  // Admin 승인. 저장된 plan의 commit_sha/plan_hash를 그대로 실어 보낸다(백엔드가 저장값과 대조).
+  // 폴링이 끝났는데도 중간 상태면 사용자가 눌러 다시 조회한다. Worker가 늦거나(재시도 중) plan이
+  // 방금 끝났을 수 있다. 종결/승인대기 상태에 이르면 멈춘다.
+  async function refreshDeployment(deploymentId: string) {
+    setDeploying(true); setError(null);
+    try {
+      let latest = deployment;
+      for (let i = 0; i < 60; i++) {
+        try {
+          latest = await api<DeploymentView>(`/deployments/${enc(deploymentId)}`, session.accessToken);
+          setDeployment(latest);
+          if (DEPLOY_STOP.has(latest.status)) break;
+        } catch (e) { if (!(e as Error).message.includes("404")) throw e; }
+        await sleep(3000);
+      }
+    } catch (e) { setError((e as Error).message); }
+    finally { setDeploying(false); }
+  }
   // 승인은 apply를 트리거하지 않고 승인 record만 쓴다 — apply는 D Worker가 재검증 후 실행한다.
   async function approveDeployment(d: DeploymentView) {
     if (!d.plan_hash) { setError("plan_hash가 아직 없어 승인할 수 없습니다. plan 완료를 기다리세요."); return; }
@@ -1725,13 +1744,23 @@ function FindingCard({ finding: f, suppression, session, obs, isAdmin }: { findi
         ? <button className="ghost" disabled={deploying} onClick={() => void startDeployment(view.remediation_id)}>{deploying ? "배포 시작 중…" : "PR merge 후 배포 시작"}</button>
         : <div>
             <div className="hint">deployment <code>{deployment.deployment_id}</code> · <strong>{deployment.status}</strong> · commit <code>{deployment.commit_sha.slice(0, 12)}</code>{deployment.plan_hash ? ` · plan ${deployment.plan_hash.slice(0, 16)}` : " · plan 대기"}</div>
+            {/* plan/apply/검증이 진행 중인 중간 상태. 안내가 없으면 "배포 시작 중…"에서 멈춘 빈 화면처럼 보인다. */}
+            {DEPLOY_IN_PROGRESS.has(deployment.status) && <p className="hint">
+              {deployment.status === "APPLYING" ? "승인된 plan을 apply하는 중입니다…"
+                : deployment.status === "VERIFYING" ? "apply 후 Post-Deploy 재평가를 진행하는 중입니다…"
+                : "merge된 commit에서 plan을 만들고 readiness를 평가하는 중입니다…"}
+              {deploying ? " (자동 갱신 중)" : " 자동 갱신이 끝났습니다. '배포 상태 새로고침'을 눌러 최신 상태를 확인하세요."}
+            </p>}
+            {/* 폴링이 끝났는데도 아직 진행 중 상태면 다시 조회할 수 있게 한다(Worker가 늦거나 재시도 중일 수 있다). */}
+            {DEPLOY_IN_PROGRESS.has(deployment.status) && !deploying &&
+              <div className="finding-actions row" style={{ marginTop: 6 }}><button className="ghost" onClick={() => void refreshDeployment(deployment.deployment_id)}>배포 상태 새로고침</button></div>}
             {deployment.status === "WAITING_APPROVAL" && (isAdmin
               ? <div className="finding-actions row" style={{ marginTop: 6 }}><button disabled={deploying || !deployment.plan_hash} onClick={() => void approveDeployment(deployment)}>{deploying ? "승인 처리 중…" : "이 배포 승인 (apply)"}</button><span className="hint">승인하면 저장된 commit/plan을 재검증한 뒤 apply가 실행됩니다.</span></div>
               : <p className="hint">승인 대기 중입니다. 배포 승인은 관리자만 할 수 있습니다.</p>)}
             {deployment.status === "BLOCKED" && <p className="hint">Readiness가 BLOCKED입니다 — plan이 Finding을 해소하지 못하거나 매핑되지 않았습니다. 새 조치/재수정이 필요합니다.</p>}
-            {deployment.status === "MANUAL_REVIEW" && <p className="hint">사람 검토 대상입니다(파괴적 변경 등). 자동 승인 경로로 진행하지 않습니다.</p>}
+            {deployment.status === "MANUAL_REVIEW" && <p className="hint">사람 검토 대상입니다(파괴적 변경 등). 자동 승인 경로로 진행하지 않습니다. plan이 실패했다면 배포 Worker 로그를 확인하세요.</p>}
             {deployment.status === "REJECTED" && <p className="hint">거절된 배포입니다. 같은 plan으로 재승인할 수 없으며 새 plan·새 배포가 필요합니다.</p>}
-            {(deployment.status === "APPLIED" || deployment.status === "VERIFIED") && <p className="status">apply 완료{deployment.verification_assessment_id ? ` · 검증 Assessment ${deployment.verification_assessment_id.slice(0, 12)}` : " · 검증 진행 중"}.</p>}
+            {(deployment.status === "APPLIED" || deployment.status === "VERIFIED") && <p className="status">apply 완료{deployment.verification_assessment_id ? <> · 재평가 Assessment <code>{deployment.verification_assessment_id.slice(0, 16)}</code> 생성됨 — 상단 'Assessment 결과' 탭의 이력에서 열어 변경 결과를 확인하세요.</> : " · 검증 진행 중"}.</p>}
             {deployment.status === "VERIFICATION_INDETERMINATE" && <p className="hint">apply는 됐으나 Post-Deploy 검증이 불명확합니다. 사람 확인이 필요합니다.</p>}
           </div>}
     </div>}
