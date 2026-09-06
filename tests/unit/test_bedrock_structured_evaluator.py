@@ -122,10 +122,12 @@ class ContractRetryTest(unittest.TestCase):
         self.assertEqual(client.calls, 1)
 
     def test_two_malformed_answers_still_fail_closed(self) -> None:
+        # attempts를 명시해 "모든 재시도가 형식을 어기면 fail-closed"를 재시도 횟수와 독립적으로
+        # 고정한다(기본값은 운영 튜닝 대상이라 여기서 못박지 않는다).
         client = ScriptedClient([INVENTED_LOCATOR_BODY, INVENTED_LOCATOR_BODY])
 
         with self.assertRaisesRegex(BedrockEvaluationError, "outside approved evidence"):
-            self._evaluate(client)
+            self._evaluate(client, attempts=2)
         self.assertEqual(client.calls, 2)
 
     def test_the_measurement_harness_can_turn_the_retry_off(self) -> None:

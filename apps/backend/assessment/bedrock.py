@@ -27,8 +27,12 @@ class BedrockEvaluationError(ValueError):
     """Raised when a model response is not a safe structured evaluation."""
 
 
-#: 한 좌표에 허용하는 모델 호출 횟수. 형식 실패에만 두 번째가 있다(`_judged`).
-_MODEL_ATTEMPTS = 2
+#: 한 좌표에 허용하는 모델 호출 횟수. 형식 실패에만 재시도가 있다(`_judged`).
+#: 이 모델은 temperature 0에서도 실행마다 근거 표기가 달라, IAC 관점에서 근거를 capability
+#: key나 Terraform 표현으로 인용해 게이트에 거부되는 형식 실패가 확률적으로 난다. 재시도를
+#: 늘리면 모든 시도가 형식을 어길 확률이 낮아져 EXECUTION_ERROR가 줄어든다 — 게이트는 그대로이고
+#: (지어낸 근거를 받지 않는다) 판정도 바꾸지 않는다(계약을 만족한 첫 응답을 쓴다).
+_MODEL_ATTEMPTS = 4
 
 
 class BedrockConverseClient(Protocol):
