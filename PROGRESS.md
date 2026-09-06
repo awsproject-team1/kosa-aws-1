@@ -2,6 +2,14 @@
 
 ## Current
 
+- **apply workflow dispatch의 422 원인을 복구한다 (2026-09-07).** 승인·Outbox·Deployment Queue
+  라우팅은 정상화됐지만 live Worker는 `terraform-apply.yml`의 `workflow_dispatch`에서 계속
+  실패했다. 고객 저장소의 workflow와 입력 계약은 정상이었고, 원인은 dispatch `ref`에 GitHub가
+  요구하는 branch/tag 대신 승인 commit SHA를 보낸 것이었다. plan dispatch와 같은 방식으로
+  저장소의 default branch를 workflow ref로 사용하고, 실제 승인 대상은 계속
+  `inputs.commit_sha`로 전달해 workflow가 exact commit을 checkout한다. 기본 브랜치를 읽지 못하면
+  apply를 보내지 않고 fail-closed한다.
+
 - **승인 뒤 apply dispatch를 재개했다 (2026-09-07).** 승인 경로가 immutable approval/audit만
   저장하고 `PLAN_COMPLETED` outbox를 만들지 않아, plan 승인 뒤 Deployment Worker가 apply를
   dispatch할 수 없었다. 이제 approval·Job revision(`APPLY`)·`PLAN_COMPLETED` outbox를 하나의
@@ -1884,7 +1892,6 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     runtime config가 같은 규칙으로 거부한다. 기존 고정 commit 설정은 그대로 유효.
   - 운영자 작업: secret `M1_ASSESSMENT_RUNTIME_JSON`에서 `"commit_sha": "…"`를 `"branch": "main"`으로
     바꾸고 M0 Foundation을 재배포한다. 코드 배포만으로는 동작이 바뀌지 않는다.
-
 
 
 

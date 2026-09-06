@@ -256,6 +256,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         repository_id: str,
         repository_full_name: str,
         token_provider: Callable[[], str],
+        request: Callable[[str, Mapping[str, str]], Mapping[str, object]] | None = None,
         dispatch: Callable[[str, Mapping[str, str], bytes], None] | None = None,
     ) -> None:
         self._customer_id = _require_non_empty(customer_id, "customer_id")
@@ -264,6 +265,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         if not callable(token_provider):
             raise TypeError("token_provider must be callable")
         self._token_provider = token_provider
+        self._request = request or _github_get
         self._dispatch = dispatch or _github_post
 
     def dispatch_apply(
@@ -297,9 +299,22 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
         # `plan_run_id`는 apply가 자기 run이 아니라 plan run의 saved artifact를 내려받기 때문에
         # 필요하다(§1). 이 값은 durable `PlanExecutionResult.plan_run`에서 와야 하며, 여기서
         # 만들어내지 않는다 — apply와 plan은 서로 다른 실행이다.
+        # workflow_dispatch의 `ref`는 workflow 파일을 읽을 branch/tag다. GitHub는 commit SHA를
+        # 이 필드에서 받지 않아 422 "No ref found"로 거부한다. 실제 apply 대상은 별도
+        # `inputs.commit_sha`로 고정하고 workflow가 그 commit을 checkout하므로, dispatch ref에는
+        # 저장소가 선언한 default branch를 쓴다(plan dispatch와 같은 경계).
+        headers = _github_headers(self._token_provider())
+        repository_url = f"https://api.github.com/repos/{self._repository_full_name}"
+        try:
+            default_branch = self._request(repository_url, headers).get("default_branch")
+        except Exception:
+            raise LiveDeploymentPortError("repository default branch lookup failed") from None
+        if not isinstance(default_branch, str) or not default_branch.strip():
+            raise LiveDeploymentPortError("repository default branch is unavailable")
+
         body = json.dumps(
             {
-                "ref": approval.commit_sha,
+                "ref": default_branch,
                 "inputs": {
                     "deployment_id": approval.deployment_id,
                     "commit_sha": approval.commit_sha,
@@ -314,7 +329,7 @@ class LiveApplyDispatchPort(ApplyDispatchPort):
             f"https://api.github.com/repos/{self._repository_full_name}"
             f"/actions/workflows/{_APPLY_WORKFLOW_FILE}/dispatches"
         )
-        self._dispatch(url, _github_headers(self._token_provider()), body)
+        self._dispatch(url, headers, body)
         # dispatch는 204만 돌려주고 run id를 주지 않는다. 권위 있는 사실은 재조회로 얻는다(§7).
         return ApplyDispatchReceipt(
             deployment_id=approval.deployment_id,
