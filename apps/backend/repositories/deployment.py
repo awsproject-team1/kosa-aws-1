@@ -465,6 +465,10 @@ class DynamoDbDeploymentPlanStore:
                 ":state_version": result.state_version.to_dict(),
                 ":plan_run": result.plan_run.to_dict(),
                 ":plan_summary": result.summary.to_dict(),
+                # 생성 시 to_dict()가 plan_hash를 NULL 값으로 이미 써 두므로
+                # attribute_not_exists만으로는 "아직 plan 없음"을 판정할 수 없다. NULL 타입도
+                # 미설정으로 취급해야 첫 plan이 실제로 저장된다.
+                ":null_type": "NULL",
             }
         )
         try:
@@ -489,7 +493,9 @@ class DynamoDbDeploymentPlanStore:
                             # 값을 다시 쓰려 하면 조건 실패가 나지만, 그건 이미 저장됐다는 뜻이라
                             # 정상 흡수한다(멱등).
                             "ConditionExpression": (
-                                "attribute_exists(PK) AND attribute_not_exists(plan_hash)"
+                                "attribute_exists(PK) AND "
+                                "(attribute_not_exists(plan_hash) OR "
+                                "attribute_type(plan_hash, :null_type))"
                             ),
                             "ExpressionAttributeValues": values,
                         }
