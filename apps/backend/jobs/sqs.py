@@ -54,7 +54,15 @@ class SqsRemediationWorkflowDispatcher:
 
 
 class SqsDeploymentWorkflowDispatcher:
-    """Publish only the D Deployment Worker command to its queue (ADR-0019 §4)."""
+    """Publish all D Deployment Worker lifecycle commands to its queue."""
+
+    _ALLOWED_COMMANDS = frozenset(
+        {
+            WorkflowCommand.RUN_DEPLOYMENT,
+            WorkflowCommand.PLAN_COMPLETED,
+            WorkflowCommand.APPLY_COMPLETED,
+        }
+    )
 
     def __init__(self, client: SqsClient, *, queue_url: str) -> None:
         _require_configuration(client, queue_url)
@@ -63,8 +71,8 @@ class SqsDeploymentWorkflowDispatcher:
 
     def dispatch(self, task: WorkflowTask) -> None:
         _require_task(task)
-        if task.command is not WorkflowCommand.RUN_DEPLOYMENT:
-            raise ValueError("deployment dispatcher only accepts RUN_DEPLOYMENT tasks")
+        if task.command not in self._ALLOWED_COMMANDS:
+            raise ValueError("deployment dispatcher only accepts deployment tasks")
         self._client.send_message(
             QueueUrl=self._queue_url,
             MessageBody=json.dumps(task.to_dict(), separators=(",", ":")),

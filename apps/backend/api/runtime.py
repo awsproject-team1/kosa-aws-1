@@ -150,6 +150,12 @@ def _all_command_dispatcher() -> CommandRoutingWorkflowDispatcher:
             WorkflowCommand.RUN_DEPLOYMENT: SqsDeploymentWorkflowDispatcher(
                 sqs, queue_url=deployment_url
             ),
+            WorkflowCommand.PLAN_COMPLETED: SqsDeploymentWorkflowDispatcher(
+                sqs, queue_url=deployment_url
+            ),
+            WorkflowCommand.APPLY_COMPLETED: SqsDeploymentWorkflowDispatcher(
+                sqs, queue_url=deployment_url
+            ),
         }
     )
 

@@ -126,6 +126,8 @@ class CompositionSmokeTest(unittest.TestCase):
             WorkflowCommand.GENERATE_REMEDIATION,
             WorkflowCommand.SYNC_ACTUAL_STATE,
             WorkflowCommand.RUN_DEPLOYMENT,
+            WorkflowCommand.PLAN_COMPLETED,
+            WorkflowCommand.APPLY_COMPLETED,
         ):
             with self.subTest(command=command.value):
                 dispatcher.dispatch(
