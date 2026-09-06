@@ -89,14 +89,21 @@ class LambdaHandlerModeTest(unittest.TestCase):
     def test_live_plan_outputs_fetcher_rejects_an_unsuccessful_plan_run(self) -> None:
         """Live runner는 GitHub가 성공으로 확정하지 않은 plan을 받아들이지 않는다."""
 
+        # GitHub API 호출 순서: (1) GET /repos/{repo} → default_branch, (2) POST dispatch(204),
+        # (3+) GET runs. 각 단계에 알맞은 응답을 돌려주고, run 목록은 비어 있게 해 plan이
+        # 확정되지 않은 경우를 만든다.
+        seen: list[str] = []
+
         class Response:
-            status = 204
+            def __init__(self, status: int, body: bytes) -> None:
+                self.status = status
+                self._body = body
 
             def getcode(self) -> int:
                 return self.status
 
             def read(self) -> bytes:
-                return b"" if self.status == 204 else b'{"workflow_runs": []}'
+                return self._body
 
             def __enter__(self) -> "Response":
                 return self
@@ -104,15 +111,15 @@ class LambdaHandlerModeTest(unittest.TestCase):
             def __exit__(self, *args: object) -> None:
                 return None
 
-        calls = 0
-
-        def opener(_request: object, *, timeout: int) -> Response:
-            nonlocal calls
-            calls += 1
-            response = Response()
-            if calls > 1:
-                response.status = 200
-            return response
+        def opener(request: object, *, timeout: int) -> Response:
+            url = request.full_url  # type: ignore[attr-defined]
+            method = request.get_method()  # type: ignore[attr-defined]
+            seen.append(f"{method} {url}")
+            if method == "GET" and url.endswith("customer/iac"):
+                return Response(200, b'{"default_branch": "main"}')
+            if method == "POST" and "dispatches" in url:
+                return Response(204, b"")
+            return Response(200, b'{"workflow_runs": []}')
 
         fetch = _live_plan_outputs_fetcher(lambda _secret_id: "token", opener=opener, max_polls=1)
         with self.assertRaises(DeploymentRuntimeError):
@@ -121,6 +128,12 @@ class LambdaHandlerModeTest(unittest.TestCase):
                 "dep-001",
                 COMMIT,
             )
+        # dispatch의 ref는 commit SHA가 아니라 default branch여야 한다(GitHub는 SHA를 422로 거부).
+        dispatch = next(call for call in seen if "dispatches" in call)
+        self.assertIn("POST ", dispatch)
+        self.assertTrue(any(call.endswith("customer/iac") for call in seen))
+        # run 조회 필터도 default branch 이름을 쓴다.
+        self.assertTrue(any("branch=main" in call for call in seen))
 
 
 _TARGET = {

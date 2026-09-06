@@ -310,13 +310,26 @@ def _live_plan_outputs_fetcher(
         repository = quote(target.repository_full_name, safe="/")
         workflow = "terraform-plan.yml"
         base = f"https://api.github.com/repos/{repository}/actions"
+        # workflow_dispatch의 `ref`는 어느 브랜치/태그 버전의 workflow 파일을 실행할지만 정한다 —
+        # GitHub API는 여기에 commit SHA를 받지 않고 422 "No ref found"로 거부한다. 실제 plan 대상
+        # commit은 `inputs.commit_sha`로 넘어가고 workflow가 그 commit을 checkout한다(template 참조).
+        # 그래서 ref에는 저장소의 default branch 이름을 쓴다.
+        default_branch = _github_json(
+            f"https://api.github.com/repos/{repository}",
+            method="GET",
+            headers=headers,
+            opener=opener,
+            accepted_statuses=frozenset({200}),
+        ).get("default_branch")
+        if not isinstance(default_branch, str) or not default_branch:
+            raise DeploymentRuntimeError("repository default branch is unavailable")
         _github_json(
             f"{base}/workflows/{workflow}/dispatches",
             method="POST",
             headers=headers,
             body=json.dumps(
                 {
-                    "ref": commit_sha,
+                    "ref": default_branch,
                     "inputs": {"deployment_id": deployment_id, "commit_sha": commit_sha},
                 },
                 separators=(",", ":"),
@@ -328,7 +341,7 @@ def _live_plan_outputs_fetcher(
         run: Mapping[str, object] | None = None
         for attempt in range(max_polls):
             payload = _github_json(
-                f"{base}/workflows/{workflow}/runs?event=workflow_dispatch&branch={quote(commit_sha)}&per_page=100",
+                f"{base}/workflows/{workflow}/runs?event=workflow_dispatch&branch={quote(default_branch)}&per_page=100",
                 method="GET",
                 headers=headers,
                 opener=opener,
@@ -336,12 +349,14 @@ def _live_plan_outputs_fetcher(
             )
             runs = payload.get("workflow_runs")
             if isinstance(runs, list):
+                # display_title에 deployment_id와 commit_sha가 함께 들어 있어 이 run을 특정한다.
+                # head_sha는 dispatch한 브랜치의 HEAD(반드시 commit_sha는 아님)이므로 매칭 조건으로
+                # 쓰지 않는다 — 실제 plan 대상은 workflow가 inputs.commit_sha로 checkout한다.
                 run = next(
                     (
                         candidate
                         for candidate in runs
                         if isinstance(candidate, Mapping)
-                        and candidate.get("head_sha") == commit_sha
                         and candidate.get("display_title") == expected_title
                     ),
                     None,
