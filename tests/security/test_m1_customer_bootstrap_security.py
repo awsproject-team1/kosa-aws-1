@@ -100,8 +100,11 @@ class CustomerBootstrapSecurityTest(unittest.TestCase):
         self.assertIn("cloudformation:DescribeStackEvents", cloudformation_read["Action"])
         self.assertIn("cloudformation:ListChangeSets", cloudformation_read["Action"])
         self.assertEqual(
-            cloudformation_read["Resource"],
-            "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*",
+            set(cloudformation_read["Resource"]),
+            {
+                "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*",
+                "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${DemoVideoStackName}/*",
+            },
         )
         describe_events = next(
             statement

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GovLens AWS VOD Demo</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, Pretendard, system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #08101f; color: #eef5ff; }
+      main { width: min(1120px, 94vw); }
+      h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 42px); }
+      p { margin: 0 0 24px; color: #a8bad2; }
+      video { width: 100%; border-radius: 16px; background: #000; box-shadow: 0 24px 80px #0009; }
+      #status { margin-top: 14px; font-size: 14px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>GovLens</h1>
+      <p>S3 · EventBridge · Lambda · MediaConvert · CloudFront</p>
+      <video id="video" controls preload="metadata" playsinline></video>
+      <p id="status">스트림을 불러오는 중입니다…</p>
+    </main>
+    <script>
+      const manifest = "/videos/GovLens/master.m3u8";
+      const video = document.getElementById("video");
+      const status = document.getElementById("status");
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = manifest;
+        status.textContent = "Native HLS로 준비되었습니다.";
+      } else if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(manifest);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { status.textContent = "Adaptive HLS로 준비되었습니다."; });
+        hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) status.textContent = "스트림 준비 중이거나 재생할 수 없습니다."; });
+      } else {
+        status.textContent = "이 브라우저는 HLS 재생을 지원하지 않습니다.";
+      }
+    </script>
+  </body>
+</html>

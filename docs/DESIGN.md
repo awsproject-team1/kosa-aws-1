@@ -185,6 +185,9 @@ Parent는 긴 Policy Q&A Job을 만들지 않는다. Policy Q&A와 자연어 rou
   versioned Lambda-code bucket, CloudFormation execution role을 만든다. GitHub OIDC trust는
   정확한 repository와 두 protected Environment subject로 제한하며, bootstrap은 customer workload
   접근 권한을 만들지 않는다.
+- 수업 시연 영상은 제품 SPA 및 고객 artifact 경계와 분리한다. 원본은 private source S3에 두고
+  S3 EventBridge event가 전용 Lambda를 거쳐 MediaConvert HLS 변환을 제출한다. 결과물은 별도 private
+  S3에서 CloudFront OAC로만 읽으며, 구성 정본과 운영 절차는 `docs/DEMO-VIDEO-VOD.md`에 둔다.
 - M0 foundation 배포는 서로 다른 두 protected GitHub Environment를 사용한다. 첫 job은 expected
   AWS account를 OIDC action, STS caller identity, S3 expected-owner 조건으로 검증하고 Lambda ZIP을
   commit-qualified key에 조건부 생성 또는 exact metadata/checksum으로 재사용한다. 두 번째
