@@ -20,6 +20,7 @@ from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 CLOUDFORMATION = Path(__file__).parents[2] / "infrastructure" / "cloudformation"
 FOUNDATION = CLOUDFORMATION / "m0-foundation.yaml"
+DEMO_VIDEO = CLOUDFORMATION / "demo-video-vod.yaml"
 BOOTSTRAPS = (
     CLOUDFORMATION / "m1-customer-bootstrap.yaml",
     CLOUDFORMATION / "m1-customer-bootstrap-roles.yaml",
@@ -30,6 +31,7 @@ BOOTSTRAPS = (
 _SERVICE_PREFIX = {
     "ApiGatewayV2": "apigateway",
     "CloudTrail": "cloudtrail",
+    "CloudFront": "cloudfront",
     "CloudWatch": "cloudwatch",
     "Cognito": "cognito-idp",
     "DynamoDB": "dynamodb",
@@ -39,6 +41,7 @@ _SERVICE_PREFIX = {
     "Logs": "logs",
     "S3": "s3",
     "SQS": "sqs",
+    "SNS": "sns",
 }
 _RESOURCE_TYPE = re.compile(r"^AWS::([A-Za-z0-9]+)::[A-Za-z0-9]+$")
 
@@ -63,10 +66,10 @@ def _template(path: Path) -> dict[str, object]:
     return loaded
 
 
-def _foundation_service_prefixes() -> dict[str, set[str]]:
-    """Return {service prefix: resource types} for every resource the foundation declares."""
+def _template_service_prefixes(path: Path) -> dict[str, set[str]]:
+    """Return {service prefix: resource types} for every resource a stack declares."""
     prefixes: dict[str, set[str]] = {}
-    for logical_id, resource in _template(FOUNDATION)["Resources"].items():
+    for logical_id, resource in _template(path)["Resources"].items():
         resource_type = resource["Type"]
         match = _RESOURCE_TYPE.match(resource_type)
         if match is None:
@@ -96,7 +99,7 @@ def _allowed_action_prefixes(bootstrap: Path) -> set[str]:
 
 class BootstrapExecutionRoleCoversFoundationTest(unittest.TestCase):
     def test_every_foundation_service_is_granted_to_the_execution_role(self) -> None:
-        needed = _foundation_service_prefixes()
+        needed = _template_service_prefixes(FOUNDATION)
         for bootstrap in BOOTSTRAPS:
             with self.subTest(bootstrap=bootstrap.name):
                 allowed = _allowed_action_prefixes(bootstrap)
@@ -109,6 +112,23 @@ class BootstrapExecutionRoleCoversFoundationTest(unittest.TestCase):
                     missing,
                     {},
                     "the execution role cannot create these foundation resources; the stack "
+                    f"update would fail with AccessDenied and roll back — {missing}",
+                )
+
+    def test_every_demo_video_service_is_granted_to_the_execution_role(self) -> None:
+        needed = _template_service_prefixes(DEMO_VIDEO)
+        for bootstrap in BOOTSTRAPS:
+            with self.subTest(bootstrap=bootstrap.name):
+                allowed = _allowed_action_prefixes(bootstrap)
+                missing = {
+                    prefix: sorted(types)
+                    for prefix, types in needed.items()
+                    if prefix not in allowed
+                }
+                self.assertEqual(
+                    missing,
+                    {},
+                    "the execution role cannot create these demo-video resources; the stack "
                     f"update would fail with AccessDenied and roll back — {missing}",
                 )
 

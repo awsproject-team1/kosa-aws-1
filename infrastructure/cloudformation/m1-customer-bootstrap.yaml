@@ -24,6 +24,13 @@ Parameters:
     MaxLength: 128
     AllowedPattern: "^[a-zA-Z][a-zA-Z0-9-]*$"
     ConstraintDescription: Use the exact CloudFormation stack name that GitHub Actions may deploy.
+  DemoVideoStackName:
+    Type: String
+    Default: kosa-governance-demo-video
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9-]*$"
+    ConstraintDescription: Exact separate classroom VOD stack that GitHub Actions may deploy.
   GitHubOidcSubjectPrefix:
     Type: String
     MinLength: 12
@@ -160,6 +167,12 @@ Resources:
                   - cloudtrail:*
                   - s3:*
                 Resource: "*"
+              - Sid: ProvisionDemoVideoDelivery
+                Effect: Allow
+                Action:
+                  - cloudfront:*
+                  - sns:*
+                Resource: "*"
               - Sid: ProvisionFoundationRuntimeRoles
                 Effect: Allow
                 Action:
@@ -212,12 +225,23 @@ Resources:
                 Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject]
                 Resource: !Sub "${LambdaCodeBucket.Arn}/lambda/m0/*"
               - Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${PlatformEnvironment}-video-output-${AWS::AccountId}"
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${PlatformEnvironment}-video-output-${AWS::AccountId}/*"
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*"
+              - Effect: Allow
                 Action: [cloudformation:CreateChangeSet, cloudformation:DeleteChangeSet,
                   cloudformation:DescribeChangeSet, cloudformation:DescribeStackEvents,
                   cloudformation:DescribeStacks, cloudformation:ExecuteChangeSet,
                   cloudformation:GetTemplate, cloudformation:GetTemplateSummary,
                   cloudformation:ListChangeSets, cloudformation:ListStackResources]
-                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${FoundationStackName}/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${DemoVideoStackName}/*"
               # DescribeEvents does not support resource-level IAM permissions. The
               # workflow queries only failed events and excludes ResourceProperties.
               - Effect: Allow

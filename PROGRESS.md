@@ -2,6 +2,12 @@
 
 ## Current
 
+- **제품과 분리된 AWS 시연 영상 VOD를 배포한다 (2026-09-07).** `GovLens.mp4`는 Git에 넣지 않고
+  private source S3 업로드를 EventBridge가 감지해 Lambda → MediaConvert HLS(1080p/720p/480p)로
+  변환한다. 결과는 별도 private S3에서 CloudFront OAC로만 전달하며, 독립 player와 SNS 완료/오류
+  알림을 제공한다. 전용 CloudFormation stack은 protected GitHub Environment 승인 뒤에만 배포하고,
+  기존 SPA stack에는 변경을 주지 않는다.
+
 - **apply workflow dispatch의 422 원인을 복구한다 (2026-09-07).** 승인·Outbox·Deployment Queue
   라우팅은 정상화됐지만 live Worker는 `terraform-apply.yml`의 `workflow_dispatch`에서 계속
   실패했다. 고객 저장소의 workflow와 입력 계약은 정상이었고, 원인은 dispatch `ref`에 GitHub가
@@ -1892,7 +1898,6 @@ plan_hash·state·merge commit·deployment_id·apply 경계는 `Accepted`로 확
     runtime config가 같은 규칙으로 거부한다. 기존 고정 commit 설정은 그대로 유효.
   - 운영자 작업: secret `M1_ASSESSMENT_RUNTIME_JSON`에서 `"commit_sha": "…"`를 `"branch": "main"`으로
     바꾸고 M0 Foundation을 재배포한다. 코드 배포만으로는 동작이 바뀌지 않는다.
-
 
 
 

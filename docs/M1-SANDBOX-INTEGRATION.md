@@ -20,6 +20,7 @@ Supply these non-secret parameters:
 | `ProjectName` | The lowercase project name later used by the foundation stack. |
 | `PlatformEnvironment` | Short foundation environment, normally `sandbox`. |
 | `FoundationStackName` | Exact stack name that the deployment role may manage. |
+| `DemoVideoStackName` | Exact separate classroom VOD stack name; normally `kosa-governance-demo-video`. |
 | `GitHubOidcSubjectPrefix` | `repo:<owner>/<repository>` for the repository running this workflow; use the immutable owner/repository-ID form when the repository uses immutable OIDC subjects. |
 | `ArtifactPreparationEnvironment` | `customer-sandbox-artifact` unless the customer chose a different protected Environment. |
 | `DeploymentApprovalEnvironment` | `customer-sandbox-deploy` unless the customer chose a different protected Environment. |

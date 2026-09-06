@@ -7,7 +7,10 @@ on:
       - "infrastructure/cloudformation/**"
       - "infrastructure/parameters/**"
       - "tests/security/test_cloudformation_security.py"
+      - "tests/security/test_bootstrap_execution_role_covers_foundation.py"
+      - "tests/security/test_demo_video_vod_security.py"
       - ".github/workflows/deploy-m0-foundation.yml"
+      - ".github/workflows/deploy-demo-video.yml"
       - ".github/workflows/deploy-frontend.yml"
       - ".github/workflows/m0-lambda-package.yml"
       - "scripts/package-m0-lambda.sh"
@@ -43,10 +46,12 @@ jobs:
           cfn-lint --non-zero-exit-code error
           infrastructure/cloudformation/m0-foundation.yaml
           infrastructure/cloudformation/m1-customer-bootstrap.yaml
+          infrastructure/cloudformation/m1-customer-bootstrap-roles.yaml
+          infrastructure/cloudformation/demo-video-vod.yaml
 
       - name: Verify CloudFormation security controls
         run: >-
           python -m unittest discover
           --start-directory tests/security
-          --pattern "test_cloudformation_security.py"
+          --pattern "test_*.py"
           --verbose

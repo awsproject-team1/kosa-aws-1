@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Separate GovLens classroom VOD pipeline: private S3 source/output, EventBridge-triggered
+  MediaConvert HLS transcoding, CloudFront OAC delivery, and SNS job notifications.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: kosa-governance
+    AllowedPattern: "[a-z][a-z0-9-]{2,40}"
+  Environment:
+    Type: String
+    Default: sandbox
+    AllowedValues: [sandbox, staging, production]
+  NotificationEmail:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-video-source-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      VersioningConfiguration: {Status: Enabled}
+      NotificationConfiguration:
+        EventBridgeConfiguration: {EventBridgeEnabled: true}
+
+  SourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SourceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt SourceBucket.Arn, !Sub "${SourceBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-video-output-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      VersioningConfiguration: {Status: Enabled}
+
+  MediaConvertRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-video-mediaconvert"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: mediaconvert.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadSourceWriteOutput
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${SourceBucket.Arn}/source/*"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${OutputBucket.Arn}/videos/*"
+              - Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: [!GetAtt SourceBucket.Arn, !GetAtt OutputBucket.Arn]
+
+  SubmitJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-video-submit-job"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SubmitMediaConvertJob
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: mediaconvert:CreateJob
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt MediaConvertRole.Arn
+                Condition:
+                  StringEquals: {iam:PassedToService: mediaconvert.amazonaws.com}
+
+  SubmitJobFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-video-submit-job"
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt SubmitJobRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          MEDIACONVERT_ROLE_ARN: !GetAtt MediaConvertRole.Arn
+          OUTPUT_BUCKET: !Ref OutputBucket
+      Code:
+        ZipFile: |
+          import hashlib
+          import os
+          from pathlib import PurePosixPath
+          from urllib.parse import unquote_plus
+          import boto3
+
+          def _video(width, height, bitrate, modifier):
+              return {
+                  "ContainerSettings": {"Container": "M3U8", "M3u8Settings": {}},
+                  "NameModifier": modifier,
+                  "VideoDescription": {
+                      "Width": width, "Height": height,
+                      "CodecSettings": {"Codec": "H_264", "H264Settings": {
+                          "RateControlMode": "QVBR", "MaxBitrate": bitrate,
+                          "QvbrSettings": {"QvbrQualityLevel": 7},
+                          "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                          "GopSize": 2, "GopSizeUnits": "SECONDS",
+                          "QualityTuningLevel": "SINGLE_PASS_HQ",
+                          "SceneChangeDetect": "TRANSITION_DETECTION"
+                      }}
+                  },
+                  "AudioDescriptions": [{"CodecSettings": {"Codec": "AAC", "AacSettings": {
+                      "Bitrate": 96000, "CodingMode": "CODING_MODE_2_0", "SampleRate": 48000
+                  }}}]
+              }
+
+          def lambda_handler(event, context):
+              detail = event["detail"]
+              bucket = detail["bucket"]["name"]
+              key = unquote_plus(detail["object"]["key"])
+              if not key.startswith("source/") or not key.lower().endswith(".mp4"):
+                  return {"ignored": key}
+              stem = PurePosixPath(key).stem
+              token = hashlib.sha256(f"{bucket}:{key}:{detail['object'].get('etag', '')}".encode()).hexdigest()
+              destination = f"s3://{os.environ['OUTPUT_BUCKET']}/videos/{stem}/master"
+              response = boto3.client("mediaconvert").create_job(
+                  ClientRequestToken=token,
+                  Role=os.environ["MEDIACONVERT_ROLE_ARN"],
+                  UserMetadata={"source_bucket": bucket, "source_key": key},
+                  Settings={
+                      "Inputs": [{
+                          "FileInput": f"s3://{bucket}/{key}",
+                          "AudioSelectors": {"Audio Selector 1": {"DefaultSelection": "DEFAULT"}},
+                          "VideoSelector": {}
+                      }],
+                      "OutputGroups": [{
+                          "Name": "Apple HLS",
+                          "OutputGroupSettings": {"Type": "HLS_GROUP_SETTINGS", "HlsGroupSettings": {
+                              "Destination": destination, "SegmentLength": 6, "MinSegmentLength": 0
+                          }},
+                          "Outputs": [
+                              _video(1920, 1080, 5000000, "_1080p"),
+                              _video(1280, 720, 3000000, "_720p"),
+                              _video(854, 480, 1500000, "_480p")
+                          ]
+                      }]
+                  }
+              )
+              return {"job_id": response["Job"]["Id"], "source": key}
+
+  SourceObjectRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Ref SourceBucket]
+          object:
+            key: [{prefix: "source/"}]
+      Targets:
+        - Arn: !GetAtt SubmitJobFunction.Arn
+          Id: SubmitMediaConvertJob
+
+  AllowSourceRuleInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SubmitJobFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SourceObjectRule.Arn
+
+  JobNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-video-jobs"
+
+  JobNotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref JobNotificationTopic
+
+  JobNotificationPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref JobNotificationTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref JobNotificationTopic
+            Condition:
+              ArnEquals: {aws:SourceArn: !GetAtt MediaConvertStateRule.Arn}
+
+  MediaConvertStateRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source: [aws.mediaconvert]
+        detail-type: [MediaConvert Job State Change]
+        detail:
+          status: [COMPLETE, ERROR]
+      Targets:
+        - Arn: !Ref JobNotificationTopic
+          Id: NotifyMediaConvertState
+
+  VideoOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${ProjectName}-${Environment}-video-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  VideoDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${ProjectName}-${Environment} classroom VOD"
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: VideoS3Origin
+            DomainName: !GetAtt OutputBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt VideoOriginAccessControl.Id
+            S3OriginConfig: {OriginAccessIdentity: ""}
+        DefaultCacheBehavior:
+          TargetOriginId: VideoS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        ViewerCertificate: {CloudFrontDefaultCertificate: true}
+
+  OutputBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OutputBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOACReadOnly
+            Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub "${OutputBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${VideoDistribution}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt OutputBucket.Arn, !Sub "${OutputBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+Outputs:
+  SourceBucketName:
+    Value: !Ref SourceBucket
+  OutputBucketName:
+    Value: !Ref OutputBucket
+  DistributionId:
+    Value: !Ref VideoDistribution
+  PlayerUrl:
+    Value: !Sub "https://${VideoDistribution.DomainName}/"
+  ManifestUrl:
+    Value: !Sub "https://${VideoDistribution.DomainName}/videos/GovLens/master.m3u8"
