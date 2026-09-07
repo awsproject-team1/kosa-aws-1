@@ -159,6 +159,123 @@ npm run build    # 프로덕션 빌드
 
 ---
 
+## API 개요
+
+모든 요청·응답은 버전 관리되는 `packages/contracts/` 스키마를 따릅니다. 인증은 Cognito access-token JWT이며, Backend는 Role과 Customer / Repository / AWS Account Scope를 fail-closed로 검증합니다. `customer_id`, Job ID, status, timestamp 같은 값은 클라이언트가 보낼 수 없고 서버가 verified JWT와 상태에서 결정합니다. 장시간 작업은 `202 Accepted` + `job_id`로 응답합니다.
+
+### 평가 · 작업
+
+| Method | Path | 용도 |
+| --- | --- | --- |
+| `POST` | `/assessments` | Assessment Job 생성 (승인된 `repository_id`, `policy_profile_id` 지정) |
+| `GET` | `/jobs/{jobId}` | Job 상태·결과 조회 |
+| `GET` | `/assessments/{assessmentId}` | 결과, Findings, Coverage, Readiness Score 조회 |
+| `POST` | `/orchestrate` | 자연어 메시지를 Policy Q&A 답변 또는 워크플로 제안으로 라우팅 |
+
+### 조치 (Remediation)
+
+| Method | Path | 용도 |
+| --- | --- | --- |
+| `POST` | `/findings/{findingId}/remediations` | 정책 판정 후 Remediation 시작 또는 non-action 보고 |
+| `GET` | `/remediations/{remediationId}` | 조치 상태·결과·PR 조회 |
+| `POST` | `/remediation-exceptions` | Admin이 만료 필수 예외 승인·등록 |
+
+### 배포 (Deployment)
+
+| Method | Path | 용도 |
+| --- | --- | --- |
+| `POST` | `/remediations/{remediationId}/deployments` | 승인된 IaC commit으로 Deployment 생성 |
+| `GET` | `/deployments/{deploymentId}` | plan 요약, readiness, 승인·진행 상태 조회 |
+| `POST` | `/deployments/{deploymentId}/approve` | `commit_sha`·`plan_hash` 재검증 후 승인 |
+| `POST` | `/deployments/{deploymentId}/reject` | 배포 거절 (Admin) |
+| `GET` | `/deployments/{deploymentId}/verification` | Post-Deploy before/after 비교 조회 |
+
+### 정책 수집 · 관리
+
+| Method | Path | 용도 |
+| --- | --- | --- |
+| `POST` | `/policy-sources/uploads` | 정책 문서 업로드 세션 생성 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/process` | 검증·파싱·정규화 실행 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/candidates` | Rule 후보 추출 요청 |
+| `POST` | `/policy-sources/{sourceId}/versions/{version}/approve` | 검토된 Rule version 승인 |
+| `POST` | `/policy-profiles` | 승인된 Rule로 versioned Policy Profile 게시 |
+| `GET` | `/scope` | 호출자 customer의 assessment scope 대상 조회 |
+| `GET` `POST` `DELETE` | `/admin/users` | Admin 전용 사용자 관리 |
+| `GET` | `/audit-events` | Admin 전용 감사 이력 조회 |
+
+전체 목록·요청/응답 형식·페이지네이션·오류 규약은 [docs/API.md](docs/API.md)를 참고하세요.
+
+### 오류 형식
+
+```json
+{
+  "error": {
+    "code": "SCOPE_DENIED",
+    "message": "The requested resource is outside the approved scope"
+  }
+}
+```
+
+초기 오류 코드: `UNAUTHORIZED`, `SCOPE_DENIED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `EXECUTION_ERROR`.
+
+---
+
+## 평가 워크플로 상세
+
+Assessment는 하나의 이벤트가 아니라 단계로 나뉩니다.
+
+1. **Initial Assessment** — 같은 Terraform 관리 대상에 대해 세 관점을 구분해 평가합니다.
+   - `IAC` — 승인 commit의 Terraform 본문 기준 준수 여부
+   - `AWS_ACTUAL` — 읽기 전용으로 조회한 실제 AWS 상태 기준 준수 여부
+   - `DRIFT` — 위 두 판정의 불일치 (코드가 결정적으로 계산, Readiness 점수에서는 제외)
+   - `MANUAL` — 자동 평가할 수 없는 통제는 사람 검토 대상으로 남김
+
+2. **Remediation** — IaC가 안전하지 않으면 원하는 안전한 상태로 Terraform Patch와 PR을 만듭니다. IaC는 이미 안전하고 Actual만 drift된 경우엔 Patch 없이 현재 commit을 동기화 대상으로 삼습니다. 안전한 조치를 만들 수 없으면 `MANUAL_REVIEW`.
+
+3. **Deployment Readiness Validation** — refresh된 Terraform Plan으로 현재 AWS 상태에 안전하게 적용 가능한지 검증합니다. 이 단계는 배포를 막거나 재수정을 요구할 수 있지만 직접 변경하지 않습니다.
+
+4. **Human Approval → Apply** — 승인된 `commit_sha`·`plan_hash`를 apply 직전 재검증한 뒤 GitHub Actions가 적용합니다.
+
+5. **Post-Deploy Verification** — apply 뒤 실제 AWS에 반영됐는지 확인하고 Actual/Drift를 재평가합니다. 원 Assessment를 덮어쓰지 않고 같은 Profile version·Model Profile·rubric으로 실행한 **새 Assessment**로 기록하며, 해소 여부·점수 변화는 AI 판정이 아니라 두 결과의 결정적 비교입니다.
+
+---
+
+## 핵심 개념
+
+| 용어 | 의미 |
+| --- | --- |
+| **Policy Profile** | 승인된 Rule version 묶음. Assessment 생성 시점에 판본이 고정됩니다. |
+| **Rule** | 하나의 통제 항목. 적용 관점(`evaluation_type`)과 Severity를 정의합니다. |
+| **Finding** | `FAIL` / `MANUAL_REVIEW` / `INSUFFICIENT_EVIDENCE` 결과에서 만든 actionable projection. |
+| **Evidence** | 판정 근거. 정책 원문 위치(`{source_id}@{version}#{locator}`) 또는 `aws:` read locator를 참조. |
+| **Readiness Score** | 판정된 좌표(PASS=100, FAIL=0)의 Severity 가중 준수율. 공식 인증 점수가 아닙니다. |
+| **Coverage** | `Resource × Rule × Perspective` 평가 계획의 실행률. AI가 아니라 코드가 계산합니다. |
+| **decided_by** | 각 결과의 판정 출처 (`CODE` 또는 `MODEL`). 사실은 코드가, 해석은 모델이 판단합니다. |
+
+---
+
+## 테스트 · CI
+
+테스트는 계층별로 나뉩니다.
+
+```bash
+python3 -m unittest discover --start-directory tests/unit --pattern 'test_*.py'
+python3 -m unittest discover --start-directory tests/contract --pattern 'test_*.py'
+python3 -m unittest discover --start-directory tests/integration --pattern 'test_*.py'
+python3 -m unittest discover --start-directory tests/security --pattern 'test_*.py'
+```
+
+| 계층 | 검증 대상 |
+| --- | --- |
+| `unit` | 개별 모듈·함수 |
+| `contract` | `packages/contracts/` 스키마와 wire shape |
+| `integration` | 여러 컴포넌트 결합 |
+| `security` | IAM·route allow-list·scope 경계 회귀 |
+
+GitHub Actions 워크플로(`.github/workflows/`)가 Python 검사, CloudFormation lint, frontend 검사, secret scan, PR source gate를 실행합니다. 모든 PR은 secret scan과 source gate를 통과해야 합니다.
+
+---
+
 ## 개발 규칙
 
 - 작업 브랜치는 최신 `dev`에서 만들고, 일반 PR의 base는 `dev`입니다.
